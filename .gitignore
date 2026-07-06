@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Backend local runtime
+backend/.venv/
+backend/.env
+backend/uploads/*
+backend/exports/*
+backend/logs/*
+!backend/uploads/.gitkeep
+!backend/exports/.gitkeep
+!backend/logs/.gitkeep
+
+# Frontend
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+*.tsbuildinfo
+
+# Environment
+.env
+frontend/.env
+
+# Database local dumps and Docker data
+database/backups/*.sql
+database/backups/*.dump
+database/backups/*.backup
+postgres_data/
+
+# Local business/import data
+documents/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Temporary files
+tmp_import/
+*.log

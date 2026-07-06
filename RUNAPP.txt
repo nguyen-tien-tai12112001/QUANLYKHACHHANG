@@ -1,0 +1,76 @@
+Đã dựng xong khung fullstack QUANLYKHACHHANG theo yêu cầu. Mình giữ nguyên app Vite cũ đang có ở root, và tạo khung mới trong backend/, frontend/, database/.
+Đang chạy và đã kiểm tra thành công:
+Frontend: http://localhost:3000
+Backend: http://localhost:8000
+Backend docs: http://localhost:8000/docs
+Health API: http://localhost:8000/api/health
+PostgreSQL Docker: quanlykhachhang_postgres, port 5432
+Health API đã trả về:
+{"status":"ok","app":"QUANLYKHACHHANG","database":"connected"}
+Cây thư mục chính
+backend/
+  app/
+    api/
+      __init__.py
+      health.py
+    __init__.py
+    config.py
+    database.py
+    main.py
+  uploads/
+  exports/
+  logs/
+  .env
+  .env.example
+  requirements.txt
+  README.md
+
+frontend/
+  src/
+    api/client.js
+    components/MainLayout.jsx
+    pages/Dashboard.jsx
+    App.jsx
+    main.jsx
+    styles.css
+  .env
+  .env.example
+  index.html
+  package.json
+  package-lock.json
+  vite.config.js
+
+database/
+  init.sql
+
+docker-compose.yml
+.env.example
+start-dev.bat
+README.md
+Lệnh chạy lần đầu
+docker compose up -d
+cd backend
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+cd frontend
+npm install
+copy .env.example .env
+npm run dev -- --host 0.0.0.0 --port 3000
+Hoặc chạy nhanh:
+start-dev.bat
+Kiểm tra kết nối DB
+docker ps
+curl http://localhost:8000/api/health
+Kết nối bằng DBeaver
+Host: localhost
+Port: 5432
+Database: qlkh_db
+Username: qlkh_user
+Password: qlkh_password
+Muốn đổi từ PostgreSQL Docker sang PostgreSQL local/server, chỉ cần sửa backend/.env, ví dụ:
+DATABASE_URL=postgresql+psycopg://postgres:123456@localhost:5432/quanlykhachhang
+Sau đó restart backend.
+Mình cũng đã chạy npm run build thành công. Vite có cảnh báo chunk lớn do Ant Design, nhưng không ảnh hưởng việc chạy ở giai đoạn khung dự án. Bước tiếp theo hợp lý là thêm migration/model database, API upload CSV, rồi đưa Polars vào pipeline import.
