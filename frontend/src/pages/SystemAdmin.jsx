@@ -35,6 +35,7 @@ import {
   Switch,
   Table,
   Tag,
+  Tooltip,
   Typography,
   Upload,
   message,
@@ -86,8 +87,8 @@ const sectionMeta = {
 
 const defaultVisibleColumns = {
   branches: ['branch_code', 'branch_name', 'department_count', 'user_count', 'status'],
-  departments: ['branch_name', 'department_code', 'department_name', 'user_count', 'status'],
-  users: ['full_name', 'employee_code', 'ipcas_username', 'branch_name', 'department_name', 'role_code', 'data_scope', 'is_active'],
+  departments: ['branch_name', 'department_code', 'department_name', 'manager_name', 'user_count', 'status'],
+  users: ['full_name', 'employee_code', 'ipcas_username', 'department_name', 'role_code', 'data_scope', 'is_active'],
   roles: ['role_code', 'role_name', 'description', 'user_count', 'permissions'],
 };
 
@@ -128,17 +129,33 @@ function selectProps(placeholder) {
   };
 }
 
+function ellipsisText(value, options = {}) {
+  const text = value || options.empty || '';
+  if (!text) {
+    return <Text type="secondary">Chưa có</Text>;
+  }
+  return (
+    <Tooltip title={text}>
+      <Text strong={options.strong} className={options.className || 'admin-ellipsis-text'}>
+        {text}
+      </Text>
+    </Tooltip>
+  );
+}
+
 function SystemAdmin({ section = 'branches' }) {
   const meta = sectionMeta[section] || sectionMeta.branches;
   const [form] = Form.useForm();
   const [filterForm] = Form.useForm();
   const modalBranchId = Form.useWatch('branch_id', form);
   const filterBranchId = Form.useWatch('branch_id', filterForm);
+  const filterValues = Form.useWatch([], filterForm);
 
   const [rows, setRows] = useState([]);
   const [branches, setBranches] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [roles, setRoles] = useState([]);
+  const [staffUsers, setStaffUsers] = useState([]);
   const [permissions, setPermissions] = useState([]);
   const [userWarnings, setUserWarnings] = useState({ missing_role: 0, missing_department: 0, duplicate_ipcas: [] });
   const [warningModal, setWarningModal] = useState({ open: false, title: '', rows: [], loading: false });
@@ -151,12 +168,13 @@ function SystemAdmin({ section = 'branches' }) {
   const [visibleColumns, setVisibleColumns] = useState(defaultVisibleColumns[section]);
 
   async function loadLookups() {
-    const [overviewRes, branchRes, departmentRes, roleRes, permissionRes, warningRes] = await Promise.all([
+    const [overviewRes, branchRes, departmentRes, roleRes, permissionRes, userRes, warningRes] = await Promise.all([
       client.get('/admin/overview'),
       client.get('/admin/branches'),
       client.get('/admin/departments'),
       client.get('/admin/roles'),
       client.get('/admin/permissions'),
+      client.get('/admin/users'),
       client.get('/admin/users/warnings'),
     ]);
     setOverview(overviewRes.data || {});
@@ -164,6 +182,7 @@ function SystemAdmin({ section = 'branches' }) {
     setDepartments(getArrayPayload(departmentRes.data));
     setRoles(getArrayPayload(roleRes.data));
     setPermissions(getArrayPayload(permissionRes.data));
+    setStaffUsers(getArrayPayload(userRes.data));
     setUserWarnings(warningRes.data || { missing_role: 0, missing_department: 0, duplicate_ipcas: [] });
   }
 
@@ -192,6 +211,13 @@ function SystemAdmin({ section = 'branches' }) {
     setModalOpen(false);
     loadRows({});
   }, [section]);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadRows();
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [JSON.stringify(filterValues || {}), section]);
 
   function openCreate() {
     setEditing(null);
@@ -245,8 +271,8 @@ function SystemAdmin({ section = 'branches' }) {
 
   async function deleteRow(row) {
     try {
-      await client.delete(`${meta.endpoint}/${row.id}`);
-      message.success(`Đã xóa ${meta.entityName}`);
+      const { data } = await client.delete(`${meta.endpoint}/${row.id}`);
+      message.success(data?.message || `Đã xóa ${meta.entityName}`);
       await loadRows();
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
@@ -317,6 +343,12 @@ function SystemAdmin({ section = 'branches' }) {
     .filter((item) => !modalBranchId || item.branch_id === modalBranchId)
     .map((item) => ({ label: `${item.department_code} - ${item.department_name}`, value: item.id }));
   const roleOptions = roles.map((item) => ({ label: `${item.role_code} - ${item.role_name}`, value: item.id }));
+  const managerOptions = staffUsers
+    .filter((item) => !modalBranchId || item.branch_id === modalBranchId)
+    .map((item) => ({ label: `${item.employee_code || item.username} - ${item.full_name}`, value: item.id }));
+  const filterManagerOptions = staffUsers
+    .filter((item) => !filterBranchId || item.branch_id === filterBranchId)
+    .map((item) => ({ label: `${item.employee_code || item.username} - ${item.full_name}`, value: item.id }));
   const dataScopeOptions = [
     { label: 'Toàn hệ thống', value: 'all' },
     { label: 'Theo chi nhánh', value: 'branch' },
@@ -389,24 +421,37 @@ function SystemAdmin({ section = 'branches' }) {
     }
     if (section === 'departments') {
       return [
-        { title: 'Chi nhánh', dataIndex: 'branch_name', key: 'branch_name' },
-        { title: 'Mã phòng', dataIndex: 'department_code', key: 'department_code', width: 120, render: (value) => <Tag color="gold">{value}</Tag> },
-        { title: 'Tên phòng ban', dataIndex: 'department_name', key: 'department_name' },
-        { title: 'Cán bộ', dataIndex: 'user_count', key: 'user_count', width: 100 },
-        { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 130, render: activeTag },
+        { title: 'Chi nhánh', dataIndex: 'branch_name', key: 'branch_name', width: 230, render: (value) => ellipsisText(value) },
+        { title: 'Mã phòng', dataIndex: 'department_code', key: 'department_code', width: 120, align: 'center', render: (value) => <Tag color="gold">{value}</Tag> },
+        { title: 'Tên phòng ban', dataIndex: 'department_name', key: 'department_name', width: 260, render: (value) => ellipsisText(value, { strong: true }) },
+        { title: 'Trưởng phòng', dataIndex: 'manager_name', key: 'manager_name', width: 190, render: (value) => ellipsisText(value, { empty: 'Chưa gán' }) },
+        { title: 'Cán bộ', dataIndex: 'user_count', key: 'user_count', width: 100, align: 'right', render: (value) => <Text strong>{Number(value || 0).toLocaleString('vi-VN')}</Text> },
+        { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 130, align: 'center', render: activeTag },
       ];
     }
     if (section === 'users') {
       return [
-        { title: 'Cán bộ', dataIndex: 'full_name', key: 'full_name', render: (value, row) => <Space direction="vertical" size={0}><Text strong>{value}</Text><Text type="secondary">{row.username}</Text></Space> },
-        { title: 'Mã NV', dataIndex: 'employee_code', key: 'employee_code', width: 120 },
-        { title: 'Mã CBTD', dataIndex: 'credit_officer_code', key: 'credit_officer_code', width: 120 },
-        { title: 'User IPCAS', dataIndex: 'ipcas_username', key: 'ipcas_username', width: 130 },
-        { title: 'Chi nhánh', dataIndex: 'branch_name', key: 'branch_name' },
-        { title: 'Phòng ban', dataIndex: 'department_name', key: 'department_name' },
-        { title: 'Nhóm quyền', dataIndex: 'role_code', key: 'role_code', width: 150, render: (value, row) => <Tag color={roleColor(value)}>{row.role_name || 'Chưa gán'}</Tag> },
-        { title: 'Phạm vi dữ liệu', dataIndex: 'data_scope', key: 'data_scope', width: 150, render: dataScopeTag },
-        { title: 'Trạng thái', dataIndex: 'is_active', key: 'is_active', width: 125, render: activeTag },
+        {
+          title: 'Cán bộ',
+          dataIndex: 'full_name',
+          key: 'full_name',
+          width: 260,
+          fixed: 'left',
+          render: (value, row) => (
+            <div className="admin-person-cell">
+              {ellipsisText(value, { strong: true, className: 'admin-person-name' })}
+              <Text type="secondary" className="admin-person-sub">{row.username}</Text>
+            </div>
+          ),
+        },
+        { title: 'Mã NV', dataIndex: 'employee_code', key: 'employee_code', width: 125, align: 'center', render: (value) => <Tag color="red">{value || 'Thiếu'}</Tag> },
+        { title: 'Mã CBTD', dataIndex: 'credit_officer_code', key: 'credit_officer_code', width: 120, align: 'center', render: (value) => value ? <Tag>{value}</Tag> : <Text type="secondary">-</Text> },
+        { title: 'User IPCAS', dataIndex: 'ipcas_username', key: 'ipcas_username', width: 135, align: 'center', render: (value) => value ? <Tag color="blue">{value}</Tag> : <Tag color="warning">Chưa có</Tag> },
+        { title: 'Chi nhánh', dataIndex: 'branch_name', key: 'branch_name', width: 220, render: (value) => ellipsisText(value) },
+        { title: 'Phòng ban', dataIndex: 'department_name', key: 'department_name', width: 220, render: (value) => value ? ellipsisText(value) : <Tag color="warning">Chưa gán</Tag> },
+        { title: 'Nhóm quyền', dataIndex: 'role_code', key: 'role_code', width: 165, align: 'center', render: (value, row) => <Tag color={roleColor(value)}>{row.role_name || 'Chưa gán'}</Tag> },
+        { title: 'Phạm vi dữ liệu', dataIndex: 'data_scope', key: 'data_scope', width: 155, align: 'center', render: dataScopeTag },
+        { title: 'Trạng thái', dataIndex: 'is_active', key: 'is_active', width: 125, align: 'center', render: activeTag },
       ];
     }
     return [
@@ -514,6 +559,15 @@ function SystemAdmin({ section = 'branches' }) {
                     />
                   </Form.Item>
                 </Col>
+            )}
+            {section === 'departments' && (
+              <>
+                <Col xs={24} md={5}>
+                  <Form.Item label="Trưởng phòng" name="manager_user_id">
+                    <Select {...selectProps('Tất cả trưởng phòng')} options={filterManagerOptions} />
+                  </Form.Item>
+                </Col>
+              </>
             )}
             {section === 'users' && (
               <>
@@ -637,8 +691,11 @@ function SystemAdmin({ section = 'branches' }) {
           columns={columns}
           dataSource={rows}
           loading={loading}
+          size="middle"
+          tableLayout="fixed"
+          className={`admin-data-table admin-data-table-${section}`}
           pagination={{ pageSize: 10, showSizeChanger: true }}
-          scroll={{ x: section === 'users' || section === 'roles' ? 1200 : 900 }}
+          scroll={{ x: section === 'users' ? 1500 : section === 'departments' ? 1280 : section === 'roles' ? 1200 : 900 }}
         />
       </Card>
 
@@ -662,24 +719,40 @@ function SystemAdmin({ section = 'branches' }) {
 
           {section === 'departments' && (
             <Row gutter={12}>
-              <Col span={24}><Form.Item label="Chi nhánh" name="branch_id" rules={[{ required: true, message: 'Chọn chi nhánh' }]}><Select {...selectProps('Chọn chi nhánh')} options={branchOptions} /></Form.Item></Col>
+              <Col span={24}>
+                <Form.Item label="Chi nhánh" name="branch_id" rules={[{ required: true, message: 'Chọn chi nhánh trước' }]}>
+                  <Select
+                    {...selectProps('Chọn chi nhánh trước')}
+                    options={branchOptions}
+                    onChange={() => form.setFieldsValue({ manager_user_id: undefined })}
+                  />
+                </Form.Item>
+              </Col>
               <Col span={8}><Form.Item label="Mã phòng" name="department_code" rules={[{ required: true, message: 'Nhập mã phòng' }]}><Input /></Form.Item></Col>
               <Col span={16}><Form.Item label="Tên phòng ban" name="department_name" rules={[{ required: true, message: 'Nhập tên phòng ban' }]}><Input /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Trưởng phòng" name="manager_user_id"><Select {...selectProps(modalBranchId ? 'Chọn trưởng phòng' : 'Chọn chi nhánh trước')} options={managerOptions} disabled={!modalBranchId} /></Form.Item></Col>
               <Col span={12}><Form.Item label="Trạng thái" name="status"><Select options={[{ label: 'Hoạt động', value: 'active' }, { label: 'Ngừng dùng', value: 'inactive' }]} /></Form.Item></Col>
             </Row>
           )}
 
           {section === 'users' && (
             <Row gutter={12}>
-              <Col span={12}><Form.Item label="Mã nhân viên / Tên đăng nhập" name="username" rules={[{ required: true, message: 'Nhập mã nhân viên hoặc tài khoản' }]}><Input /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Mã nhân viên" name="employee_code" rules={[{ required: true, message: 'Nhập mã nhân viên' }]}><Input /></Form.Item></Col>
               <Col span={12}><Form.Item label="Mật khẩu" name="password"><Input.Password placeholder="Bỏ trống để dùng mật khẩu mặc định 1" /></Form.Item></Col>
               <Col span={24}><Form.Item label="Họ tên cán bộ" name="full_name" rules={[{ required: true, message: 'Nhập họ tên' }]}><Input /></Form.Item></Col>
-              <Col span={8}><Form.Item label="Mã NV" name="employee_code"><Input /></Form.Item></Col>
-              <Col span={8}><Form.Item label="Mã CBTD" name="credit_officer_code"><Input /></Form.Item></Col>
-              <Col span={8}><Form.Item label="User IPCAS" name="ipcas_username"><Input /></Form.Item></Col>
-              <Col span={12}><Form.Item label="Chi nhánh" name="branch_id"><Select {...selectProps('Chọn chi nhánh')} options={branchOptions} /></Form.Item></Col>
-              <Col span={12}><Form.Item label="Phòng ban" name="department_id"><Select {...selectProps('Chọn phòng ban')} options={modalDepartmentOptions} /></Form.Item></Col>
-              <Col span={12}><Form.Item label="Nhóm quyền" name="role_id"><Select {...selectProps('Chọn nhóm quyền')} options={roleOptions} /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Mã CBTD" name="credit_officer_code"><Input /></Form.Item></Col>
+              <Col span={12}><Form.Item label="User IPCAS" name="ipcas_username"><Input /></Form.Item></Col>
+              <Col span={12}>
+                <Form.Item label="Chi nhánh" name="branch_id" rules={[{ required: true, message: 'Chọn chi nhánh' }]}>
+                  <Select {...selectProps('Chọn chi nhánh')} options={branchOptions} onChange={() => form.setFieldValue('department_id', undefined)} />
+                </Form.Item>
+              </Col>
+              <Col span={12}>
+                <Form.Item label="Phòng ban" name="department_id" rules={[{ required: true, message: 'Chọn phòng ban' }]}>
+                  <Select {...selectProps(modalBranchId ? 'Chọn phòng ban' : 'Chọn chi nhánh trước')} options={modalDepartmentOptions} disabled={!modalBranchId} />
+                </Form.Item>
+              </Col>
+              <Col span={12}><Form.Item label="Nhóm quyền" name="role_id" rules={[{ required: true, message: 'Chọn nhóm quyền' }]}><Select {...selectProps('Chọn nhóm quyền')} options={roleOptions} /></Form.Item></Col>
               <Col span={12}><Form.Item label="Phạm vi dữ liệu" name="data_scope"><Select options={dataScopeOptions} /></Form.Item></Col>
               <Col span={6}><Form.Item label="Hoạt động" name="is_active" valuePropName="checked"><Switch /></Form.Item></Col>
               <Col span={6}><Form.Item label="Quản trị viên" name="is_superuser" valuePropName="checked"><Switch /></Form.Item></Col>

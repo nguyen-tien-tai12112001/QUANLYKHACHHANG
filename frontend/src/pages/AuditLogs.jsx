@@ -63,6 +63,7 @@ function getArrayPayload(data) {
 
 function AuditLogs() {
   const [form] = Form.useForm();
+  const filterValues = Form.useWatch([], form);
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -87,6 +88,13 @@ function AuditLogs() {
   useEffect(() => {
     loadRows();
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadRows();
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [JSON.stringify(filterValues || {})]);
 
   const columns = [
     {

@@ -36,14 +36,16 @@ class DepartmentPayload(BaseModel):
     branch_id: int
     department_code: str
     department_name: str
+    department_type: str | None = None
+    manager_user_id: int | None = None
     status: str = "active"
 
 
 class UserPayload(BaseModel):
-    username: str
+    username: str | None = None
     full_name: str
     password: str | None = None
-    employee_code: str | None = None
+    employee_code: str
     credit_officer_code: str | None = None
     ipcas_username: str | None = None
     branch_id: int | None = None
@@ -62,7 +64,57 @@ class RolePayload(BaseModel):
 
 
 def clean_code(value: str | None) -> str:
-    return str(value or "").strip()
+    return str(value or "").strip().upper()
+
+
+def require_value(value, message: str):
+    if value is None or str(value).strip() == "":
+        raise HTTPException(status_code=400, detail=message)
+    return value
+
+
+def validate_department_payload(db: Session, payload: DepartmentPayload) -> None:
+    require_value(payload.branch_id, "Vui lòng chọn chi nhánh")
+    require_value(payload.department_code, "Vui lòng nhập mã phòng ban")
+    require_value(payload.department_name, "Vui lòng nhập tên phòng ban")
+    branch = db.query(OrgBranch).filter(OrgBranch.id == payload.branch_id).first()
+    if not branch:
+        raise HTTPException(status_code=400, detail="Chi nhánh không tồn tại")
+    if payload.manager_user_id:
+        manager = db.query(SystemUser).filter(SystemUser.id == payload.manager_user_id).first()
+        if not manager:
+            raise HTTPException(status_code=400, detail="Trưởng phòng không tồn tại")
+        if manager.branch_id and manager.branch_id != payload.branch_id:
+            raise HTTPException(status_code=400, detail="Trưởng phòng phải thuộc cùng chi nhánh")
+
+
+def validate_user_payload(db: Session, payload: UserPayload, user_id: int | None = None) -> None:
+    require_value(payload.employee_code, "Vui lòng nhập mã nhân viên")
+    require_value(payload.full_name, "Vui lòng nhập họ tên")
+    require_value(payload.branch_id, "Vui lòng chọn chi nhánh")
+    require_value(payload.department_id, "Vui lòng chọn phòng ban")
+    require_value(payload.role_id, "Vui lòng chọn nhóm quyền")
+
+    department = db.query(OrgDepartment).filter(OrgDepartment.id == payload.department_id).first()
+    if not department:
+        raise HTTPException(status_code=400, detail="Phòng ban không tồn tại")
+    if department.branch_id != payload.branch_id:
+        raise HTTPException(status_code=400, detail="Phòng ban không thuộc chi nhánh đã chọn")
+
+    employee_code = clean_code(payload.employee_code)
+    exists_employee = db.query(SystemUser).filter(SystemUser.employee_code == employee_code)
+    if user_id:
+        exists_employee = exists_employee.filter(SystemUser.id != user_id)
+    if exists_employee.first():
+        raise HTTPException(status_code=400, detail="Mã nhân viên đã tồn tại")
+
+    ipcas_username = clean_code(payload.ipcas_username) if payload.ipcas_username else None
+    if ipcas_username:
+        exists_ipcas = db.query(SystemUser).filter(SystemUser.ipcas_username == ipcas_username)
+        if user_id:
+            exists_ipcas = exists_ipcas.filter(SystemUser.id != user_id)
+        if exists_ipcas.first():
+            raise HTTPException(status_code=400, detail="User IPCAS đã tồn tại")
 
 
 def log_action(db: Session, request: Request, action: str, entity_type: str, entity_id=None, description: str | None = None) -> None:
@@ -99,6 +151,9 @@ def serialize_department(department: OrgDepartment) -> dict:
         "branch_name": department.branch.branch_name if department.branch else None,
         "department_code": department.department_code,
         "department_name": department.department_name,
+        "department_type": department.department_type,
+        "manager_user_id": department.manager_user_id,
+        "manager_name": department.manager.full_name if department.manager else None,
         "status": department.status,
         "user_count": len(department.users),
     }
@@ -235,6 +290,8 @@ def delete_branch(branch_id: int, request: Request, db: Session = Depends(get_db
 def list_departments(
     keyword: str | None = None,
     branch_id: int | None = Query(default=None),
+    department_type: str | None = None,
+    manager_user_id: int | None = Query(default=None),
     status: str | None = None,
     db: Session = Depends(get_db),
 ):
@@ -244,6 +301,10 @@ def list_departments(
         query = query.filter(or_(OrgDepartment.department_code.ilike(like), OrgDepartment.department_name.ilike(like)))
     if branch_id:
         query = query.filter(OrgDepartment.branch_id == branch_id)
+    if department_type:
+        query = query.filter(OrgDepartment.department_type == department_type)
+    if manager_user_id:
+        query = query.filter(OrgDepartment.manager_user_id == manager_user_id)
     if status:
         query = query.filter(OrgDepartment.status == status)
     rows = query.order_by(OrgBranch.branch_code, OrgDepartment.department_code).all()
@@ -252,10 +313,13 @@ def list_departments(
 
 @router.post("/departments")
 def create_department(payload: DepartmentPayload, request: Request, db: Session = Depends(get_db)):
+    validate_department_payload(db, payload)
     department = OrgDepartment(
         branch_id=payload.branch_id,
         department_code=clean_code(payload.department_code),
         department_name=payload.department_name.strip(),
+        department_type=clean_code(payload.department_type) or None,
+        manager_user_id=payload.manager_user_id,
         status=payload.status,
     )
     db.add(department)
@@ -274,9 +338,12 @@ def update_department(department_id: int, payload: DepartmentPayload, request: R
     department = db.query(OrgDepartment).filter(OrgDepartment.id == department_id).first()
     if not department:
         raise HTTPException(status_code=404, detail="Không tìm thấy phòng ban")
+    validate_department_payload(db, payload)
     department.branch_id = payload.branch_id
     department.department_code = clean_code(payload.department_code)
     department.department_name = payload.department_name.strip()
+    department.department_type = clean_code(payload.department_type) or None
+    department.manager_user_id = payload.manager_user_id
     department.status = payload.status
     try:
         log_action(db, request, "update", "department", department.id, f"Cập nhật phòng ban {department.department_code}")
@@ -294,7 +361,10 @@ def delete_department(department_id: int, request: Request, db: Session = Depend
     if not department:
         raise HTTPException(status_code=404, detail="Không tìm thấy phòng ban")
     if department.users:
-        raise HTTPException(status_code=400, detail="Phòng ban còn người dùng, không thể xóa")
+        department.status = "inactive"
+        log_action(db, request, "deactivate", "department", department_id, f"Ngừng hoạt động phòng ban {department.department_code}")
+        db.commit()
+        return {"status": "inactive", "id": department_id, "message": "Phòng ban còn người dùng nên đã chuyển sang ngừng hoạt động"}
     db.delete(department)
     log_action(db, request, "delete", "department", department_id, f"Xóa phòng ban {department.department_code}")
     db.commit()
@@ -337,10 +407,12 @@ def list_users(
 
 @router.post("/users")
 def create_user(payload: UserPayload, request: Request, db: Session = Depends(get_db)):
+    validate_user_payload(db, payload)
+    employee_code = clean_code(payload.employee_code)
     user = SystemUser(
-        username=payload.username.strip().lower(),
+        username=(payload.username or employee_code).strip().lower(),
         password_hash=hash_password(payload.password or "1"),
-        employee_code=clean_code(payload.employee_code) or None,
+        employee_code=employee_code,
         credit_officer_code=clean_code(payload.credit_officer_code) or None,
         ipcas_username=clean_code(payload.ipcas_username).upper() or None,
         full_name=payload.full_name.strip(),
@@ -367,10 +439,12 @@ def update_user(user_id: int, payload: UserPayload, request: Request, db: Sessio
     user = db.query(SystemUser).filter(SystemUser.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
-    user.username = payload.username.strip().lower()
+    validate_user_payload(db, payload, user_id=user_id)
+    employee_code = clean_code(payload.employee_code)
+    user.username = (payload.username or employee_code).strip().lower()
     if payload.password:
         user.password_hash = hash_password(payload.password)
-    user.employee_code = clean_code(payload.employee_code) or None
+    user.employee_code = employee_code
     user.credit_officer_code = clean_code(payload.credit_officer_code) or None
     user.ipcas_username = clean_code(payload.ipcas_username).upper() or None
     user.full_name = payload.full_name.strip()

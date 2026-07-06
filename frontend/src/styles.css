@@ -436,6 +436,60 @@ body {
   gap: 8px;
 }
 
+.admin-data-table .ant-table-thead > tr > th {
+  white-space: nowrap;
+  color: #5a162a;
+  font-weight: 700;
+  background: #fff8f4;
+}
+
+.admin-data-table .ant-table-tbody > tr > td {
+  vertical-align: middle;
+}
+
+.admin-data-table .ant-table-tbody > tr:hover > td {
+  background: #fffaf7 !important;
+}
+
+.admin-data-table .ant-table-cell-fix-left,
+.admin-data-table .ant-table-cell-fix-right {
+  background: inherit;
+}
+
+.admin-ellipsis-text,
+.admin-person-name,
+.admin-person-sub {
+  max-width: 100%;
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  word-break: keep-all;
+}
+
+.admin-person-cell {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.admin-person-name {
+  max-width: 220px;
+}
+
+.admin-person-sub {
+  max-width: 220px;
+}
+
+.admin-data-table .ant-tag {
+  max-width: 145px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  vertical-align: middle;
+}
+
 .clickable-tag {
   cursor: pointer;
   user-select: none;

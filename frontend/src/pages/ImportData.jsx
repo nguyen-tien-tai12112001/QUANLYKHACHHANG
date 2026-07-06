@@ -240,6 +240,7 @@ function ImportData() {
   const [deletingIds, setDeletingIds] = useState([]);
 
   const selectedPeriod = Form.useWatch('period_key', form);
+  const filterValues = Form.useWatch([], form);
 
   function setFileList(nextValue) {
     const value = typeof nextValue === 'function' ? nextValue(warehouseSession.fileList) : nextValue;
@@ -667,6 +668,13 @@ function ImportData() {
   useEffect(() => {
     refreshAll();
   }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadFiles();
+    }, 450);
+    return () => window.clearTimeout(timer);
+  }, [JSON.stringify(filterValues || {})]);
 
   useEffect(() => {
     const hasPendingJob = importJobs.some((job) => job.importFileId && ['queued', 'processing'].includes(job.status));

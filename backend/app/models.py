@@ -294,12 +294,15 @@ class OrgDepartment(Base):
     branch_id: Mapped[int] = mapped_column(ForeignKey("org_branches.id"), index=True, nullable=False)
     department_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     department_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    department_type: Mapped[str | None] = mapped_column(String(50), index=True)
+    manager_user_id: Mapped[int | None] = mapped_column(ForeignKey("system_users.id"), index=True)
     status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     branch = relationship("OrgBranch", back_populates="departments")
-    users = relationship("SystemUser", back_populates="department")
+    users = relationship("SystemUser", back_populates="department", foreign_keys="SystemUser.department_id")
+    manager = relationship("SystemUser", foreign_keys=[manager_user_id])
 
     __table_args__ = (
         UniqueConstraint("branch_id", "department_code", name="uq_org_departments_branch_code"),
@@ -369,7 +372,7 @@ class SystemUser(Base):
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
     branch = relationship("OrgBranch", back_populates="users")
-    department = relationship("OrgDepartment", back_populates="users")
+    department = relationship("OrgDepartment", back_populates="users", foreign_keys=[department_id])
     role = relationship("SystemRole", back_populates="users")
 
 
