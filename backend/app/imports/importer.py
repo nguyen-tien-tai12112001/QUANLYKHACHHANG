@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from fastapi import UploadFile
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
@@ -19,7 +20,7 @@ from app.imports.cleaners import (
 from app.imports.filename_parser import ImportFileMeta, parse_import_filename
 from app.imports.mappings import validate_required_columns
 from app.imports.readers import read_file_rows
-from app.imports.summarizer import summarize_period
+from app.database import SessionLocal
 from app.models import (
     CN05CustomerService,
     Customer,
@@ -31,7 +32,8 @@ from app.models import (
 )
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
-BULK_CHUNK_SIZE = 5000
+BULK_CHUNK_SIZE = 10000
+CUSTOMER_UPSERT_CHUNK_SIZE = 3000
 
 
 def json_safe_raw(raw: dict) -> dict:
@@ -53,7 +55,12 @@ def chunked(items: list[dict], size: int = BULK_CHUNK_SIZE):
 
 def bulk_insert_in_chunks(db: Session, model, mappings: list[dict]) -> None:
     for chunk in chunked(mappings):
-        db.bulk_insert_mappings(model, chunk)
+        db.bulk_insert_mappings(model, chunk, render_nulls=True)
+
+
+def delete_import_file_rows(db: Session, file_id: int) -> None:
+    for model in (DP01DepositAccount, CN05CustomerService, LN01Loan, PF14AccountBalance):
+        db.execute(delete(model).where(model.import_file_id == file_id))
 
 
 def get_or_create_batch(db: Session, meta: ImportFileMeta) -> ImportBatch:
@@ -73,7 +80,7 @@ def save_upload_file(upload_file: UploadFile, meta: ImportFileMeta) -> tuple[Pat
     stored_filename = f"{meta.period_key}_{meta.branch_code}_{meta.file_type}_{upload_file.filename}"
     file_path = UPLOAD_DIR / stored_filename
     with file_path.open("wb") as buffer:
-        shutil.copyfileobj(upload_file.file, buffer)
+        shutil.copyfileobj(upload_file.file, buffer, length=4 * 1024 * 1024)
     return file_path, file_path.stat().st_size, stored_filename
 
 
@@ -119,7 +126,7 @@ def _upsert_customers_from_dp01(db: Session, rows: list[dict], period_key: str) 
     if not customer_map:
         return
 
-    for values in chunked(list(customer_map.values())):
+    for values in chunked(list(customer_map.values()), CUSTOMER_UPSERT_CHUNK_SIZE):
         statement = insert(Customer).values(values)
         statement = statement.on_conflict_do_update(
             index_elements=[Customer.ma_kh_chuan],
@@ -313,10 +320,7 @@ def import_uploaded_file(db: Session, upload_file: UploadFile, replace_existing:
             .first()
         )
         if existing:
-            db.query(DP01DepositAccount).filter(DP01DepositAccount.import_file_id == existing.id).delete()
-            db.query(CN05CustomerService).filter(CN05CustomerService.import_file_id == existing.id).delete()
-            db.query(LN01Loan).filter(LN01Loan.import_file_id == existing.id).delete()
-            db.query(PF14AccountBalance).filter(PF14AccountBalance.import_file_id == existing.id).delete()
+            delete_import_file_rows(db, existing.id)
             existing.status = "replaced"
             existing.original_filename = f"{existing.original_filename}.replaced.{existing.id}"
             db.flush()
@@ -336,7 +340,6 @@ def import_uploaded_file(db: Session, upload_file: UploadFile, replace_existing:
         import_file.error_rows = len(rows) - success_rows
         import_file.status = "success"
         db.commit()
-        summarize_period(db, meta.period_key)
         db.refresh(import_file)
         return import_file
     except Exception as exc:
@@ -346,3 +349,84 @@ def import_uploaded_file(db: Session, upload_file: UploadFile, replace_existing:
         db.add(import_file)
         db.commit()
         raise
+
+
+def queue_uploaded_file(db: Session, upload_file: UploadFile, replace_existing: bool = False) -> ImportFile:
+    meta = parse_import_filename(upload_file.filename)
+    batch = get_or_create_batch(db, meta)
+    file_path, file_size, stored_filename = save_upload_file(upload_file, meta)
+
+    if replace_existing:
+        existing = (
+            db.query(ImportFile)
+            .filter(
+                ImportFile.branch_code == meta.branch_code,
+                ImportFile.file_type == meta.file_type,
+                ImportFile.period_key == meta.period_key,
+                ImportFile.original_filename == upload_file.filename,
+            )
+            .first()
+        )
+        if existing:
+            delete_import_file_rows(db, existing.id)
+            existing.status = "replaced"
+            existing.original_filename = f"{existing.original_filename}.replaced.{existing.id}"
+            db.flush()
+
+    import_file = _create_import_file(db, upload_file, meta, batch, file_path, file_size, stored_filename)
+    import_file.status = "queued"
+    db.commit()
+    db.refresh(import_file)
+    return import_file
+
+
+def process_import_file(import_file_id: int) -> None:
+    db = SessionLocal()
+    try:
+        import_file = db.query(ImportFile).filter(ImportFile.id == import_file_id).first()
+        if not import_file or import_file.status in {"deleted", "replaced"}:
+            return
+        import_file.status = "processing"
+        import_file.error_message = None
+        db.commit()
+
+        rows = read_file_rows(import_file.file_path)
+        validate_required_columns(rows, import_file.file_type)
+        success_rows = IMPORT_HANDLERS[import_file.file_type](db, rows, import_file)
+        import_file.total_rows = len(rows)
+        import_file.success_rows = success_rows
+        import_file.error_rows = len(rows) - success_rows
+        import_file.status = "success"
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        import_file = db.query(ImportFile).filter(ImportFile.id == import_file_id).first()
+        if import_file:
+            import_file.status = "error"
+            import_file.error_message = str(exc)
+            db.commit()
+    finally:
+        db.close()
+
+
+def process_delete_import_file(import_file_id: int) -> None:
+    db = SessionLocal()
+    try:
+        import_file = db.query(ImportFile).filter(ImportFile.id == import_file_id).first()
+        if not import_file or import_file.status in {"deleted", "replaced"}:
+            return
+        original_filename = import_file.original_filename
+        delete_import_file_rows(db, import_file_id)
+        import_file.status = "deleted"
+        import_file.error_message = f"Deleted original filename: {original_filename}"
+        import_file.original_filename = f"{original_filename}.deleted.{import_file_id}"
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        import_file = db.query(ImportFile).filter(ImportFile.id == import_file_id).first()
+        if import_file:
+            import_file.status = "error"
+            import_file.error_message = str(exc)
+            db.commit()
+    finally:
+        db.close()
