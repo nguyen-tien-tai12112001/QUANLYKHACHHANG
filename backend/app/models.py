@@ -274,6 +274,31 @@ class CustomerPeriodSummary(Base):
     )
 
 
+class ReportSourceStatus(Base):
+    __tablename__ = "report_source_statuses"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    period_date: Mapped[object | None] = mapped_column(Date)
+    source_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    source_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_table: Mapped[str | None] = mapped_column(String(100))
+    status: Mapped[str] = mapped_column(String(30), default="missing", index=True, nullable=False)
+    file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    success_file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    customer_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_file_size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    mapped_fields: Mapped[dict | None] = mapped_column(JSON)
+    message: Mapped[str | None] = mapped_column(Text)
+    built_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("period_key", "source_code", name="uq_report_source_status_period_source"),
+    )
+
+
 class OrgBranch(Base):
     __tablename__ = "org_branches"
 

@@ -293,6 +293,23 @@ const sourceGroups = [
   { label: 'Bổ sung', source: 'MANUAL', note: 'Các cột chưa có nguồn rõ sẽ nhập/mapping sau' },
 ];
 
+const sourceStatusMeta = {
+  ready: { label: 'Sẵn sàng', color: 'success' },
+  partial: { label: 'Một phần', color: 'warning' },
+  processing: { label: 'Đang xử lý', color: 'processing' },
+  error: { label: 'Lỗi', color: 'error' },
+  missing: { label: 'Thiếu dữ liệu', color: 'default' },
+  planned: { label: 'Sẽ bổ sung', color: 'blue' },
+};
+
+function formatFileSize(value) {
+  const bytes = Number(value || 0);
+  if (!bytes) return '0 B';
+  const units = ['B', 'KB', 'MB', 'GB'];
+  const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
+  return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`;
+}
+
 // ─── Modal Chi tiết khách hàng ─────────────────────────────────────────────────
 function CustomerDetailModal({ customer, open, onClose }) {
   const [fullscreen, setFullscreen] = useState(false);
@@ -788,6 +805,7 @@ function buildColumns(onDetailClick, onUnusedClick) {
 function CustomerReport() {
   const [form] = Form.useForm();
   const [rows, setRows] = useState([]);
+  const [sourceRows, setSourceRows] = useState([]);
   const [loading, setLoading] = useState(false);
   const [viewMode, setViewMode] = useState('report');
   const [searchText, setSearchText] = useState('');
@@ -837,10 +855,17 @@ function CustomerReport() {
     }
     setLoading(true);
     try {
-      const { data } = await client.get('/imports/summary', {
-        params: { period_key: periodKey, limit: 1000 },
-      });
-      setRows(Array.isArray(data) ? data : data.value || []);
+      const [summaryResponse, sourceResponse] = await Promise.all([
+        client.get('/imports/summary', {
+          params: { period_key: periodKey, limit: 1000 },
+        }),
+        client.get('/imports/report-sources', {
+          params: { period_key: periodKey },
+        }),
+      ]);
+      const summaryData = summaryResponse.data;
+      setRows(Array.isArray(summaryData) ? summaryData : summaryData.value || []);
+      setSourceRows(Array.isArray(sourceResponse.data) ? sourceResponse.data : []);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -930,6 +955,7 @@ function CustomerReport() {
       }
     ];
     setRows(mockData);
+    setSourceRows([]);
     message.success('Đã nạp 10 khách hàng giả định (Demo)');
   }
 
@@ -1035,6 +1061,89 @@ function CustomerReport() {
     }
     return result;
   }, [rows, searchText, filterOfficer, filterUnusedSvc, filterCn, filterPgd]);
+
+  const sourceColumns = useMemo(() => [
+    {
+      title: 'Nguồn',
+      dataIndex: 'source_code',
+      key: 'source_code',
+      width: 110,
+      render: (value, row) => (
+        <Space direction="vertical" size={2}>
+          {sourceTag(value)}
+          <Text strong style={{ fontSize: 12 }}>{row.source_name}</Text>
+        </Space>
+      ),
+    },
+    {
+      title: 'Trạng thái',
+      dataIndex: 'status',
+      key: 'status',
+      width: 130,
+      render: (value) => {
+        const meta = sourceStatusMeta[value] || sourceStatusMeta.missing;
+        return <Badge status={meta.color} text={meta.label} />;
+      },
+    },
+    {
+      title: 'File',
+      key: 'file_count',
+      width: 130,
+      align: 'center',
+      render: (_, row) => (
+        <Space size={4}>
+          <Tag color="green">{row.success_file_count || 0} thành công</Tag>
+          {Number(row.error_file_count || 0) > 0 && <Tag color="red">{row.error_file_count} lỗi</Tag>}
+        </Space>
+      ),
+    },
+    {
+      title: 'Số dòng',
+      dataIndex: 'row_count',
+      key: 'row_count',
+      width: 110,
+      align: 'right',
+      render: (value) => money(value || 0),
+    },
+    {
+      title: 'Số KH',
+      dataIndex: 'customer_count',
+      key: 'customer_count',
+      width: 100,
+      align: 'right',
+      render: (value) => money(value || 0),
+    },
+    {
+      title: 'Dung lượng',
+      dataIndex: 'total_file_size',
+      key: 'total_file_size',
+      width: 110,
+      align: 'right',
+      render: formatFileSize,
+    },
+    {
+      title: 'Trường dữ liệu dùng cho báo cáo',
+      dataIndex: 'mapped_fields',
+      key: 'mapped_fields',
+      width: 280,
+      render: (value) => {
+        const fields = value?.fields || [];
+        return (
+          <Space size={[4, 4]} wrap>
+            {fields.slice(0, 8).map((field) => <Tag key={field}>{field}</Tag>)}
+            {fields.length > 8 && <Tag color="blue">+{fields.length - 8}</Tag>}
+          </Space>
+        );
+      },
+    },
+    {
+      title: 'Ghi chú',
+      dataIndex: 'message',
+      key: 'message',
+      ellipsis: true,
+      render: (value) => <Text type="secondary">{value || '—'}</Text>,
+    },
+  ], []);
 
   return (
     <Space direction="vertical" size={20} className="page-stack">
@@ -1413,20 +1522,36 @@ function CustomerReport() {
 
       {/* Nội dung chính */}
       {viewMode === 'sources' ? (
-        <Card title="Theo dõi nguồn dữ liệu">
-          <Row gutter={[12, 12]}>
-            {sourceGroups.map((item) => (
-              <Col xs={24} md={8} key={item.label}>
-                <div className="source-tile">
-                  <Space direction="vertical" size={8}>
-                    <Text strong>{item.label}</Text>
-                    {sourceTag(item.source)}
-                    <Text type="secondary">{item.note}</Text>
-                  </Space>
-                </div>
-              </Col>
-            ))}
-          </Row>
+        <Card
+          title="Theo dõi nguồn dữ liệu"
+          extra={<Text type="secondary">Nguồn được tạo sau khi bấm Tổng hợp lại</Text>}
+        >
+          {sourceRows.length > 0 ? (
+            <Table
+              bordered
+              size="small"
+              rowKey="source_code"
+              columns={sourceColumns}
+              dataSource={sourceRows}
+              pagination={false}
+              scroll={{ x: 980 }}
+              locale={{ emptyText: <Empty description="Chưa có trạng thái nguồn dữ liệu" /> }}
+            />
+          ) : (
+            <Row gutter={[12, 12]}>
+              {sourceGroups.map((item) => (
+                <Col xs={24} md={8} key={item.label}>
+                  <div className="source-tile">
+                    <Space direction="vertical" size={8}>
+                      <Text strong>{item.label}</Text>
+                      {sourceTag(item.source)}
+                      <Text type="secondary">{item.note}</Text>
+                    </Space>
+                  </div>
+                </Col>
+              ))}
+            </Row>
+          )}
         </Card>
       ) : (
         <Card

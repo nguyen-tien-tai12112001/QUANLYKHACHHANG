@@ -14,7 +14,7 @@ from app.imports.importer import (
     queue_uploaded_file,
 )
 from app.imports.summarizer import summarize_period
-from app.models import CustomerPeriodSummary, ImportBatch, ImportFile
+from app.models import CustomerPeriodSummary, ImportBatch, ImportFile, ReportSourceStatus
 
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
@@ -199,6 +199,34 @@ def delete_import_file(
 def summarize(period_key: str, db: Session = Depends(get_db)):
     count = summarize_period(db, period_key)
     return {"period_key": period_key, "summary_rows": count}
+
+
+@router.get("/report-sources")
+def list_report_sources(period_key: str = Query(...), db: Session = Depends(get_db)):
+    rows = (
+        db.query(ReportSourceStatus)
+        .filter(ReportSourceStatus.period_key == period_key)
+        .order_by(ReportSourceStatus.source_code)
+        .all()
+    )
+    fields = [
+        "period_key",
+        "period_date",
+        "source_code",
+        "source_name",
+        "source_table",
+        "status",
+        "file_count",
+        "success_file_count",
+        "error_file_count",
+        "row_count",
+        "customer_count",
+        "total_file_size",
+        "mapped_fields",
+        "message",
+        "built_at",
+    ]
+    return [serialize_model(item, fields) for item in rows]
 
 
 @router.get("/summary")

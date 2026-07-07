@@ -1,135 +1,338 @@
-from decimal import Decimal
-
+from sqlalchemy import delete, distinct, func, text
 from sqlalchemy.orm import Session
 
-from app.imports.cleaners import decimal_or_zero, parse_service_flag
 from app.models import (
     CN05CustomerService,
     CustomerPeriodSummary,
     DP01DepositAccount,
+    ImportBatch,
+    ImportFile,
     LN01Loan,
     PF14AccountBalance,
-    Customer,
+    ReportSourceStatus,
 )
 
 
-def _blank_summary(period_key: str, period_date, ma_kh_chuan: str) -> dict:
-    return {
-        "period_key": period_key,
-        "period_date": period_date,
-        "ma_kh_chuan": ma_kh_chuan,
-        "telephone": None,
-        "so_du_tien_vay": Decimal("0"),
-        "so_du_tien_gui_ckh": Decimal("0"),
-        "doanh_so_chuyen_tien_ve_tai_khoan": Decimal("0"),
-        "so_du_tgtt_binh_quan": Decimal("0"),
-        "tong_loi_ich_thang": Decimal("0"),
-        "thau_chi": 0,
-        "tk_so_dep": 0,
-        "agribank_plus": 0,
-        "tin_nhan_ott": 0,
-        "e_banking": 0,
-        "sms_nhac_no_vay": 0,
-        "sms_tien_gui": 0,
-        "the_ghi_no_noi_dia": 0,
-        "the_td_quoc_te": 0,
-        "the_td_loc_viet": 0,
-        "tt_tien_dien": 0,
-        "tt_tien_nuoc": 0,
-        "tt_cuoc_vien_thong": 0,
-        "tra_luong_qua_the": 0,
-        "batd": 0,
-        "batk": 0,
-        "bh_oto_xe_may": 0,
-        "bh_khac": 0,
-        "bao_lanh": 0,
-        "loa_bien_dong_so_du": 0,
-        "phan_mem_ban_hang": 0,
-        "pos": 0,
-        "chi_tra_kieu_hoi": 0,
-        "phat_hanh_lc": 0,
-        "thanh_toan_quoc_te": 0,
-        "mua_ban_ngoai_te": 0,
-    }
+SOURCE_CONFIGS = [
+    {
+        "code": "DP01",
+        "name": "Thông tin khách hàng và tiền gửi",
+        "table": "dp01_deposit_accounts",
+        "model": DP01DepositAccount,
+        "fields": [
+            "MA_CN",
+            "MA_KH",
+            "TEN_KH",
+            "MA_PGD",
+            "CURRENT_BALANCE",
+            "DRAMT",
+            "CRAMT",
+            "EMPLOYEE_NUMBER",
+        ],
+    },
+    {
+        "code": "LN01",
+        "name": "Khoản vay",
+        "table": "ln01_loans",
+        "model": LN01Loan,
+        "fields": ["BRCD", "CUSTSEQ", "CUSTNM", "DU_NO", "LOAN_TYPE", "OFFICER_ID"],
+    },
+    {
+        "code": "PF14",
+        "name": "CASA bình quân",
+        "table": "pf14_account_balances",
+        "model": PF14AccountBalance,
+        "fields": ["TRBRCD", "CUSTSEQ", "CUSTNAME", "AVERAGEBALANCE", "MONTHLYENDBALANCE"],
+    },
+    {
+        "code": "CN05",
+        "name": "Dịch vụ khách hàng",
+        "table": "cn05_customer_services",
+        "model": CN05CustomerService,
+        "fields": [
+            "TK_OSB",
+            "TKTT_TK_SODEP",
+            "DK_AGRIBANK_PLUS",
+            "DK_AGRIBANK_PLUS_OTT",
+            "SMS_BANKING",
+            "VV_SMS_TIEN_VAY",
+            "TG_SMS_TIEN_GUI",
+            "THE_GHI_NO_NOI_DIA",
+            "THE_TIN_DUNG_NOI_DIA",
+            "THE_TIN_DUNG_QUOC_TE",
+        ],
+    },
+    {
+        "code": "MANUAL",
+        "name": "Dữ liệu bổ sung",
+        "table": None,
+        "model": None,
+        "fields": [
+            "Tổng lợi ích tháng",
+            "Bảo hiểm",
+            "POS",
+            "Thanh toán quốc tế",
+            "Ghi chú chăm sóc",
+        ],
+    },
+]
+
+
+def refresh_report_sources(db: Session, period_key: str) -> None:
+    db.execute(delete(ReportSourceStatus).where(ReportSourceStatus.period_key == period_key))
+
+    batch = db.query(ImportBatch).filter(ImportBatch.period_key == period_key).first()
+    period_date = batch.period_date if batch else None
+    source_rows = []
+
+    for config in SOURCE_CONFIGS:
+        source_code = config["code"]
+        files = (
+            db.query(ImportFile)
+            .filter(ImportFile.period_key == period_key, ImportFile.file_type == source_code)
+            .all()
+            if source_code != "MANUAL"
+            else []
+        )
+        active_files = [file for file in files if file.status not in {"deleted", "replaced"}]
+        success_files = [file for file in active_files if file.status == "success"]
+        error_files = [file for file in active_files if file.status == "error"]
+        waiting_files = [file for file in active_files if file.status in {"queued", "processing", "deleting"}]
+
+        row_count = 0
+        customer_count = 0
+        model = config["model"]
+        if model is not None:
+            row_count = db.query(func.count(model.id)).filter(model.period_key == period_key).scalar() or 0
+            customer_count = (
+                db.query(func.count(distinct(model.ma_kh_chuan)))
+                .filter(model.period_key == period_key, model.ma_kh_chuan.isnot(None))
+                .scalar()
+                or 0
+            )
+
+        if source_code == "MANUAL":
+            status = "planned"
+            message = "Nguồn bổ sung thủ công sẽ cấu hình ở giai đoạn sau."
+        elif waiting_files:
+            status = "processing"
+            message = "Đang có file chờ xử lý hoặc đang xử lý."
+        elif success_files and error_files:
+            status = "partial"
+            message = "Có file thành công và có file lỗi, cần kiểm tra lại kho dữ liệu."
+        elif success_files and row_count > 0:
+            status = "ready"
+            message = "Nguồn đã sẵn sàng cho báo cáo."
+        elif error_files:
+            status = "error"
+            message = "Nguồn đang lỗi, cần import lại file."
+        else:
+            status = "missing"
+            message = "Chưa có file nguồn thành công cho kỳ này."
+
+        source_rows.append(
+            {
+                "period_key": period_key,
+                "period_date": period_date,
+                "source_code": source_code,
+                "source_name": config["name"],
+                "source_table": config["table"],
+                "status": status,
+                "file_count": len(active_files),
+                "success_file_count": len(success_files),
+                "error_file_count": len(error_files),
+                "row_count": row_count,
+                "customer_count": customer_count,
+                "total_file_size": sum(file.file_size or 0 for file in active_files),
+                "mapped_fields": {"fields": config["fields"]},
+                "message": message,
+            }
+        )
+
+    db.bulk_insert_mappings(ReportSourceStatus, source_rows)
+
+
+SUMMARY_INSERT_SQL = text(
+    """
+    WITH dp AS (
+        SELECT
+            ma_kh_chuan,
+            MAX(period_date) AS period_date,
+            MAX(ma_cn) AS ma_cn,
+            MAX(ma_kh) AS ma_kh,
+            MAX(ten_kh) AS ten_kh,
+            MAX(ma_pgd) AS ma_pgd,
+            MAX(cust_type_name) AS cust_type_name,
+            MAX(cust_type) AS cust_type,
+            MAX(employee_number) AS ma_cb,
+            MAX(employee_name) AS ten_can_bo,
+            SUM(COALESCE(current_balance, 0)) AS so_du_tien_gui_ckh,
+            SUM(COALESCE(dramt, 0) + COALESCE(cramt, 0)) AS doanh_so_chuyen_tien_ve_tai_khoan
+        FROM dp01_deposit_accounts
+        WHERE period_key = :period_key AND ma_kh_chuan IS NOT NULL
+        GROUP BY ma_kh_chuan
+    ),
+    ln AS (
+        SELECT
+            ma_kh_chuan,
+            MAX(period_date) AS period_date,
+            MAX(brcd) AS ma_cn,
+            MAX(custseq) AS ma_kh,
+            MAX(custnm) AS ten_kh,
+            MAX(loan_type) AS loai_vay,
+            MAX(officer_id) AS ma_cb,
+            MAX(officer_name) AS ten_can_bo,
+            SUM(COALESCE(du_no, 0)) AS so_du_tien_vay
+        FROM ln01_loans
+        WHERE period_key = :period_key AND ma_kh_chuan IS NOT NULL
+        GROUP BY ma_kh_chuan
+    ),
+    pf AS (
+        SELECT
+            ma_kh_chuan,
+            MAX(period_date) AS period_date,
+            MAX(trbrcd) AS ma_cn,
+            MAX(custseq) AS ma_kh,
+            MAX(custname) AS ten_kh,
+            SUM(COALESCE(averagebalance, 0)) AS so_du_tgtt_binh_quan
+        FROM pf14_account_balances
+        WHERE period_key = :period_key AND ma_kh_chuan IS NOT NULL
+        GROUP BY ma_kh_chuan
+    ),
+    cn AS (
+        SELECT
+            ma_kh_chuan,
+            MAX(period_date) AS period_date,
+            MAX(ma_cn) AS ma_cn,
+            MAX(ma_kh) AS ma_kh,
+            MAX(ten_kh) AS ten_kh,
+            MAX(CASE WHEN COALESCE(tk_osb, 0) > 0 THEN 1 ELSE 0 END) AS thau_chi,
+            MAX(CASE WHEN COALESCE(tktt_tk_sodep, 0) > 0 THEN 1 ELSE 0 END) AS tk_so_dep,
+            MAX(CASE WHEN COALESCE(dk_agribank_plus, 0) > 0 THEN 1 ELSE 0 END) AS agribank_plus,
+            MAX(CASE WHEN COALESCE(dk_agribank_plus_ott, 0) > 0 THEN 1 ELSE 0 END) AS tin_nhan_ott,
+            MAX(CASE WHEN COALESCE(sms_banking, 0) > 0 THEN 1 ELSE 0 END) AS e_banking,
+            MAX(CASE WHEN COALESCE(vv_sms_tien_vay, 0) > 0 THEN 1 ELSE 0 END) AS sms_nhac_no_vay,
+            MAX(CASE WHEN COALESCE(tg_sms_tien_gui, 0) > 0 THEN 1 ELSE 0 END) AS sms_tien_gui,
+            MAX(CASE WHEN COALESCE(the_ghi_no_noi_dia, 0) > 0 THEN 1 ELSE 0 END) AS the_ghi_no_noi_dia,
+            MAX(CASE WHEN COALESCE(the_tin_dung_noi_dia, 0) > 0 THEN 1 ELSE 0 END) AS the_td_loc_viet,
+            MAX(CASE WHEN COALESCE(the_tin_dung_quoc_te, 0) > 0 THEN 1 ELSE 0 END) AS the_td_quoc_te
+        FROM cn05_customer_services
+        WHERE period_key = :period_key AND ma_kh_chuan IS NOT NULL
+        GROUP BY ma_kh_chuan
+    ),
+    keys AS (
+        SELECT ma_kh_chuan FROM dp
+        UNION SELECT ma_kh_chuan FROM ln
+        UNION SELECT ma_kh_chuan FROM pf
+        UNION SELECT ma_kh_chuan FROM cn
+    )
+    INSERT INTO customer_period_summaries (
+        period_key,
+        period_date,
+        ma_kh_chuan,
+        ma_cn,
+        ma_pgd,
+        ma_kh,
+        ten_kh,
+        loai_khach_hang,
+        so_du_tien_vay,
+        so_du_tien_gui_ckh,
+        loai_vay,
+        doanh_so_chuyen_tien_ve_tai_khoan,
+        so_du_tgtt_binh_quan,
+        thau_chi,
+        tk_so_dep,
+        agribank_plus,
+        tin_nhan_ott,
+        e_banking,
+        sms_nhac_no_vay,
+        sms_tien_gui,
+        the_ghi_no_noi_dia,
+        the_td_quoc_te,
+        the_td_loc_viet,
+        tt_tien_dien,
+        tt_tien_nuoc,
+        tt_cuoc_vien_thong,
+        tra_luong_qua_the,
+        batd,
+        batk,
+        bh_oto_xe_may,
+        bh_khac,
+        bao_lanh,
+        loa_bien_dong_so_du,
+        phan_mem_ban_hang,
+        pos,
+        chi_tra_kieu_hoi,
+        phat_hanh_lc,
+        thanh_toan_quoc_te,
+        mua_ban_ngoai_te,
+        tong_loi_ich_thang,
+        ma_cb,
+        ten_can_bo,
+        telephone
+    )
+    SELECT
+        :period_key AS period_key,
+        COALESCE(dp.period_date, ln.period_date, pf.period_date, cn.period_date) AS period_date,
+        keys.ma_kh_chuan,
+        COALESCE(dp.ma_cn, ln.ma_cn, pf.ma_cn, cn.ma_cn) AS ma_cn,
+        dp.ma_pgd AS ma_pgd,
+        COALESCE(dp.ma_kh, ln.ma_kh, pf.ma_kh, cn.ma_kh) AS ma_kh,
+        COALESCE(dp.ten_kh, ln.ten_kh, pf.ten_kh, cn.ten_kh) AS ten_kh,
+        COALESCE(dp.cust_type_name, dp.cust_type) AS loai_khach_hang,
+        COALESCE(ln.so_du_tien_vay, 0) AS so_du_tien_vay,
+        COALESCE(dp.so_du_tien_gui_ckh, 0) AS so_du_tien_gui_ckh,
+        ln.loai_vay,
+        COALESCE(dp.doanh_so_chuyen_tien_ve_tai_khoan, 0) AS doanh_so_chuyen_tien_ve_tai_khoan,
+        COALESCE(pf.so_du_tgtt_binh_quan, 0) AS so_du_tgtt_binh_quan,
+        COALESCE(cn.thau_chi, 0) AS thau_chi,
+        COALESCE(cn.tk_so_dep, 0) AS tk_so_dep,
+        COALESCE(cn.agribank_plus, 0) AS agribank_plus,
+        COALESCE(cn.tin_nhan_ott, 0) AS tin_nhan_ott,
+        COALESCE(cn.e_banking, 0) AS e_banking,
+        COALESCE(cn.sms_nhac_no_vay, 0) AS sms_nhac_no_vay,
+        COALESCE(cn.sms_tien_gui, 0) AS sms_tien_gui,
+        COALESCE(cn.the_ghi_no_noi_dia, 0) AS the_ghi_no_noi_dia,
+        COALESCE(cn.the_td_quoc_te, 0) AS the_td_quoc_te,
+        COALESCE(cn.the_td_loc_viet, 0) AS the_td_loc_viet,
+        0 AS tt_tien_dien,
+        0 AS tt_tien_nuoc,
+        0 AS tt_cuoc_vien_thong,
+        0 AS tra_luong_qua_the,
+        0 AS batd,
+        0 AS batk,
+        0 AS bh_oto_xe_may,
+        0 AS bh_khac,
+        0 AS bao_lanh,
+        0 AS loa_bien_dong_so_du,
+        0 AS phan_mem_ban_hang,
+        0 AS pos,
+        0 AS chi_tra_kieu_hoi,
+        0 AS phat_hanh_lc,
+        0 AS thanh_toan_quoc_te,
+        0 AS mua_ban_ngoai_te,
+        0 AS tong_loi_ich_thang,
+        COALESCE(dp.ma_cb, ln.ma_cb) AS ma_cb,
+        COALESCE(dp.ten_can_bo, ln.ten_can_bo) AS ten_can_bo,
+        customers.telephone
+    FROM keys
+    LEFT JOIN dp ON dp.ma_kh_chuan = keys.ma_kh_chuan
+    LEFT JOIN ln ON ln.ma_kh_chuan = keys.ma_kh_chuan
+    LEFT JOIN pf ON pf.ma_kh_chuan = keys.ma_kh_chuan
+    LEFT JOIN cn ON cn.ma_kh_chuan = keys.ma_kh_chuan
+    LEFT JOIN customers ON customers.ma_kh_chuan = keys.ma_kh_chuan
+    """
+)
 
 
 def summarize_period(db: Session, period_key: str) -> int:
-    db.query(CustomerPeriodSummary).filter(CustomerPeriodSummary.period_key == period_key).delete()
-
-    summaries: dict[str, dict] = {}
-    period_date = None
-
-    def get_summary(ma_kh_chuan: str, source_period_date):
-        nonlocal period_date
-        if period_date is None:
-            period_date = source_period_date
-        if ma_kh_chuan not in summaries:
-            summaries[ma_kh_chuan] = _blank_summary(period_key, source_period_date, ma_kh_chuan)
-        return summaries[ma_kh_chuan]
-
-    for row in db.query(DP01DepositAccount).filter(DP01DepositAccount.period_key == period_key):
-        if not row.ma_kh_chuan:
-            continue
-        item = get_summary(row.ma_kh_chuan, row.period_date)
-        item.setdefault("ma_cn", row.ma_cn or row.branch_code)
-        item.setdefault("ma_kh", row.ma_kh)
-        item.setdefault("ten_kh", row.ten_kh)
-        item.setdefault("ma_pgd", row.ma_pgd)
-        item.setdefault("loai_khach_hang", row.cust_type_name or row.cust_type)
-        item.setdefault("ma_cb", row.employee_number)
-        item.setdefault("ten_can_bo", row.employee_name)
-        item["so_du_tien_gui_ckh"] += decimal_or_zero(row.current_balance)
-        item["doanh_so_chuyen_tien_ve_tai_khoan"] += decimal_or_zero(row.dramt)
-        item["doanh_so_chuyen_tien_ve_tai_khoan"] += decimal_or_zero(row.cramt)
-
-    for row in db.query(LN01Loan).filter(LN01Loan.period_key == period_key):
-        if not row.ma_kh_chuan:
-            continue
-        item = get_summary(row.ma_kh_chuan, row.period_date)
-        item.setdefault("ma_cn", row.brcd or row.branch_code)
-        item.setdefault("ma_kh", row.custseq)
-        item.setdefault("ten_kh", row.custnm)
-        item.setdefault("loai_vay", row.loan_type)
-        item.setdefault("ma_cb", row.officer_id)
-        item.setdefault("ten_can_bo", row.officer_name)
-        item["so_du_tien_vay"] += decimal_or_zero(row.du_no)
-
-    for row in db.query(PF14AccountBalance).filter(PF14AccountBalance.period_key == period_key):
-        if not row.ma_kh_chuan:
-            continue
-        item = get_summary(row.ma_kh_chuan, row.period_date)
-        item.setdefault("ma_cn", row.trbrcd or row.branch_code)
-        item.setdefault("ma_kh", row.custseq)
-        item.setdefault("ten_kh", row.custname)
-        item["so_du_tgtt_binh_quan"] += decimal_or_zero(row.averagebalance)
-
-    for row in db.query(CN05CustomerService).filter(CN05CustomerService.period_key == period_key):
-        if not row.ma_kh_chuan:
-            continue
-        item = get_summary(row.ma_kh_chuan, row.period_date)
-        item.setdefault("ma_cn", row.ma_cn or row.branch_code)
-        item.setdefault("ma_kh", row.ma_kh)
-        item.setdefault("ten_kh", row.ten_kh)
-        item["thau_chi"] = max(item["thau_chi"], parse_service_flag(row.tk_osb))
-        item["tk_so_dep"] = max(item["tk_so_dep"], parse_service_flag(row.tktt_tk_sodep))
-        item["agribank_plus"] = max(item["agribank_plus"], parse_service_flag(row.dk_agribank_plus))
-        item["tin_nhan_ott"] = max(item["tin_nhan_ott"], parse_service_flag(row.dk_agribank_plus_ott))
-        item["sms_nhac_no_vay"] = max(item["sms_nhac_no_vay"], parse_service_flag(row.vv_sms_tien_vay))
-        item["sms_tien_gui"] = max(item["sms_tien_gui"], parse_service_flag(row.tg_sms_tien_gui))
-        item["the_ghi_no_noi_dia"] = max(item["the_ghi_no_noi_dia"], parse_service_flag(row.the_ghi_no_noi_dia))
-        item["the_td_quoc_te"] = max(item["the_td_quoc_te"], parse_service_flag(row.the_tin_dung_quoc_te))
-
-    if not summaries:
-        db.commit()
-        return 0
-
-    # Lấy thông tin số điện thoại từ bảng Customer để điền vào bảng tổng hợp
-    customers = db.query(Customer.ma_kh_chuan, Customer.telephone).filter(Customer.ma_kh_chuan.in_(list(summaries.keys()))).all()
-    for ma_kh_chuan, tel in customers:
-        if ma_kh_chuan in summaries:
-            summaries[ma_kh_chuan]["telephone"] = tel
-
-    db.bulk_insert_mappings(CustomerPeriodSummary, list(summaries.values()))
+    db.execute(delete(CustomerPeriodSummary).where(CustomerPeriodSummary.period_key == period_key))
+    db.execute(SUMMARY_INSERT_SQL, {"period_key": period_key})
+    refresh_report_sources(db, period_key)
     db.commit()
-    return len(summaries)
-
+    return (
+        db.query(func.count(CustomerPeriodSummary.id))
+        .filter(CustomerPeriodSummary.period_key == period_key)
+        .scalar()
+        or 0
+    )
