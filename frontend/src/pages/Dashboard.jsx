@@ -1,116 +1,426 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ApiOutlined,
   BankOutlined,
+  CopyOutlined,
   DatabaseOutlined,
-  FileSearchOutlined,
+  PhoneOutlined,
+  RiseOutlined,
+  UserOutlined,
+  WalletOutlined,
+  WarningOutlined,
 } from '@ant-design/icons';
-import { Alert, Card, Col, Row, Space, Spin, Statistic, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Col, Modal, Row, Select, Skeleton, Space, Spin, Tag, Typography, message } from 'antd';
 
-import client from '../api/client';
+import CampaignList from '../components/dashboard/CampaignList';
+import VisualDashboard from '../components/dashboard/VisualDashboard';
+import { getScopeLabel, toApiBranchParams } from '../auth';
+import {
+  generateCallScript,
+  loadContactedIds,
+  money,
+  saveContactedId,
+} from '../utils/customerMetrics';
+import { formatPeriodKey } from '../utils/periodUtils';
+import { useCustomerSummary } from '../hooks/useCustomerSummary';
+import { useBranchFilters } from '../hooks/useBranchFilters';
 
-const { Paragraph, Title } = Typography;
+const { Paragraph, Text, Title } = Typography;
 
-const initialStatus = {
-  loading: true,
-  backend: 'checking',
-  database: 'checking',
-  message: '',
-};
-
-function StatusCard({ title, status, icon }) {
+function StatusIndicator({ title, status, icon }) {
   const isOk = status === 'connected' || status === 'ok';
   const color = status === 'checking' ? 'processing' : isOk ? 'success' : 'error';
-  const text = status === 'checking' ? 'Đang kiểm tra' : isOk ? 'Hoạt động' : 'Lỗi kết nối';
+  const text = status === 'checking' ? 'Đang check' : isOk ? 'Hoạt động' : 'Ngoại tuyến';
 
   return (
-    <Card className="status-card">
-      <Space direction="vertical" size={12}>
-        <Space size={12}>
-          <span className={`status-icon status-icon-${isOk ? 'ok' : 'error'}`}>{icon}</span>
-          <Typography.Text strong>{title}</Typography.Text>
-        </Space>
-        <Tag color={color}>{text}</Tag>
-      </Space>
-    </Card>
+    <Tag color={color} style={{ fontSize: 11, padding: '2px 8px', borderRadius: '4px', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+      {icon}
+      <span>
+        {title}: <strong>{text}</strong>
+      </span>
+    </Tag>
+  );
+}
+
+function KpiCard({ loading, label, value, icon, borderColor, bgGradient, valueColor }) {
+  return (
+    <div
+      style={{
+        background: bgGradient,
+        border: '1px solid #e2e8f0',
+        borderLeft: `4px solid ${borderColor}`,
+        borderRadius: '8px',
+        padding: '12px 16px',
+        boxShadow: `0 2px 8px ${borderColor}14`,
+        display: 'flex',
+        flexDirection: 'column',
+        justifyContent: 'space-between',
+        minHeight: '92px',
+      }}
+    >
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+        <span style={{ fontSize: 11, fontWeight: 700, color: borderColor, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+          {label}
+        </span>
+        <div
+          style={{
+            width: 28,
+            height: 28,
+            borderRadius: '50%',
+            backgroundColor: `${borderColor}18`,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: borderColor,
+          }}
+        >
+          {icon}
+        </div>
+      </div>
+      {loading ? (
+        <Skeleton.Input active size="small" style={{ width: '80%', height: 28 }} />
+      ) : (
+        <span style={{ fontSize: 'clamp(14px, 3.5vw, 20px)', fontWeight: 800, color: valueColor, lineHeight: 1 }}>{value}</span>
+      )}
+    </div>
   );
 }
 
 function Dashboard() {
-  const [status, setStatus] = useState(initialStatus);
+  const {
+    status,
+    rows,
+    periods,
+    periodKey,
+    isDemo,
+    reload,
+    dashboardAggregate,
+    trends,
+    trendsLoading,
+  } = useCustomerSummary();
+
+  const onScopeApply = useCallback(
+    (params) => {
+      if (periodKey) reload(periodKey, params);
+    },
+    [reload, periodKey],
+  );
+
+  const {
+    filterCn,
+    filterPgd,
+    cnOptions,
+    pgdOptions,
+    cnSelectValue: branchSelectValue,
+    handleCnChange,
+    handlePgdChange,
+    branchSelectDisabled,
+    pgdSelectDisabled,
+  } = useBranchFilters(rows, { onScopeApply });
+
+  const [contactOpen, setContactOpen] = useState(false);
+  const [selectedCust, setSelectedCust] = useState(null);
+  const [contactedIds, setContactedIds] = useState(() => loadContactedIds(null));
 
   useEffect(() => {
-    async function loadHealth() {
-      try {
-        const { data } = await client.get('/health');
-        setStatus({
-          loading: false,
-          backend: data.status === 'ok' ? 'ok' : 'error',
-          database: data.database === 'connected' ? 'connected' : 'disconnected',
-          message: data.message || '',
-        });
-      } catch (error) {
-        const responseMessage = error.response?.data?.message;
-        setStatus({
-          loading: false,
-          backend: 'error',
-          database: 'disconnected',
-          message: responseMessage || error.message || 'Không thể kết nối backend',
-        });
-      }
+    if (periodKey) {
+      setContactedIds(loadContactedIds(periodKey));
     }
+  }, [periodKey]);
 
-    loadHealth();
+  const kpis = dashboardAggregate?.kpis;
+  const metrics = useMemo(
+    () => ({
+      loan: kpis?.total_loan ?? 0,
+      deposit: kpis?.total_deposit ?? 0,
+      casa: kpis?.total_casa ?? 0,
+      noService: kpis?.no_service_count ?? 0,
+      totalCustomers: kpis?.total_customers ?? 0,
+    }),
+    [kpis],
+  );
+
+  const campaignCandidates = useMemo(
+    () => dashboardAggregate?.campaign_top5 || [],
+    [dashboardAggregate],
+  );
+
+  const periodOptions = useMemo(
+    () =>
+      periods.map((p) => ({
+        value: p.period_key,
+        label: formatPeriodKey(p.period_key),
+      })),
+    [periods],
+  );
+
+  const handlePeriodChange = (value) => {
+    setContactedIds(loadContactedIds(value));
+    reload(value, toApiBranchParams(filterCn, filterPgd));
+  };
+
+  const handleContactClick = useCallback((cust) => {
+    setSelectedCust(cust);
+    setContactOpen(true);
   }, []);
 
+  const handleMarkContacted = useCallback(
+    (cust) => {
+      if (!periodKey) return;
+      const ids = saveContactedId(periodKey, cust.ma_kh_chuan);
+      setContactedIds(new Set(ids));
+      message.success(`Đã đánh dấu đã tiếp cận: ${cust.ten_kh}`);
+    },
+    [periodKey],
+  );
+
+  const generatedCallScript = useMemo(() => generateCallScript(selectedCust), [selectedCust]);
+
+  const copyToClipboard = useCallback((text) => {
+    navigator.clipboard.writeText(text);
+    message.success('Đã sao chép kịch bản vào bộ nhớ tạm!');
+  }, []);
+
+  const dataLoading = status.loading;
+
   return (
-    <Space direction="vertical" size={24} className="page-stack">
-      <section className="brand-panel">
-        <div>
-          <Tag color="gold">Agribank Bắc Ninh</Tag>
-          <Title level={2}>Quản lý khách hàng</Title>
-          <Paragraph>
-            Kho dữ liệu khách hàng theo kỳ, hỗ trợ import CSV/Excel, tổng hợp theo mã khách hàng chuẩn và theo dõi phát triển dịch vụ.
+    <Space direction="vertical" size={20} className="page-stack">
+      <section
+        className="brand-panel"
+        style={{ padding: '16px 24px', minHeight: 'auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+      >
+        <div style={{ flex: 1 }}>
+          <Space align="center" style={{ marginBottom: 4 }} wrap>
+            <Tag color="gold">Agribank Bắc Ninh</Tag>
+            <StatusIndicator title="Backend" status={status.backend} icon={<ApiOutlined />} />
+            <StatusIndicator title="Database" status={status.database} icon={<DatabaseOutlined />} />
+          </Space>
+          <Title level={2} style={{ margin: 0 }}>
+            Báo cáo phân tích dữ liệu khách hàng
+          </Title>
+          <Paragraph style={{ margin: 0, opacity: 0.85, fontSize: 13 }}>
+            Phân tích thâm nhập dịch vụ, cross-sell và quy mô tài sản toàn chi nhánh
+            {!dataLoading && metrics.totalCustomers > 0 && (
+              <span> — Dữ liệu: <strong>{metrics.totalCustomers.toLocaleString('vi-VN')}</strong> khách hàng</span>
+            )}
           </Paragraph>
+          <Space wrap style={{ marginTop: 12 }}>
+            <Select
+              placeholder="Chọn kỳ dữ liệu"
+              style={{ minWidth: 180 }}
+              value={periodKey}
+              onChange={handlePeriodChange}
+              options={periodOptions}
+              allowClear={false}
+              disabled={isDemo && !periodOptions.length}
+            />
+            <Select
+              placeholder="Phạm vi xem"
+              style={{ minWidth: 200 }}
+              value={branchSelectValue}
+              onChange={handleCnChange}
+              options={cnOptions}
+              allowClear={false}
+              disabled={dataLoading || branchSelectDisabled}
+            />
+            <Select
+              placeholder="Lọc PGD"
+              style={{ minWidth: 140 }}
+              value={filterPgd}
+              onChange={handlePgdChange}
+              options={pgdOptions}
+              allowClear
+              disabled={dataLoading || pgdSelectDisabled || !filterCn}
+            />
+            <Tag color="blue">{getScopeLabel(filterCn, filterPgd)}</Tag>
+          </Space>
         </div>
-        <BankOutlined className="brand-panel-icon" />
+        <BankOutlined className="brand-panel-icon" style={{ fontSize: 44, opacity: 0.2 }} />
       </section>
 
-      {status.loading ? <Spin /> : null}
+      {isDemo && (
+        <Alert
+          type="info"
+          showIcon
+          icon={<WarningOutlined />}
+          message="Đang hiển thị dữ liệu mẫu (Demo). Khi backend kết nối, Dashboard sẽ nhận dữ liệu tổng hợp từ API."
+          style={{ borderRadius: '8px' }}
+        />
+      )}
 
-      {status.message ? (
-        <Alert type="error" showIcon message="Không thể kết nối hệ thống" description={status.message} />
-      ) : null}
+      <Spin spinning={dataLoading}>
+        <Row gutter={[12, 12]}>
+          <Col xs={12} md={6}>
+            <KpiCard
+              loading={dataLoading}
+              label="Tổng số khách hàng"
+              value={
+                <>
+                  {metrics.totalCustomers.toLocaleString('vi-VN')}{' '}
+                  <span style={{ fontSize: 12, color: '#64748b', fontWeight: 500 }}>khách hàng</span>
+                </>
+              }
+              icon={<UserOutlined style={{ fontSize: 14 }} />}
+              borderColor="#3b82f6"
+              bgGradient="linear-gradient(to bottom right, #ffffff, #f8fafc)"
+              valueColor="#1e3a8a"
+            />
+          </Col>
+          <Col xs={12} md={6}>
+            <KpiCard
+              loading={dataLoading}
+              label="Tổng dư nợ cho vay"
+              value={
+                <>
+                  {money(metrics.loan)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
+                </>
+              }
+              icon={<WalletOutlined style={{ fontSize: 14 }} />}
+              borderColor="#f43f5e"
+              bgGradient="linear-gradient(to bottom right, #ffffff, #fff1f2)"
+              valueColor="#9f1239"
+            />
+          </Col>
+          <Col xs={12} md={6}>
+            <KpiCard
+              loading={dataLoading}
+              label="Tổng CASA (TGTT bình quan)"
+              value={
+                <>
+                  {money(metrics.casa)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
+                </>
+              }
+              icon={<RiseOutlined style={{ fontSize: 14 }} />}
+              borderColor="#06b6d4"
+              bgGradient="linear-gradient(to bottom right, #ffffff, #ecfeff)"
+              valueColor="#164e63"
+            />
+          </Col>
+          <Col xs={12} md={6}>
+            <KpiCard
+              loading={dataLoading}
+              label="Chưa dùng dịch vụ nào"
+              value={
+                <>
+                  {metrics.noService.toLocaleString('vi-VN')}{' '}
+                  <span style={{ fontSize: 12, fontWeight: 600 }}>KH</span>
+                </>
+              }
+              icon={<WarningOutlined style={{ fontSize: 14 }} />}
+              borderColor="#d97706"
+              bgGradient="linear-gradient(to bottom right, #ffffff, #fffbeb)"
+              valueColor="#78350f"
+            />
+          </Col>
+        </Row>
+      </Spin>
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={12}>
-          <StatusCard title="Trạng thái Backend" status={status.backend} icon={<ApiOutlined />} />
-        </Col>
-        <Col xs={24} md={12}>
-          <StatusCard title="Trạng thái Database" status={status.database} icon={<DatabaseOutlined />} />
-        </Col>
-      </Row>
+      <VisualDashboard
+        aggregate={dashboardAggregate}
+        rows={isDemo ? rows : []}
+        trends={trends}
+        trendsLoading={trendsLoading}
+        loading={dataLoading}
+        emptyDescription="Hãy liên kết cơ sở dữ liệu để hiển thị biểu đồ phân tích trực quan"
+        showTrend
+      />
 
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="Nguồn dữ liệu chính" value="4" suffix="loại file" prefix={<FileSearchOutlined />} />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="Khóa khách hàng" value="MA_KH_CHUAN" />
-          </Card>
-        </Col>
-        <Col xs={24} md={8}>
-          <Card>
-            <Statistic title="Chu kỳ báo cáo" value="Theo tháng" />
-          </Card>
-        </Col>
-      </Row>
+      <CampaignList
+        candidates={campaignCandidates}
+        contactedIds={contactedIds}
+        loading={dataLoading}
+        onContact={handleContactClick}
+        onMarkContacted={handleMarkContacted}
+      />
+
+      <Modal
+        title={
+          <Space>
+            <span>
+              📞 Hướng dẫn tiếp cận: <strong>{selectedCust?.ten_kh}</strong>
+            </span>
+          </Space>
+        }
+        open={contactOpen}
+        onCancel={() => setContactOpen(false)}
+        footer={[
+          <Button key="close" onClick={() => setContactOpen(false)}>
+            Đóng
+          </Button>,
+          <Button
+            key="copy"
+            type="primary"
+            icon={<CopyOutlined />}
+            style={{ background: '#7c3aed', borderColor: '#7c3aed' }}
+            onClick={() => copyToClipboard(generatedCallScript)}
+          >
+            Sao chép kịch bản
+          </Button>,
+        ]}
+        width={600}
+      >
+        {selectedCust && (
+          <Space direction="vertical" size={16} style={{ width: '100%', paddingTop: 10 }}>
+            <Card size="small" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
+              <Row gutter={[16, 12]}>
+                <Col span={12}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    Số điện thoại liên hệ
+                  </Text>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: '#1e293b', marginTop: 2 }}>
+                    <PhoneOutlined style={{ marginRight: 6, color: '#10b981' }} />
+                    {selectedCust.telephone || '0912 345 678'}
+                  </div>
+                </Col>
+                <Col span={12}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    Dư nợ cho vay
+                  </Text>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: '#b91c1c', marginTop: 2 }}>
+                    {money(selectedCust.so_du_tien_vay)} đ
+                  </div>
+                </Col>
+                <Col span={24}>
+                  <Text type="secondary" style={{ fontSize: 11 }}>
+                    Sản phẩm chưa đăng ký (Đề xuất tư vấn)
+                  </Text>
+                  <div style={{ marginTop: 4 }}>
+                    {selectedCust.unused?.slice(0, 5).map((s) => (
+                      <Tag key={s.key} color="orange" style={{ border: 'none', marginBottom: 4 }}>
+                        {s.label}
+                      </Tag>
+                    ))}
+                  </div>
+                </Col>
+              </Row>
+            </Card>
+
+            <div>
+              <Text strong style={{ fontSize: 13, color: '#475569', display: 'block', marginBottom: 6 }}>
+                💡 Kịch bản gọi điện gợi ý (Tùy biến tự động theo sản phẩm thiếu):
+              </Text>
+              <pre
+                style={{
+                  background: '#f5f3ff',
+                  border: '1px solid #ddd6fe',
+                  borderRadius: '8px',
+                  padding: '12px 16px',
+                  fontSize: '12px',
+                  whiteSpace: 'pre-wrap',
+                  fontFamily: 'inherit',
+                  color: '#4c1d95',
+                  lineHeight: '1.6',
+                  margin: 0,
+                }}
+              >
+                {generatedCallScript}
+              </pre>
+            </div>
+          </Space>
+        )}
+      </Modal>
     </Space>
   );
 }
 
 export default Dashboard;
-

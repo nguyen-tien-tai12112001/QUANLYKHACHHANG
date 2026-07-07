@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import { AuthProvider } from './auth';
 import MainLayout from './components/MainLayout';
 import Dashboard from './pages/Dashboard';
 import ImportData from './pages/ImportData';
@@ -16,9 +17,11 @@ function App() {
   };
 
   return (
-    <MainLayout activeMenu={activeMenu} onMenuChange={setActiveMenu}>
-      {pages[activeMenu] || <Dashboard />}
-    </MainLayout>
+    <AuthProvider>
+      <MainLayout activeMenu={activeMenu} onMenuChange={setActiveMenu}>
+        {pages[activeMenu] || <Dashboard />}
+      </MainLayout>
+    </AuthProvider>
   );
 }
 

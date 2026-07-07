@@ -45,48 +45,30 @@ import {
 } from '@ant-design/icons';
 
 import client from '../api/client';
+import VisualDashboard from '../components/dashboard/VisualDashboard';
+import { getScopeLabel, toApiBranchParams } from '../auth';
+import {
+  ACTIVE_SERVICES,
+  GROUP_COLORS,
+  SERVICE_BY_GROUP,
+  SERVICE_DEFS,
+  SERVICE_GROUPS_ORDER,
+  TOTAL_SERVICES,
+} from '../constants/services';
+import {
+  CN_NAMES,
+  PGD_NAMES,
+} from '../constants/branches';
+import { useBranchFilters } from '../hooks/useBranchFilters';
+import {
+  countUsed,
+  getPendingServices,
+  getUnusedServices,
+  getUsedServices,
+  money,
+} from '../utils/customerMetrics';
 
 const { Paragraph, Text, Title } = Typography;
-
-// ─── Định nghĩa tất cả dịch vụ ────────────────────────────────────────────────
-const SERVICE_DEFS = [
-  { key: 'thau_chi',             label: 'Thấu chi',             group: 'Tài khoản',       pending: false },
-  { key: 'tk_so_dep',            label: 'TK số đẹp',            group: 'Tài khoản',       pending: false },
-  { key: 'agribank_plus',        label: 'Agribank Plus',        group: 'Digital',         pending: false },
-  { key: 'tin_nhan_ott',         label: 'Tin nhắn OTT',         group: 'Digital',         pending: false },
-  { key: 'e_banking',            label: 'e-Banking',            group: 'Digital',         pending: true  },
-  { key: 'sms_nhac_no_vay',      label: 'SMS nhắc nợ vay',      group: 'Digital',         pending: false },
-  { key: 'sms_tien_gui',         label: 'SMS tiền gửi',         group: 'Digital',         pending: false },
-  { key: 'the_ghi_no_noi_dia',   label: 'Thẻ ghi nợ nội địa',  group: 'Thẻ',             pending: false },
-  { key: 'the_td_quoc_te',       label: 'Thẻ TD quốc tế',      group: 'Thẻ',             pending: false },
-  { key: 'the_td_loc_viet',      label: 'Thẻ TD Lộc Việt',     group: 'Thẻ',             pending: true  },
-  { key: 'tt_tien_dien',         label: 'TT tiền điện',         group: 'Thanh toán',      pending: true  },
-  { key: 'tt_tien_nuoc',         label: 'TT tiền nước',         group: 'Thanh toán',      pending: true  },
-  { key: 'tt_cuoc_vien_thong',   label: 'TT cước viễn thông',  group: 'Thanh toán',      pending: true  },
-  { key: 'tra_luong_qua_the',    label: 'Trả lương qua thẻ',   group: 'Thanh toán',      pending: true  },
-  { key: 'batd',                 label: 'BATD',                 group: 'Bảo hiểm',        pending: true  },
-  { key: 'batk',                 label: 'BATK',                 group: 'Bảo hiểm',        pending: true  },
-  { key: 'bh_oto_xe_may',        label: 'BH ô tô, xe máy',     group: 'Bảo hiểm',        pending: true  },
-  { key: 'bh_khac',              label: 'BH khác',              group: 'Bảo hiểm',        pending: true  },
-  { key: 'bao_lanh',             label: 'Bảo lãnh',             group: 'Bảo lãnh/TTQT',  pending: true  },
-  { key: 'loa_bien_dong_so_du',  label: 'Loa biến động số dư', group: 'Khác',            pending: true  },
-  { key: 'phan_mem_ban_hang',    label: 'Phần mềm bán hàng',   group: 'Khác',            pending: true  },
-  { key: 'pos',                  label: 'POS',                  group: 'Khác',            pending: true  },
-  { key: 'chi_tra_kieu_hoi',     label: 'Chi trả kiều hối',    group: 'Bảo lãnh/TTQT',  pending: true  },
-  { key: 'phat_hanh_lc',         label: 'Phát hành LC',         group: 'Bảo lãnh/TTQT',  pending: true  },
-  { key: 'thanh_toan_quoc_te',   label: 'Thanh toán quốc tế',  group: 'Bảo lãnh/TTQT',  pending: true  },
-  { key: 'mua_ban_ngoai_te',     label: 'Mua bán ngoại tệ',    group: 'Bảo lãnh/TTQT',  pending: true  },
-];
-
-const TOTAL_SERVICES = SERVICE_DEFS.length;
-const ACTIVE_SERVICES = SERVICE_DEFS.filter((s) => !s.pending);
-
-// Nhóm dịch vụ theo category để hiển thị mini-grid
-const SERVICE_GROUPS_ORDER = ['Tài khoản', 'Digital', 'Thẻ', 'Thanh toán', 'Bảo hiểm', 'Bảo lãnh/TTQT', 'Khác'];
-const SERVICE_BY_GROUP = SERVICE_GROUPS_ORDER.reduce((acc, g) => {
-  acc[g] = ACTIVE_SERVICES.filter((s) => s.group === g);
-  return acc;
-}, {});
 
 // ─── Tính điểm tiềm năng (dư nợ + dư gửi + CASA, quy về đơn vị triệu) ─────────
 function calcTiemNang(row) {
@@ -103,60 +85,6 @@ function tiemNangTag(score) {
   if (score >= 10_000_000)  return { label: 'TB',  color: '#0369a1',  bg: '#f0f9ff' };
   return                           { label: 'Thấp', color: '#64748b', bg: '#f8fafc' };
 }
-
-const moneyFormatter = new Intl.NumberFormat('vi-VN');
-
-function money(value) {
-  if (value === null || value === undefined || value === '') return '';
-  return moneyFormatter.format(Number(value || 0));
-}
-
-// Tính số dịch vụ đã dùng (không tính pending)
-function countUsed(row) {
-  return SERVICE_DEFS.filter(
-    (s) => !s.pending && Number(row[s.key] || 0) > 0
-  ).length;
-}
-
-// Danh sách dịch vụ chưa dùng (không tính pending chưa có dữ liệu)
-function getUnusedServices(row) {
-  return SERVICE_DEFS.filter((s) => !s.pending && Number(row[s.key] || 0) === 0);
-}
-function getUsedServices(row) {
-  return SERVICE_DEFS.filter((s) => !s.pending && Number(row[s.key] || 0) > 0);
-}
-function getPendingServices() {
-  return SERVICE_DEFS.filter((s) => s.pending);
-}
-
-// ─── Mini dot-grid hiển thị trong 1 ô bảng ───────────────────────────────────
-const GROUP_COLORS = {
-  'Tín dụng':       '#d4380d',
-  'Tài khoản':      '#0369a1',
-  'Digital':        '#7c3aed',
-  'Thẻ':            '#b45309',
-  'Thanh toán':     '#0891b2',
-  'Bảo hiểm':       '#15803d',
-  'Bảo lãnh/TTQT':  '#9333ea',
-  'Khác':           '#64748b',
-};
-
-const CN_NAMES = {
-  'CN01': 'Chi nhánh Đông Hà Nội',
-  'CN02': 'Chi nhánh Láng Hạ',
-  'CN03': 'Chi nhánh Tây Hồ',
-  'CN04': 'Chi nhánh Cầu Giấy',
-};
-
-const PGD_NAMES = {
-  'PGD01': { name: 'PGD Gia Lâm', parent: 'CN01' },
-  'PGD02': { name: 'PGD Long Biên', parent: 'CN01' },
-  'PGD03': { name: 'PGD Đống Đa', parent: 'CN02' },
-  'PGD04': { name: 'PGD Láng Hạ', parent: 'CN02' },
-  'PGD05': { name: 'PGD Tây Hồ', parent: 'CN03' },
-  'PGD06': { name: 'PGD Nhật Tân', parent: 'CN03' },
-  'PGD07': { name: 'PGD Cầu Giấy', parent: 'CN04' },
-};
 
 function ServiceMiniGrid({ row, onUnusedClick }) {
   const used  = countUsed(row);
@@ -793,30 +721,18 @@ function CustomerReport() {
   const [searchText, setSearchText] = useState('');
   const [filterOfficer, setFilterOfficer] = useState(null);   // mã CB
   const [filterUnusedSvc, setFilterUnusedSvc] = useState(null); // key dịch vụ chưa dùng
-  const [filterCn, setFilterCn] = useState(null);               // mã CN
-  const [filterPgd, setFilterPgd] = useState(null);             // mã PGD
 
-  const handlePgdChange = (val) => {
-    setFilterPgd(val);
-    if (val) {
-      const pgdInfo = PGD_NAMES[val];
-      if (pgdInfo && pgdInfo.parent) {
-        setFilterCn(pgdInfo.parent);
-      }
-    }
-  };
-
-  const handleCnChange = (val) => {
-    setFilterCn(val);
-    if (val) {
-      const pgdInfo = PGD_NAMES[filterPgd];
-      if (pgdInfo && pgdInfo.parent !== val) {
-        setFilterPgd(null);
-      }
-    } else {
-      setFilterPgd(null);
-    }
-  };
+  const {
+    filterCn,
+    filterPgd,
+    cnOptions,
+    pgdOptions,
+    cnSelectValue: branchSelectValue,
+    handleCnChange,
+    handlePgdChange,
+    branchSelectDisabled,
+    pgdSelectDisabled,
+  } = useBranchFilters(rows);
 
   // Modal states
   const [detailCustomer, setDetailCustomer] = useState(null);
@@ -838,7 +754,11 @@ function CustomerReport() {
     setLoading(true);
     try {
       const { data } = await client.get('/imports/summary', {
-        params: { period_key: periodKey, limit: 1000 },
+        params: {
+          period_key: periodKey,
+          limit: 1000,
+          ...toApiBranchParams(filterCn, filterPgd),
+        },
       });
       setRows(Array.isArray(data) ? data : data.value || []);
     } catch (error) {
@@ -963,26 +883,6 @@ function CustomerReport() {
     }));
   }, []);
 
-  const cnOptions = useMemo(() => {
-    const uniqueCns = [...new Set(rows.map(r => r.ma_cn).filter(Boolean))];
-    return uniqueCns.map(cn => ({
-      value: cn,
-      label: CN_NAMES[cn] || `Chi nhánh ${cn}`
-    }));
-  }, [rows]);
-
-  const pgdOptions = useMemo(() => {
-    const uniquePgds = [...new Set(
-      rows
-        .filter(r => !filterCn || r.ma_cn === filterCn)
-        .map(r => r.ma_pgd)
-        .filter(Boolean)
-    )];
-    return uniquePgds.map(pgd => ({
-      value: pgd,
-      label: PGD_NAMES[pgd]?.name || pgd
-    }));
-  }, [rows, filterCn]);
 
   const stats = useMemo(() => {
     return rows.reduce(
@@ -1064,6 +964,7 @@ function CustomerReport() {
                   onChange={setViewMode}
                   options={[
                     { label: 'Báo cáo', value: 'report' },
+                    { label: 'Trực quan', value: 'visual' },
                     { label: 'Nguồn DL', value: 'sources' },
                   ]}
                 />
@@ -1110,16 +1011,17 @@ function CustomerReport() {
             <Col xs={24} sm={12} md={4}>
               <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
                 <Select
-                  placeholder="Tất cả chi nhánh"
-                  value={filterCn}
+                  placeholder="Phạm vi xem"
+                  value={branchSelectValue}
                   onChange={handleCnChange}
-                  allowClear
+                  allowClear={false}
                   options={cnOptions}
                   showSearch
                   filterOption={(input, opt) =>
                     (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                   }
                   style={{ width: '100%' }}
+                  disabled={branchSelectDisabled}
                 />
               </Form.Item>
             </Col>
@@ -1136,6 +1038,7 @@ function CustomerReport() {
                     (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                   }
                   style={{ width: '100%' }}
+                  disabled={pgdSelectDisabled || !filterCn}
                 />
               </Form.Item>
             </Col>
@@ -1412,7 +1315,7 @@ function CustomerReport() {
       )}
 
       {/* Nội dung chính */}
-      {viewMode === 'sources' ? (
+      {viewMode === 'sources' && (
         <Card title="Theo dõi nguồn dữ liệu">
           <Row gutter={[12, 12]}>
             {sourceGroups.map((item) => (
@@ -1428,7 +1331,17 @@ function CustomerReport() {
             ))}
           </Row>
         </Card>
-      ) : (
+      )}
+
+      {viewMode === 'visual' && (
+        <VisualDashboard
+          rows={filteredRows}
+          showTrend={false}
+          emptyDescription="Hãy nhấn 'Demo Dữ Liệu' hoặc 'Xem báo cáo' để hiển thị biểu đồ phân tích trực quan"
+        />
+      )}
+
+      {viewMode === 'report' && (
         <Card
           title={
             <Space>

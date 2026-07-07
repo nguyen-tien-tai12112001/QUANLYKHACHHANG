@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from sqlalchemy import desc
 from sqlalchemy.orm import Session
 
+from app.auth.branch_scope import BranchScope
+from app.auth.dependencies import get_branch_scope
 from app.database import get_db
 from app.imports.importer import import_uploaded_file
 from app.imports.summarizer import summarize_period
@@ -152,15 +154,18 @@ def summarize(period_key: str, db: Session = Depends(get_db)):
 def list_summary(
     period_key: str = Query(...),
     limit: int = Query(default=100, ge=1, le=1000),
+    scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
-    rows = (
+    query = (
         db.query(CustomerPeriodSummary)
         .filter(CustomerPeriodSummary.period_key == period_key)
-        .order_by(CustomerPeriodSummary.ma_kh_chuan)
-        .limit(limit)
-        .all()
     )
+    if scope.ma_cn:
+        query = query.filter(CustomerPeriodSummary.ma_cn == scope.ma_cn)
+    if scope.ma_pgd:
+        query = query.filter(CustomerPeriodSummary.ma_pgd == scope.ma_pgd)
+    rows = query.order_by(CustomerPeriodSummary.ma_kh_chuan).limit(limit).all()
     fields = [
         "period_key",
         "ma_kh_chuan",
