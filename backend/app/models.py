@@ -299,6 +299,140 @@ class ReportSourceStatus(Base):
     )
 
 
+class CustomerProcessingJob(Base):
+    __tablename__ = "customer_processing_jobs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="queued", index=True, nullable=False)
+    stage: Mapped[str | None] = mapped_column(String(255))
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    required_file_count: Mapped[int] = mapped_column(Integer, default=4, nullable=False)
+    available_required_file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    optional_file_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_customers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_customers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CustomerPeriodProfile(Base):
+    __tablename__ = "customer_period_profiles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    ma_kh: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    ten_kh: Mapped[str | None] = mapped_column(String(255), index=True)
+    loai_khach_hang: Mapped[str | None] = mapped_column(String(100))
+    branch_codes: Mapped[str | None] = mapped_column(Text)
+    pgd_codes: Mapped[str | None] = mapped_column(Text)
+    branch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pgd_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    dp_record_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    so_du_tien_gui: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    doanh_so_chuyen_tien_ve_tk: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    so_du_tien_vay: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    loai_vay: Mapped[str | None] = mapped_column(String(100))
+    so_du_tgtt_binh_quan: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    thau_chi: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tk_so_dep: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    agribank_plus: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tin_nhan_ott: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    e_banking: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sms_nhac_no_vay: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sms_tien_gui: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_ghi_no_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_td_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_td_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_td_loc_viet: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ma_cb: Mapped[str | None] = mapped_column(String(50))
+    ten_can_bo: Mapped[str | None] = mapped_column(String(255))
+    telephone: Mapped[str | None] = mapped_column(String(50))
+    branch_details: Mapped[dict | None] = mapped_column(JSON)
+    processing_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"), index=True)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("period_key", "ma_kh", name="uq_customer_period_profile"),
+    )
+
+
+class CustomerPeriodBranchDetail(Base):
+    __tablename__ = "customer_period_branch_details"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    ma_kh: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    branch_code: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
+    ma_pgd: Mapped[str | None] = mapped_column(String(20), index=True)
+    ten_pgd: Mapped[str | None] = mapped_column(String(255))
+    ten_kh: Mapped[str | None] = mapped_column(String(255))
+    loai_khach_hang: Mapped[str | None] = mapped_column(String(100))
+    dp_record_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    so_du_tien_gui: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    doanh_so_cramt: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    doanh_so_dramt: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    so_du_tien_vay: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    loai_vay: Mapped[str | None] = mapped_column(String(100))
+    so_du_tgtt_binh_quan: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    thau_chi: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tk_so_dep: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    agribank_plus: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    tin_nhan_ott: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    e_banking: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sms_nhac_no_vay: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    sms_tien_gui: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_ghi_no_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_td_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_td_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_td_loc_viet: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    ma_cb: Mapped[str | None] = mapped_column(String(50))
+    ten_can_bo: Mapped[str | None] = mapped_column(String(255))
+    processing_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"), index=True)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("period_key", "ma_kh", "branch_code", "ma_pgd", name="uq_customer_period_branch_detail"),
+    )
+
+
+class CustomerProcessingOptionalFile(Base):
+    __tablename__ = "customer_processing_optional_files"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    file_ext: Mapped[str] = mapped_column(String(10), nullable=False)
+    file_size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="uploaded", nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    uploaded_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class CustomerPeriodExchangeRate(Base):
+    __tablename__ = "customer_period_exchange_rates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    ccy: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
+    exchange_rate: Mapped[object] = mapped_column(Numeric(18, 6), default=1, nullable=False)
+    source: Mapped[str] = mapped_column(String(30), default="DP01", nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("period_key", "ccy", name="uq_customer_period_exchange_rate"),
+    )
+
+
 class OrgBranch(Base):
     __tablename__ = "org_branches"
 

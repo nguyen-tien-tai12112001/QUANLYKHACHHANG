@@ -3,6 +3,7 @@ import {
   ApartmentOutlined,
   AuditOutlined,
   BarChartOutlined,
+  BranchesOutlined,
   DashboardOutlined,
   DatabaseOutlined,
   LogoutOutlined,
@@ -21,6 +22,7 @@ const { Header, Sider, Content } = Layout;
 const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
   { key: 'data-warehouse', icon: <DatabaseOutlined />, label: 'Kho dữ liệu' },
+  { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
   { key: 'reports', icon: <BarChartOutlined />, label: 'Báo cáo' },
   {
     key: 'admin',

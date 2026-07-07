@@ -55,6 +55,21 @@ def init_db() -> None:
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_pf14_period_customer ON pf14_account_balances (period_key, ma_kh_chuan)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cn05_period_customer ON cn05_customer_services (period_key, ma_kh_chuan)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_summary_period_customer ON customer_period_summaries (period_key, ma_kh_chuan)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_dp01_period_ma_kh_branch ON dp01_deposit_accounts (period_key, ma_kh, ma_cn)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_ln01_period_custseq_branch ON ln01_loans (period_key, custseq, brcd)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_pf14_period_custseq_branch ON pf14_account_balances (period_key, custseq, trbrcd)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_cn05_period_ma_kh_branch ON cn05_customer_services (period_key, ma_kh, ma_cn)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_customer_profiles_period_ma_kh ON customer_period_profiles (period_key, ma_kh)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_customer_profiles_period_branch_count ON customer_period_profiles (period_key, branch_count)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_customer_branch_details_period_ma_kh ON customer_period_branch_details (period_key, ma_kh)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_processing_jobs_period_status ON customer_processing_jobs (period_key, status)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_exchange_rates_period_ccy ON customer_period_exchange_rates (period_key, ccy)"))
+        conn.execute(text("ALTER TABLE IF EXISTS customer_period_profiles ADD COLUMN IF NOT EXISTS loai_vay VARCHAR(100)"))
+        conn.execute(text("ALTER TABLE IF EXISTS customer_period_profiles ADD COLUMN IF NOT EXISTS the_td_loc_viet INTEGER NOT NULL DEFAULT 0"))
+        conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS loai_vay VARCHAR(100)"))
+        conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS the_td_loc_viet INTEGER NOT NULL DEFAULT 0"))
+        conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS ma_cb VARCHAR(50)"))
+        conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS ten_can_bo VARCHAR(255)"))
 
 
 def check_database_connection() -> tuple[bool, str | None]:

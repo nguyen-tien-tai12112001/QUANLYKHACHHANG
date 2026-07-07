@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
   Button,
@@ -59,7 +59,7 @@ const SERVICE_DEFS = [
   { key: 'sms_tien_gui',         label: 'SMS tiền gửi',         group: 'Digital',         pending: false },
   { key: 'the_ghi_no_noi_dia',   label: 'Thẻ ghi nợ nội địa',  group: 'Thẻ',             pending: false },
   { key: 'the_td_quoc_te',       label: 'Thẻ TD quốc tế',      group: 'Thẻ',             pending: false },
-  { key: 'the_td_loc_viet',      label: 'Thẻ TD Lộc Việt',     group: 'Thẻ',             pending: true  },
+  { key: 'the_td_loc_viet',      label: 'Thẻ TD Lộc Việt',     group: 'Thẻ',             pending: false },
   { key: 'tt_tien_dien',         label: 'TT tiền điện',         group: 'Thanh toán',      pending: true  },
   { key: 'tt_tien_nuoc',         label: 'TT tiền nước',         group: 'Thanh toán',      pending: true  },
   { key: 'tt_cuoc_vien_thong',   label: 'TT cước viễn thông',  group: 'Thanh toán',      pending: true  },
@@ -649,7 +649,7 @@ function buildColumns(onDetailClick, onUnusedClick) {
       title: 'Mã CN',
       dataIndex: 'ma_cn',
       key: 'ma_cn',
-      width: 68,
+      width: 120,
       align: 'center',
       sorter: (a, b) => (a.ma_cn || '').localeCompare(b.ma_cn || ''),
       render: (v) => <Text style={{ fontSize: 12 }}>{v || '—'}</Text>,
@@ -663,7 +663,16 @@ function buildColumns(onDetailClick, onUnusedClick) {
         const nameB = CN_NAMES[b.ma_cn] || b.ma_cn || '';
         return nameA.localeCompare(nameB);
       },
-      render: (_, row) => <Text style={{ fontSize: 12 }}>{CN_NAMES[row.ma_cn] || '—'}</Text>,
+      render: (_, row) => (
+        <Text style={{ fontSize: 12 }}>
+          {String(row.ma_cn || '')
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean)
+            .map((code) => CN_NAMES[code] || code)
+            .join(', ') || '—'}
+        </Text>
+      ),
     },
     {
       title: 'PGD',
@@ -806,13 +815,26 @@ function CustomerReport() {
   const [form] = Form.useForm();
   const [rows, setRows] = useState([]);
   const [sourceRows, setSourceRows] = useState([]);
+  const [reportPeriods, setReportPeriods] = useState([]);
+  const [selectedPeriod, setSelectedPeriod] = useState(null);
+  const [reportPagination, setReportPagination] = useState({ current: 1, pageSize: 25, total: 0 });
+  const [reportSummary, setReportSummary] = useState({
+    total_customers: 0,
+    total_loan: 0,
+    total_deposit: 0,
+    total_casa: 0,
+    no_service_customers: 0,
+  });
   const [loading, setLoading] = useState(false);
+  const [reportReady, setReportReady] = useState(false);
   const [viewMode, setViewMode] = useState('report');
   const [searchText, setSearchText] = useState('');
   const [filterOfficer, setFilterOfficer] = useState(null);   // mã CB
   const [filterUnusedSvc, setFilterUnusedSvc] = useState(null); // key dịch vụ chưa dùng
   const [filterCn, setFilterCn] = useState(null);               // mã CN
   const [filterPgd, setFilterPgd] = useState(null);             // mã PGD
+  const [filterLoanType, setFilterLoanType] = useState(null);
+  const [filterMultiBranch, setFilterMultiBranch] = useState(null);
 
   const handlePgdChange = (val) => {
     setFilterPgd(val);
@@ -841,30 +863,86 @@ function CustomerReport() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [unusedCustomer, setUnusedCustomer] = useState(null);
   const [unusedOpen, setUnusedOpen] = useState(false);
+  const [noServiceOpen, setNoServiceOpen] = useState(false);
+  const [noServiceRows, setNoServiceRows] = useState([]);
+  const [noServiceLoading, setNoServiceLoading] = useState(false);
+  const [noServicePagination, setNoServicePagination] = useState({ current: 1, pageSize: 25, total: 0 });
 
   function openDetail(row) { setDetailCustomer(row); setDetailOpen(true); }
   function openUnused(row) { setUnusedCustomer(row); setUnusedOpen(true); }
 
   const columns = useMemo(() => buildColumns(openDetail, openUnused), []);
 
-  async function loadReport() {
-    const periodKey = form.getFieldValue('period_key');
+  function normalizeProcessedProfile(row) {
+    return {
+      ...row,
+      ma_kh_chuan: row.ma_kh,
+      ma_cn: row.branch_codes,
+      ma_pgd: row.pgd_codes,
+      so_du_tien_gui_ckh: row.so_du_tien_gui,
+      doanh_so_chuyen_tien_ve_tai_khoan: row.doanh_so_chuyen_tien_ve_tk,
+      ghi_chu: Number(row.branch_count || 0) > 1 ? `Phát sinh tại ${row.branch_count} chi nhánh` : row.ghi_chu,
+    };
+  }
+
+  async function loadReportPeriods(preferredPeriod) {
+    const { data } = await client.get('/customer-processing/periods');
+    const processedPeriods = (data || []).filter((item) => Number(item.profile_count || 0) > 0);
+    setReportPeriods(processedPeriods);
+    const nextPeriod = preferredPeriod || selectedPeriod || processedPeriods[0]?.period_key || null;
+    setSelectedPeriod(nextPeriod);
+    return nextPeriod;
+  }
+
+  function getReportParams(periodKey) {
+    return {
+      period_key: periodKey,
+      keyword: searchText || undefined,
+      branch_code: filterCn || undefined,
+      pgd_code: filterPgd || undefined,
+      loan_type: filterLoanType || undefined,
+      officer_code: filterOfficer || undefined,
+      unused_service: filterUnusedSvc || undefined,
+      multi_branch: filterMultiBranch === null ? undefined : filterMultiBranch,
+    };
+  }
+
+  async function loadReport(period = selectedPeriod, nextPagination = reportPagination) {
+    const periodKey = period;
     if (!periodKey) {
-      message.warning('Nhập kỳ dữ liệu trước khi xem báo cáo');
+      message.warning('Chưa có kỳ dữ liệu đã xử lý để xem báo cáo');
       return;
     }
+    const current = nextPagination?.current || 1;
+    const pageSize = nextPagination?.pageSize || 25;
     setLoading(true);
     try {
-      const [summaryResponse, sourceResponse] = await Promise.all([
-        client.get('/imports/summary', {
-          params: { period_key: periodKey, limit: 1000 },
+      const [profileResponse, summaryResponse, sourceResponse] = await Promise.all([
+        client.get('/customer-processing/profiles', {
+          params: {
+            ...getReportParams(periodKey),
+            include_total: true,
+            page: current,
+            page_size: pageSize,
+          },
+        }),
+        client.get('/customer-processing/profile-summary', {
+          params: getReportParams(periodKey),
         }),
         client.get('/imports/report-sources', {
           params: { period_key: periodKey },
         }),
       ]);
-      const summaryData = summaryResponse.data;
-      setRows(Array.isArray(summaryData) ? summaryData : summaryData.value || []);
+      const profilePayload = profileResponse.data;
+      const profileData = Array.isArray(profilePayload) ? profilePayload : profilePayload?.items;
+      const normalizedRows = (Array.isArray(profileData) ? profileData : []).map(normalizeProcessedProfile);
+      const total = Array.isArray(profilePayload) ? normalizedRows.length : Number(profilePayload?.total || 0);
+      if (!normalizedRows.length && total === 0) {
+        message.warning(`Kỳ ${periodKey} chưa có dữ liệu khách hàng đã xử lý`);
+      }
+      setRows(normalizedRows);
+      setReportPagination({ current, pageSize, total });
+      setReportSummary(summaryResponse.data || {});
       setSourceRows(Array.isArray(sourceResponse.data) ? sourceResponse.data : []);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
@@ -873,22 +951,64 @@ function CustomerReport() {
     }
   }
 
-  async function summarizePeriod() {
-    const periodKey = form.getFieldValue('period_key');
-    if (!periodKey) {
-      message.warning('Nhập kỳ dữ liệu trước khi tổng hợp');
-      return;
+  useEffect(() => {
+    async function initReport() {
+      setLoading(true);
+      try {
+        const periodKey = await loadReportPeriods();
+        if (periodKey) await loadReport(periodKey, { current: 1, pageSize: 25, total: 0 });
+        setReportReady(true);
+      } catch (error) {
+        message.error(error.response?.data?.detail || error.message);
+      } finally {
+        setLoading(false);
+      }
     }
-    setLoading(true);
+    initReport();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!reportReady || !selectedPeriod) return undefined;
+    const timer = window.setTimeout(() => {
+      loadReport(selectedPeriod, { ...reportPagination, current: 1 });
+    }, 350);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchText, filterOfficer, filterUnusedSvc, filterCn, filterPgd, filterLoanType, filterMultiBranch]);
+
+  async function loadNoServiceCustomers(nextPagination = noServicePagination) {
+    if (!selectedPeriod) return;
+    const current = nextPagination?.current || 1;
+    const pageSize = nextPagination?.pageSize || 25;
+    setNoServiceLoading(true);
     try {
-      await client.post(`/imports/summarize/${periodKey}`);
-      message.success('Đã chạy lại tổng hợp kỳ dữ liệu');
-      await loadReport();
+      const { data } = await client.get('/customer-processing/profiles', {
+        params: {
+          ...getReportParams(selectedPeriod),
+          no_service: true,
+          include_total: true,
+          page: current,
+          page_size: pageSize,
+        },
+      });
+      const normalizedRows = (data?.items || []).map(normalizeProcessedProfile);
+      setNoServiceRows(normalizedRows);
+      setNoServicePagination({
+        current,
+        pageSize,
+        total: Number(data?.total || 0),
+      });
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
-      setLoading(false);
+      setNoServiceLoading(false);
     }
+  }
+
+  function openNoServiceModal() {
+    setNoServiceOpen(true);
+    loadNoServiceCustomers({ current: 1, pageSize: noServicePagination.pageSize, total: 0 });
   }
 
   function loadDemoData() {
@@ -990,7 +1110,9 @@ function CustomerReport() {
   }, []);
 
   const cnOptions = useMemo(() => {
-    const uniqueCns = [...new Set(rows.map(r => r.ma_cn).filter(Boolean))];
+    const uniqueCns = [...new Set(
+      rows.flatMap((r) => String(r.ma_cn || '').split(',').map((item) => item.trim()).filter(Boolean))
+    )];
     return uniqueCns.map(cn => ({
       value: cn,
       label: CN_NAMES[cn] || `Chi nhánh ${cn}`
@@ -1000,8 +1122,8 @@ function CustomerReport() {
   const pgdOptions = useMemo(() => {
     const uniquePgds = [...new Set(
       rows
-        .filter(r => !filterCn || r.ma_cn === filterCn)
-        .map(r => r.ma_pgd)
+        .filter(r => !filterCn || String(r.ma_cn || '').includes(filterCn))
+        .flatMap(r => String(r.ma_pgd || '').split(',').map((item) => item.trim()).filter(Boolean))
         .filter(Boolean)
     )];
     return uniquePgds.map(pgd => ({
@@ -1009,6 +1131,11 @@ function CustomerReport() {
       label: PGD_NAMES[pgd]?.name || pgd
     }));
   }, [rows, filterCn]);
+
+  const loanTypeOptions = useMemo(() => {
+    const values = [...new Set(rows.map((row) => row.loai_vay).filter(Boolean))];
+    return values.sort().map((value) => ({ value, label: value }));
+  }, [rows]);
 
   const stats = useMemo(() => {
     return rows.reduce(
@@ -1036,7 +1163,8 @@ function CustomerReport() {
         (r) =>
           (r.ten_kh || '').toLowerCase().includes(q) ||
           (r.ma_kh_chuan || '').toLowerCase().includes(q) ||
-          (r.ma_cb || '').toLowerCase().includes(q),
+          (r.ma_cb || '').toLowerCase().includes(q) ||
+          (r.telephone || '').toLowerCase().includes(q),
       );
     }
     // 2. lọc theo cán bộ
@@ -1047,20 +1175,26 @@ function CustomerReport() {
     if (filterUnusedSvc) {
       result = result.filter((r) => Number(r[filterUnusedSvc] || 0) === 0);
     }
+    if (filterLoanType) {
+      result = result.filter((r) => String(r.loai_vay || '').includes(filterLoanType));
+    }
+    if (filterMultiBranch !== null) {
+      result = result.filter((r) => filterMultiBranch ? Number(r.branch_count || 0) > 1 : Number(r.branch_count || 0) <= 1);
+    }
     // 4. lọc theo Chi nhánh (CN)
     if (filterCn) {
-      result = result.filter((r) => r.ma_cn === filterCn);
+      result = result.filter((r) => String(r.ma_cn || '').split(',').map((item) => item.trim()).includes(filterCn));
     }
     // 5. lọc theo Phòng giao dịch (PGD)
     if (filterPgd) {
-      result = result.filter((r) => r.ma_pgd === filterPgd);
+      result = result.filter((r) => String(r.ma_pgd || '').includes(filterPgd));
     }
     // 6. Sắp xếp theo PGD nếu chỉ chọn lọc theo CN mà không chọn PGD cụ thể
     if (filterCn && !filterPgd) {
       result = [...result].sort((a, b) => (a.ma_pgd || '').localeCompare(b.ma_pgd || ''));
     }
     return result;
-  }, [rows, searchText, filterOfficer, filterUnusedSvc, filterCn, filterPgd]);
+  }, [rows, searchText, filterOfficer, filterUnusedSvc, filterCn, filterPgd, filterLoanType, filterMultiBranch]);
 
   const sourceColumns = useMemo(() => [
     {
@@ -1146,13 +1280,10 @@ function CustomerReport() {
   ], []);
 
   return (
-    <Space direction="vertical" size={20} className="page-stack">
+    <Space direction="vertical" size={5} className="page-stack">
       <div>
-        <Title level={2}>Bảng quản lý khách hàng cá nhân vay vốn</Title>
-        <Paragraph className="dashboard-description">
-          Giao diện tổ chức theo mẫu BANG QUAN LY KHACH HANG.xlsx — Click tên KH để xem chi tiết đầy đủ hoặc nhấn{' '}
-          <AimOutlined style={{ color: '#c0392b' }} /> để xem nhanh cơ hội bán chéo.
-        </Paragraph>
+        <Title level={2}>Bảng quản lý khách hàng</Title>
+        
       </div>
 
       {/* Bộ lọc */}
@@ -1161,8 +1292,22 @@ function CustomerReport() {
           {/* Hàng 1: Tham số chính & Tác vụ */}
           <Row gutter={[16, 12]} align="bottom">
             <Col xs={24} sm={12} md={5}>
-              <Form.Item label="Kỳ dữ liệu" name="period_key" style={{ marginBottom: 0 }}>
-                <Input placeholder="Ví dụ: 20240630" maxLength={8} prefix={<FieldTimeOutlined />} style={{ width: '100%' }} />
+              <Form.Item label="Kỳ dữ liệu đã xử lý" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder="Chọn kỳ dữ liệu"
+                  value={selectedPeriod}
+                  options={reportPeriods.map((item) => ({
+                    value: item.period_key,
+                    label: `${item.period_key} · ${money(item.profile_count)} KH`,
+                  }))}
+                  onChange={async (value) => {
+                    setSelectedPeriod(value);
+                    await loadReport(value, { current: 1, pageSize: reportPagination.pageSize, total: 0 });
+                  }}
+                  notFoundContent={<Empty description="Chưa có kỳ đã xử lý" imageStyle={{ height: 34 }} />}
+                  showSearch
+                  style={{ width: '100%' }}
+                />
               </Form.Item>
             </Col>
             <Col xs={24} sm={12} md={5}>
@@ -1181,19 +1326,18 @@ function CustomerReport() {
             <Col xs={24} md={14}>
               <Form.Item label=" " style={{ marginBottom: 0 }}>
                 <Space wrap style={{ width: '100%', justifyContent: 'flex-start' }}>
-                  <Button type="primary" icon={<SearchOutlined />} loading={loading} onClick={loadReport}>
-                    Xem báo cáo
-                  </Button>
-                  <Button icon={<ReloadOutlined />} loading={loading} onClick={summarizePeriod}>
-                    Tổng hợp lại
+                  <Button
+                    type="primary"
+                    icon={<SearchOutlined />}
+                    loading={loading}
+                    onClick={() => loadReport(selectedPeriod, { ...reportPagination, current: 1 })}
+                  >
+                    Tải báo cáo
                   </Button>
                   <Button icon={<DownloadOutlined />} disabled style={{ opacity: 0.65 }}>
                     Xuất Excel
                   </Button>
-                  <Button type="dashed" onClick={loadDemoData}>
-                    Demo Dữ Liệu
-                  </Button>
-                  {(filterOfficer || filterUnusedSvc || searchText || filterCn || filterPgd) && (
+                  {(filterOfficer || filterUnusedSvc || searchText || filterCn || filterPgd || filterLoanType || filterMultiBranch !== null) && (
                     <Button
                       danger
                       onClick={() => {
@@ -1202,6 +1346,8 @@ function CustomerReport() {
                         setSearchText('');
                         setFilterCn(null);
                         setFilterPgd(null);
+                        setFilterLoanType(null);
+                        setFilterMultiBranch(null);
                       }}
                     >
                       Xóa bộ lọc
@@ -1248,6 +1394,18 @@ function CustomerReport() {
                 />
               </Form.Item>
             </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Form.Item label="Loại vay" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder="Tất cả loại vay"
+                  value={filterLoanType}
+                  onChange={setFilterLoanType}
+                  allowClear
+                  options={loanTypeOptions}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
             <Col xs={24} sm={12} md={5}>
               <Form.Item label="Cán bộ phụ trách" style={{ marginBottom: 0 }}>
                 <Select
@@ -1261,6 +1419,21 @@ function CustomerReport() {
                     (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                   }
                   notFoundContent={<Empty description="Không có cán bộ" imageStyle={{ height: 30 }} />}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} md={4}>
+              <Form.Item label="Phạm vi KH" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder="Tất cả"
+                  value={filterMultiBranch}
+                  onChange={setFilterMultiBranch}
+                  allowClear
+                  options={[
+                    { value: true, label: 'Nhiều chi nhánh' },
+                    { value: false, label: 'Một chi nhánh' },
+                  ]}
                   style={{ width: '100%' }}
                 />
               </Form.Item>
@@ -1329,11 +1502,9 @@ function CustomerReport() {
             </div>
             <div>
               <span style={{ fontSize: 22, fontWeight: 800, color: '#1e3a8a', lineHeight: 1 }}>
-                {filteredRows.length}
+                {money(reportSummary.total_customers || reportPagination.total)}
               </span>
-              {filteredRows.length !== rows.length && (
-                <span style={{ fontSize: 11, color: '#64748b', marginLeft: 4 }}>/ {rows.length} total</span>
-              )}
+              <span style={{ fontSize: 11, color: '#64748b', marginLeft: 4 }}>toàn bộ</span>
             </div>
           </div>
         </Col>
@@ -1363,7 +1534,7 @@ function CustomerReport() {
             </div>
             <div>
               <span style={{ fontSize: 20, fontWeight: 800, color: '#881337', lineHeight: 1 }}>
-                {money(stats.loan)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
+                {money(reportSummary.total_loan)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
               </span>
             </div>
           </div>
@@ -1394,7 +1565,7 @@ function CustomerReport() {
             </div>
             <div>
               <span style={{ fontSize: 20, fontWeight: 800, color: '#064e3b', lineHeight: 1 }}>
-                {money(stats.deposit)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
+                {money(reportSummary.total_deposit)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
               </span>
             </div>
           </div>
@@ -1425,7 +1596,7 @@ function CustomerReport() {
             </div>
             <div>
               <span style={{ fontSize: 20, fontWeight: 800, color: '#164e63', lineHeight: 1 }}>
-                {money(stats.casa)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
+                {money(reportSummary.total_casa)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
               </span>
             </div>
           </div>
@@ -1434,7 +1605,7 @@ function CustomerReport() {
         {/* Chưa sử dụng DV nào */}
         <Col xs={12} md={5}>
           <Tooltip title="KH chưa sử dụng dịch vụ nào (từ dữ liệu CN05) — cơ hội bán chéo cao">
-            <div style={{
+            <div onClick={openNoServiceModal} style={{
               background: 'linear-gradient(to bottom right, #ffffff, #fffbeb)',
               border: '1px solid #fef3c7',
               borderLeft: '4px solid #d97706',
@@ -1446,7 +1617,7 @@ function CustomerReport() {
               flexDirection: 'column',
               justifyContent: 'space-between',
               height: '92px',
-              cursor: 'help'
+              cursor: 'pointer'
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
                 <span style={{ fontSize: 11, fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
@@ -1458,10 +1629,10 @@ function CustomerReport() {
               </div>
               <div>
                 <span style={{ fontSize: 20, fontWeight: 800, color: '#78350f', lineHeight: 1 }}>
-                  {stats.noService}
+                  {money(reportSummary.no_service_customers)}
                 </span>
                 <span style={{ fontSize: 12, color: '#78350f', fontWeight: 600, marginLeft: 4 }}>
-                  / {rows.length} KH
+                  / {money(reportSummary.total_customers || reportPagination.total)} KH
                 </span>
               </div>
             </div>
@@ -1470,7 +1641,7 @@ function CustomerReport() {
       </Row>
 
       {/* Thanh trạng thái bộ lọc đang active */}
-      {(filterOfficer || filterUnusedSvc || filterCn || filterPgd) && (
+      {(filterOfficer || filterUnusedSvc || filterCn || filterPgd || filterLoanType || filterMultiBranch !== null) && (
         <div className="active-filter-bar">
           <Space size={8} wrap>
             <RiseOutlined style={{ color: '#7c3aed' }} />
@@ -1503,6 +1674,24 @@ function CustomerReport() {
                 CB: {officerOptions.find((o) => o.value === filterOfficer)?.label || filterOfficer}
               </Tag>
             )}
+            {filterLoanType && (
+              <Tag
+                color="volcano"
+                closable
+                onClose={() => setFilterLoanType(null)}
+              >
+                Loại vay: {filterLoanType}
+              </Tag>
+            )}
+            {filterMultiBranch !== null && (
+              <Tag
+                color="geekblue"
+                closable
+                onClose={() => setFilterMultiBranch(null)}
+              >
+                {filterMultiBranch ? 'KH nhiều chi nhánh' : 'KH một chi nhánh'}
+              </Tag>
+            )}
             {filterUnusedSvc && (
               <Tag
                 color="red"
@@ -1524,7 +1713,7 @@ function CustomerReport() {
       {viewMode === 'sources' ? (
         <Card
           title="Theo dõi nguồn dữ liệu"
-          extra={<Text type="secondary">Nguồn được tạo sau khi bấm Tổng hợp lại</Text>}
+          extra={<Text type="secondary">Nguồn dữ liệu của kỳ đang xem</Text>}
         >
           {sourceRows.length > 0 ? (
             <Table
@@ -1557,10 +1746,9 @@ function CustomerReport() {
         <Card
           title={
             <Space>
-              <span>Bảng báo cáo theo mẫu</span>
-              {filteredRows.length !== rows.length && (
-                <Tag color="blue">Lọc: {filteredRows.length} / {rows.length} KH</Tag>
-              )}
+             
+              <Tag color="blue">Tổng: {money(reportPagination.total)} KH</Tag>
+              <Tag color="geekblue">Trang hiện tại: {filteredRows.length} dòng</Tag>
             </Space>
           }
           extra={
@@ -1589,7 +1777,21 @@ function CustomerReport() {
             dataSource={filteredRows}
             loading={loading}
             scroll={{ x: 'max-content', y: 560 }}
-            pagination={{ pageSize: 25, showSizeChanger: true, showTotal: (total) => `${total} khách hàng` }}
+            pagination={{
+              current: reportPagination.current,
+              pageSize: reportPagination.pageSize,
+              total: reportPagination.total,
+              showSizeChanger: true,
+              pageSizeOptions: [25, 50, 100, 200],
+              showTotal: (total, range) => `${range[0]}-${range[1]} / ${money(total)} khách hàng`,
+            }}
+            onChange={(pagination) => {
+              loadReport(selectedPeriod, {
+                current: pagination.current,
+                pageSize: pagination.pageSize,
+                total: reportPagination.total,
+              });
+            }}
             locale={{ emptyText: <Empty description="Chưa có dữ liệu báo cáo cho kỳ này" /> }}
             rowClassName={(_, index) => (index % 2 === 0 ? 'row-even' : 'row-odd')}
           />
@@ -1597,6 +1799,66 @@ function CustomerReport() {
       )}
 
       {/* Modals */}
+      <Modal
+        open={noServiceOpen}
+        onCancel={() => setNoServiceOpen(false)}
+        footer={<Button onClick={() => setNoServiceOpen(false)}>Đóng</Button>}
+        width={1080}
+        title={
+          <Space>
+            <WarningOutlined style={{ color: '#d97706' }} />
+            <span>Khách hàng chưa dùng dịch vụ nào</span>
+            <Tag color="orange">{money(noServicePagination.total)} KH</Tag>
+          </Space>
+        }
+      >
+        <Table
+          bordered
+          size="small"
+          rowKey="ma_kh_chuan"
+          loading={noServiceLoading}
+          dataSource={noServiceRows}
+          scroll={{ x: 980, y: 460 }}
+          pagination={{
+            current: noServicePagination.current,
+            pageSize: noServicePagination.pageSize,
+            total: noServicePagination.total,
+            showSizeChanger: true,
+            pageSizeOptions: [25, 50, 100],
+            showTotal: (total, range) => `${range[0]}-${range[1]} / ${money(total)} khách hàng`,
+          }}
+          onChange={(pagination) => {
+            loadNoServiceCustomers({
+              current: pagination.current,
+              pageSize: pagination.pageSize,
+              total: noServicePagination.total,
+            });
+          }}
+          columns={[
+            {
+              title: 'Mã KH',
+              dataIndex: 'ma_kh_chuan',
+              width: 120,
+              fixed: 'left',
+              render: (value, row) => (
+                <Button type="link" size="small" style={{ padding: 0, fontWeight: 700 }} onClick={() => openDetail(row)}>
+                  {value}
+                </Button>
+              ),
+            },
+            { title: 'Tên khách hàng', dataIndex: 'ten_kh', width: 250, fixed: 'left', ellipsis: true },
+            { title: 'Loại KH', dataIndex: 'loai_khach_hang', width: 90, render: (value) => value ? <Tag color="blue">{value}</Tag> : '—' },
+            { title: 'Chi nhánh', dataIndex: 'ma_cn', width: 150, ellipsis: true },
+            { title: 'PGD', dataIndex: 'ma_pgd', width: 160, ellipsis: true },
+            { title: 'Cán bộ', key: 'officer', width: 170, ellipsis: true, render: (_, row) => row.ten_can_bo || row.ma_cb || '—' },
+            { title: 'Dư nợ', dataIndex: 'so_du_tien_vay', width: 130, align: 'right', render: money },
+            { title: 'CKH', dataIndex: 'so_du_tien_gui_ckh', width: 130, align: 'right', render: money },
+            { title: 'TGTT BQ', dataIndex: 'so_du_tgtt_binh_quan', width: 130, align: 'right', render: money },
+            { title: 'SĐT', dataIndex: 'telephone', width: 130, render: (value) => value || '—' },
+          ]}
+          locale={{ emptyText: <Empty description="Không có khách hàng phù hợp" /> }}
+        />
+      </Modal>
       <CustomerDetailModal customer={detailCustomer} open={detailOpen} onClose={() => setDetailOpen(false)} />
       <UnusedServicesModal customer={unusedCustomer} open={unusedOpen} onClose={() => setUnusedOpen(false)} />
     </Space>

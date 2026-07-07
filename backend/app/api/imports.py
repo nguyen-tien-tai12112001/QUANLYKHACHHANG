@@ -13,7 +13,7 @@ from app.imports.importer import (
     process_import_file,
     queue_uploaded_file,
 )
-from app.imports.summarizer import summarize_period
+from app.imports.summarizer import refresh_report_sources, summarize_period
 from app.models import CustomerPeriodSummary, ImportBatch, ImportFile, ReportSourceStatus
 
 
@@ -203,6 +203,8 @@ def summarize(period_key: str, db: Session = Depends(get_db)):
 
 @router.get("/report-sources")
 def list_report_sources(period_key: str = Query(...), db: Session = Depends(get_db)):
+    refresh_report_sources(db, period_key)
+    db.commit()
     rows = (
         db.query(ReportSourceStatus)
         .filter(ReportSourceStatus.period_key == period_key)
