@@ -1,22 +1,20 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import desc
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
-from app.imports.importer import import_uploaded_file
-from app.imports.summarizer import summarize_period
-from app.models import (
-    CN05CustomerService,
-    CustomerPeriodSummary,
-    DP01DepositAccount,
-    ImportBatch,
-    ImportFile,
-    LN01Loan,
-    PF14AccountBalance,
+from app.imports.importer import (
+    delete_import_file_rows,
+    import_uploaded_file,
+    process_delete_import_file,
+    process_import_file,
+    queue_uploaded_file,
 )
+from app.imports.summarizer import summarize_period
+from app.models import CustomerPeriodSummary, ImportBatch, ImportFile
 
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
@@ -34,18 +32,32 @@ def serialize_model(model, fields: list[str]) -> dict:
     return {field: serialize_value(getattr(model, field)) for field in fields}
 
 
+def compact_error_message(exc: Exception) -> str:
+    message = str(exc)
+    for marker in ("[SQL:", "[parameters:"):
+        if marker in message:
+            message = message.split(marker, 1)[0].strip()
+    return message[:1000]
+
+
 @router.post("/upload")
 def upload_import_file(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     replace_existing: bool = Query(default=False),
+    background: bool = Query(default=True),
     db: Session = Depends(get_db),
 ):
     try:
-        import_file = import_uploaded_file(db, file, replace_existing=replace_existing)
+        if background:
+            import_file = queue_uploaded_file(db, file, replace_existing=replace_existing)
+            background_tasks.add_task(process_import_file, import_file.id)
+        else:
+            import_file = import_uploaded_file(db, file, replace_existing=replace_existing)
     except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
+        raise HTTPException(status_code=400, detail=compact_error_message(exc)) from exc
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(status_code=500, detail=compact_error_message(exc)) from exc
 
     return {
         "id": import_file.id,
@@ -57,6 +69,8 @@ def upload_import_file(
         "total_rows": import_file.total_rows,
         "success_rows": import_file.success_rows,
         "error_rows": import_file.error_rows,
+        "background": background,
+        "summary_required": True,
     }
 
 
@@ -64,6 +78,11 @@ def upload_import_file(
 def list_import_files(
     period_key: str | None = None,
     file_type: str | None = None,
+    branch_code: str | None = None,
+    status: str | None = None,
+    keyword: str | None = None,
+    uploaded_from: str | None = None,
+    uploaded_to: str | None = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(ImportFile)
@@ -71,8 +90,22 @@ def list_import_files(
         query = query.filter(ImportFile.period_key == period_key)
     if file_type:
         query = query.filter(ImportFile.file_type == file_type.upper())
+    if branch_code:
+        query = query.filter(ImportFile.branch_code == branch_code.strip())
+    if status:
+        query = query.filter(ImportFile.status == status)
+    if keyword:
+        like = f"%{keyword.strip()}%"
+        query = query.filter(or_(ImportFile.original_filename.ilike(like), ImportFile.stored_filename.ilike(like)))
+    if uploaded_from:
+        query = query.filter(ImportFile.uploaded_at >= datetime.fromisoformat(uploaded_from))
+    if uploaded_to:
+        to_value = datetime.fromisoformat(uploaded_to)
+        if to_value.hour == 0 and to_value.minute == 0 and to_value.second == 0:
+            to_value = to_value.replace(hour=23, minute=59, second=59, microsecond=999999)
+        query = query.filter(ImportFile.uploaded_at <= to_value)
 
-    files = query.order_by(desc(ImportFile.uploaded_at)).limit(200).all()
+    files = query.order_by(desc(ImportFile.uploaded_at)).all()
     return [
         serialize_model(
             item,
@@ -98,17 +131,29 @@ def list_import_files(
 @router.get("/periods")
 def list_periods(db: Session = Depends(get_db)):
     periods = db.query(ImportBatch).order_by(desc(ImportBatch.period_key)).all()
+    files = db.query(
+        ImportFile.period_key,
+        ImportFile.file_type,
+        ImportFile.branch_code,
+        ImportFile.file_size,
+        ImportFile.status,
+    ).all()
+    files_by_period = {}
+    for file in files:
+        files_by_period.setdefault(file.period_key, []).append(file)
+
     result = []
     for item in periods:
-        files = db.query(ImportFile).filter(ImportFile.period_key == item.period_key).all()
-        active_files = [file for file in files if file.status != "deleted"]
+        period_files = files_by_period.get(item.period_key, [])
+        active_files = [file for file in period_files if file.status not in {"deleted", "replaced", "deleting"}]
         file_types = sorted({file.file_type for file in active_files})
         branches = sorted({file.branch_code for file in active_files})
         payload = serialize_model(item, ["id", "period_key", "period_date", "status", "description", "created_at"])
         payload.update(
             {
                 "file_count": len(active_files),
-                "history_count": len(files),
+                "history_count": len(period_files),
+                "total_size": sum(file.file_size or 0 for file in active_files),
                 "file_types": file_types,
                 "branches": branches,
             }
@@ -118,7 +163,12 @@ def list_periods(db: Session = Depends(get_db)):
 
 
 @router.delete("/files/{file_id}")
-def delete_import_file(file_id: int, db: Session = Depends(get_db)):
+def delete_import_file(
+    file_id: int,
+    background_tasks: BackgroundTasks,
+    background: bool = Query(default=True),
+    db: Session = Depends(get_db),
+):
     import_file = db.query(ImportFile).filter(ImportFile.id == file_id).first()
     if not import_file:
         raise HTTPException(status_code=404, detail="Không tìm thấy file import")
@@ -128,18 +178,21 @@ def delete_import_file(file_id: int, db: Session = Depends(get_db)):
     period_key = import_file.period_key
     original_filename = import_file.original_filename
 
-    db.query(DP01DepositAccount).filter(DP01DepositAccount.import_file_id == file_id).delete()
-    db.query(CN05CustomerService).filter(CN05CustomerService.import_file_id == file_id).delete()
-    db.query(LN01Loan).filter(LN01Loan.import_file_id == file_id).delete()
-    db.query(PF14AccountBalance).filter(PF14AccountBalance.import_file_id == file_id).delete()
+    if background:
+        import_file.status = "deleting"
+        import_file.error_message = f"Deleting original filename: {original_filename}"
+        db.commit()
+        background_tasks.add_task(process_delete_import_file, file_id)
+        return {"id": file_id, "status": "deleting", "period_key": period_key, "summary_required": True}
+
+    delete_import_file_rows(db, file_id)
 
     import_file.status = "deleted"
     import_file.error_message = f"Deleted original filename: {original_filename}"
     import_file.original_filename = f"{original_filename}.deleted.{file_id}"
     db.commit()
 
-    summary_rows = summarize_period(db, period_key)
-    return {"id": file_id, "status": "deleted", "period_key": period_key, "summary_rows": summary_rows}
+    return {"id": file_id, "status": "deleted", "period_key": period_key, "summary_required": True}
 
 
 @router.post("/summarize/{period_key}")

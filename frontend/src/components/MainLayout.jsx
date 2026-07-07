@@ -1,10 +1,20 @@
+import { useState } from 'react';
 import {
+  ApartmentOutlined,
+  AuditOutlined,
   BarChartOutlined,
   DashboardOutlined,
   DatabaseOutlined,
+  LogoutOutlined,
+  MenuFoldOutlined,
+  MenuUnfoldOutlined,
+  SafetyCertificateOutlined,
   SettingOutlined,
+  TeamOutlined,
 } from '@ant-design/icons';
-import { Layout, Menu, Typography } from 'antd';
+import { Avatar, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd';
+
+import logoUrl from '../../favicon.jpg';
 
 const { Header, Sider, Content } = Layout;
 
@@ -12,30 +22,82 @@ const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
   { key: 'data-warehouse', icon: <DatabaseOutlined />, label: 'Kho dữ liệu' },
   { key: 'reports', icon: <BarChartOutlined />, label: 'Báo cáo' },
-  { key: 'settings', icon: <SettingOutlined />, label: 'Cấu hình' },
+  {
+    key: 'admin',
+    icon: <SettingOutlined />,
+    label: 'Quản trị hệ thống',
+    children: [
+      { key: 'admin-branches', icon: <DatabaseOutlined />, label: 'Quản trị chi nhánh' },
+      { key: 'admin-departments', icon: <ApartmentOutlined />, label: 'Phòng ban' },
+      { key: 'admin-users', icon: <TeamOutlined />, label: 'Người dùng' },
+      { key: 'admin-roles', icon: <SafetyCertificateOutlined />, label: 'Nhóm quyền' },
+      { key: 'admin-audit-logs', icon: <AuditOutlined />, label: 'Nhật ký thao tác' },
+    ],
+  },
 ];
 
-function MainLayout({ children, activeMenu, onMenuChange }) {
+function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout }) {
+  const [collapsed, setCollapsed] = useState(false);
+  const siderWidth = collapsed ? 76 : 260;
+
   return (
     <Layout className="app-shell">
-      <Sider width={248} className="app-sidebar">
+      <Sider
+        width={260}
+        collapsedWidth={76}
+        collapsed={collapsed}
+        trigger={null}
+        className="app-sidebar"
+      >
         <div className="app-logo">
-          <span className="app-logo-mark">A</span>
-          <span>QLKH</span>
+          <img className="app-logo-image" src={logoUrl} alt="C360" />
+          {!collapsed ? <span>C360</span> : null}
+          <Tooltip title={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}>
+            <Button
+              type="text"
+              className="sidebar-logo-toggle"
+              icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+              onClick={() => setCollapsed((value) => !value)}
+            />
+          </Tooltip>
         </div>
         <Menu
           theme="dark"
           mode="inline"
           selectedKeys={[activeMenu]}
+          defaultOpenKeys={activeMenu.startsWith('admin-') && !collapsed ? ['admin'] : []}
           items={menuItems}
-          onClick={({ key }) => onMenuChange(key)}
+          inlineCollapsed={collapsed}
+          onClick={({ key }) => onMenuChange(key === 'admin' ? 'admin-branches' : key)}
         />
       </Sider>
-      <Layout>
+      <Layout className="app-main" style={{ marginLeft: siderWidth }}>
         <Header className="app-header">
-          <Typography.Title level={4} className="app-title">
-            QUẢN LÝ KHÁCH HÀNG
-          </Typography.Title>
+          <Space size={12}>
+            <Tooltip title={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}>
+              <Button
+                type="text"
+                className="sidebar-toggle"
+                icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
+                onClick={() => setCollapsed((value) => !value)}
+              />
+            </Tooltip>
+            <Typography.Title level={4} className="app-title">
+              C360
+            </Typography.Title>
+          </Space>
+          <Space className="app-user" size={12}>
+            <Avatar className="app-user-avatar">{currentUser?.full_name?.charAt(0) || 'C'}</Avatar>
+            <span>
+              <Typography.Text strong>{currentUser?.full_name}</Typography.Text>
+              <Typography.Text type="secondary" className="app-user-subtitle">
+                {currentUser?.branch_code || 'C360'} · {currentUser?.role_name || 'Người dùng'}
+              </Typography.Text>
+            </span>
+            <Button icon={<LogoutOutlined />} onClick={onLogout}>
+              Đăng xuất
+            </Button>
+          </Space>
         </Header>
         <Content className="app-content">{children}</Content>
       </Layout>
@@ -44,4 +106,3 @@ function MainLayout({ children, activeMenu, onMenuChange }) {
 }
 
 export default MainLayout;
-

@@ -22,6 +22,10 @@ def init_db() -> None:
     from app import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    with engine.begin() as conn:
+        conn.execute(text("ALTER TABLE IF EXISTS system_users ADD COLUMN IF NOT EXISTS data_scope VARCHAR(30) NOT NULL DEFAULT 'own'"))
+        conn.execute(text("ALTER TABLE IF EXISTS org_departments ADD COLUMN IF NOT EXISTS department_type VARCHAR(50)"))
+        conn.execute(text("ALTER TABLE IF EXISTS org_departments ADD COLUMN IF NOT EXISTS manager_user_id INTEGER"))
 
 
 def check_database_connection() -> tuple[bool, str | None]:

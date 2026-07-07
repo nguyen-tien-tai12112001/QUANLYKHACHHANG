@@ -1,5 +1,4 @@
 import csv
-from io import StringIO
 from pathlib import Path
 
 import openpyxl
@@ -19,12 +18,14 @@ def detect_delimiter(sample: str) -> str:
         return ","
 
 
-def decode_csv_bytes(raw: bytes) -> tuple[str, str]:
+def detect_csv_encoding(file_path: str | Path) -> str:
+    sample = Path(file_path).read_bytes()[:65536]
     encodings = ("utf-8-sig", "utf-8", "cp1258", "latin-1")
     last_error = None
     for encoding in encodings:
         try:
-            return raw.decode(encoding), encoding
+            sample.decode(encoding)
+            return encoding
         except UnicodeDecodeError as exc:
             last_error = exc
     raise ValueError(f"Không đọc được encoding CSV: {last_error}")
@@ -32,14 +33,15 @@ def decode_csv_bytes(raw: bytes) -> tuple[str, str]:
 
 def read_csv_rows(file_path: str | Path) -> list[dict]:
     path = Path(file_path)
-    raw = path.read_bytes()
-    text, _encoding = decode_csv_bytes(raw)
-    delimiter = detect_delimiter(text[:8192])
+    encoding = detect_csv_encoding(path)
+    with path.open("r", encoding=encoding, errors="strict", newline="") as file:
+        delimiter = detect_delimiter(file.read(8192))
 
-    # Infer_schema_length=0 keeps every column as text. This protects customer
-    # codes, account numbers, ID numbers, leading zeroes, and Excel-style ticks.
+    # Keep every column as text so codes, account numbers and leading zeroes
+    # stay exactly as the source file provides them.
     df = pl.read_csv(
-        StringIO(text),
+        path,
+        encoding=encoding,
         separator=delimiter,
         infer_schema_length=0,
         null_values=[""],
@@ -82,4 +84,4 @@ def read_file_rows(file_path: str | Path) -> list[dict]:
         return read_csv_rows(file_path)
     if suffix == ".xlsx":
         return read_excel_rows(file_path)
-    raise ValueError("Định dạng file chưa hỗ trợ")
+    raise ValueError("Định dạng file chưa được hỗ trợ")

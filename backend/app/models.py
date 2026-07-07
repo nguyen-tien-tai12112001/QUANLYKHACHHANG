@@ -1,6 +1,7 @@
 from sqlalchemy import (
     JSON,
     BigInteger,
+    Boolean,
     Date,
     DateTime,
     ForeignKey,
@@ -272,3 +273,118 @@ class CustomerPeriodSummary(Base):
         UniqueConstraint("period_key", "ma_kh_chuan", name="uq_customer_period_summary"),
     )
 
+
+class OrgBranch(Base):
+    __tablename__ = "org_branches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    branch_code: Mapped[str] = mapped_column(String(10), unique=True, index=True, nullable=False)
+    branch_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    departments = relationship("OrgDepartment", back_populates="branch")
+    users = relationship("SystemUser", back_populates="branch")
+
+
+class OrgDepartment(Base):
+    __tablename__ = "org_departments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("org_branches.id"), index=True, nullable=False)
+    department_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    department_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    department_type: Mapped[str | None] = mapped_column(String(50), index=True)
+    manager_user_id: Mapped[int | None] = mapped_column(ForeignKey("system_users.id"), index=True)
+    status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    branch = relationship("OrgBranch", back_populates="departments")
+    users = relationship("SystemUser", back_populates="department", foreign_keys="SystemUser.department_id")
+    manager = relationship("SystemUser", foreign_keys=[manager_user_id])
+
+    __table_args__ = (
+        UniqueConstraint("branch_id", "department_code", name="uq_org_departments_branch_code"),
+    )
+
+
+class SystemRole(Base):
+    __tablename__ = "system_roles"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    role_code: Mapped[str] = mapped_column(String(50), unique=True, index=True, nullable=False)
+    role_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_system: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    users = relationship("SystemUser", back_populates="role")
+    permissions = relationship("SystemRolePermission", back_populates="role")
+
+
+class SystemPermission(Base):
+    __tablename__ = "system_permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    permission_code: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    permission_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    permission_group: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    roles = relationship("SystemRolePermission", back_populates="permission")
+
+
+class SystemRolePermission(Base):
+    __tablename__ = "system_role_permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("system_roles.id"), index=True, nullable=False)
+    permission_id: Mapped[int] = mapped_column(ForeignKey("system_permissions.id"), index=True, nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    role = relationship("SystemRole", back_populates="permissions")
+    permission = relationship("SystemPermission", back_populates="roles")
+
+    __table_args__ = (
+        UniqueConstraint("role_id", "permission_id", name="uq_system_role_permissions"),
+    )
+
+
+class SystemUser(Base):
+    __tablename__ = "system_users"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    username: Mapped[str] = mapped_column(String(80), unique=True, index=True, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    employee_code: Mapped[str | None] = mapped_column(String(50), unique=True, index=True)
+    credit_officer_code: Mapped[str | None] = mapped_column(String(50), index=True)
+    ipcas_username: Mapped[str | None] = mapped_column(String(80), index=True)
+    full_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    branch_id: Mapped[int | None] = mapped_column(ForeignKey("org_branches.id"), index=True)
+    department_id: Mapped[int | None] = mapped_column(ForeignKey("org_departments.id"), index=True)
+    role_id: Mapped[int | None] = mapped_column(ForeignKey("system_roles.id"), index=True)
+    data_scope: Mapped[str] = mapped_column(String(30), default="own", nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    last_login_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    branch = relationship("OrgBranch", back_populates="users")
+    department = relationship("OrgDepartment", back_populates="users", foreign_keys=[department_id])
+    role = relationship("SystemRole", back_populates="users")
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    actor_username: Mapped[str | None] = mapped_column(String(80), index=True)
+    actor_name: Mapped[str | None] = mapped_column(String(255))
+    action: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    entity_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    entity_id: Mapped[str | None] = mapped_column(String(80), index=True)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
