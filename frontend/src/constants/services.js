@@ -8,7 +8,7 @@ export const SERVICE_DEFS = [
   { key: 'sms_tien_gui', label: 'SMS tiền gửi', group: 'Digital', pending: false },
   { key: 'the_ghi_no_noi_dia', label: 'Thẻ ghi nợ nội địa', group: 'Thẻ', pending: false },
   { key: 'the_td_quoc_te', label: 'Thẻ TD quốc tế', group: 'Thẻ', pending: false },
-  { key: 'the_td_loc_viet', label: 'Thẻ TD Lộc Việt', group: 'Thẻ', pending: true },
+  { key: 'the_td_loc_viet', label: 'Thẻ TD Lộc Việt', group: 'Thẻ', pending: false },
   { key: 'tt_tien_dien', label: 'TT tiền điện', group: 'Thanh toán', pending: true },
   { key: 'tt_tien_nuoc', label: 'TT tiền nước', group: 'Thanh toán', pending: true },
   { key: 'tt_cuoc_vien_thong', label: 'TT cước viễn thông', group: 'Thanh toán', pending: true },
