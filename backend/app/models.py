@@ -263,6 +263,7 @@ class CustomerPeriodSummary(Base):
     tong_loi_ich_thang: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     ma_cb: Mapped[str | None] = mapped_column(String(50))
     ten_can_bo: Mapped[str | None] = mapped_column(String(255))
+    telephone: Mapped[str | None] = mapped_column(String(50))
     ghi_chu: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())

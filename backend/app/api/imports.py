@@ -203,6 +203,7 @@ def list_summary(
         "tong_loi_ich_thang",
         "ma_cb",
         "ten_can_bo",
+        "telephone",
         "ghi_chu",
     ]
     return [serialize_model(item, fields) for item in rows]
