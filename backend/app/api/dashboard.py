@@ -2,13 +2,13 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import desc, func
+from sqlalchemy import and_, desc, func
 from sqlalchemy.orm import Session
 
 from app.auth.branch_scope import BranchScope
 from app.auth.dependencies import get_branch_scope
 from app.database import get_db
-from app.models import CustomerPeriodSummary, ImportBatch
+from app.models import CustomerPeriodProfile
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -22,6 +22,7 @@ ACTIVE_SERVICE_KEYS = [
     "sms_tien_gui",
     "the_ghi_no_noi_dia",
     "the_td_quoc_te",
+    "the_td_loc_viet",
 ]
 
 SERVICE_LABELS = {
@@ -33,6 +34,7 @@ SERVICE_LABELS = {
     "sms_tien_gui": "SMS tiền gửi",
     "the_ghi_no_noi_dia": "Thẻ ghi nợ nội địa",
     "the_td_quoc_te": "Thẻ TD quốc tế",
+    "the_td_loc_viet": "Thẻ TD Lộc Việt",
 }
 
 SERVICE_GROUPS = {
@@ -44,6 +46,7 @@ SERVICE_GROUPS = {
     "sms_tien_gui": "Digital",
     "the_ghi_no_noi_dia": "Thẻ",
     "the_td_quoc_te": "Thẻ",
+    "the_td_loc_viet": "Thẻ",
 }
 
 CAMPAIGN_GROUP_PRIORITY = {
@@ -61,19 +64,19 @@ def serialize_value(value):
 
 
 def _base_query(db: Session, period_key: str, ma_cn: str | None, ma_pgd: str | None):
-    query = db.query(CustomerPeriodSummary).filter(CustomerPeriodSummary.period_key == period_key)
+    query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
     if ma_cn:
-        query = query.filter(CustomerPeriodSummary.ma_cn == ma_cn)
+        query = query.filter(CustomerPeriodProfile.branch_codes.ilike(f"%{ma_cn}%"))
     if ma_pgd:
-        query = query.filter(CustomerPeriodSummary.ma_pgd == ma_pgd)
+        query = query.filter(CustomerPeriodProfile.pgd_codes.ilike(f"%{ma_pgd}%"))
     return query
 
 
-def _count_used(row: CustomerPeriodSummary) -> int:
+def _count_used(row: CustomerPeriodProfile) -> int:
     return sum(1 for key in ACTIVE_SERVICE_KEYS if getattr(row, key, 0) > 0)
 
 
-def _unused_services(row: CustomerPeriodSummary) -> list[dict]:
+def _unused_services(row: CustomerPeriodProfile) -> list[dict]:
     unused = []
     for key in ACTIVE_SERVICE_KEYS:
         if getattr(row, key, 0) == 0:
@@ -83,13 +86,43 @@ def _unused_services(row: CustomerPeriodSummary) -> list[dict]:
     return unused
 
 
-def _row_to_dict(row: CustomerPeriodSummary) -> dict:
-    fields = [
-        "period_key", "ma_kh_chuan", "ma_cn", "ma_pgd", "ma_kh", "ten_kh", "loai_khach_hang",
-        "so_du_tien_vay", "so_du_tien_gui_ckh", "loai_vay", "doanh_so_chuyen_tien_ve_tai_khoan",
-        "so_du_tgtt_binh_quan", "ma_cb", "ten_can_bo", "telephone",
-    ] + ACTIVE_SERVICE_KEYS
-    return {field: serialize_value(getattr(row, field)) for field in fields}
+def _used_count_expr():
+    return sum(getattr(CustomerPeriodProfile, key) for key in ACTIVE_SERVICE_KEYS)
+
+
+def _asset_expr():
+    return (
+        func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0)
+        + func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0)
+        + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0)
+    )
+
+
+def _no_service_condition():
+    return and_(*(getattr(CustomerPeriodProfile, key) == 0 for key in ACTIVE_SERVICE_KEYS))
+
+
+def _row_to_dict(row: CustomerPeriodProfile) -> dict:
+    data = {
+        "period_key": row.period_key,
+        "ma_kh_chuan": row.ma_kh,
+        "ma_cn": row.branch_codes,
+        "ma_pgd": row.pgd_codes,
+        "ma_kh": row.ma_kh,
+        "ten_kh": row.ten_kh,
+        "loai_khach_hang": row.loai_khach_hang,
+        "so_du_tien_vay": row.so_du_tien_vay,
+        "so_du_tien_gui_ckh": row.so_du_tien_gui,
+        "loai_vay": row.loai_vay,
+        "doanh_so_chuyen_tien_ve_tai_khoan": row.doanh_so_chuyen_tien_ve_tk,
+        "so_du_tgtt_binh_quan": row.so_du_tgtt_binh_quan,
+        "ma_cb": row.ma_cb,
+        "ten_can_bo": row.ten_can_bo,
+        "telephone": row.telephone,
+    }
+    for key in ACTIVE_SERVICE_KEYS:
+        data[key] = getattr(row, key)
+    return {field: serialize_value(value) for field, value in data.items()}
 
 
 @router.get("/summary")
@@ -102,14 +135,14 @@ def dashboard_summary(
 
     total_customers = query.count()
     totals = query.with_entities(
-        func.coalesce(func.sum(CustomerPeriodSummary.so_du_tien_vay), 0),
-        func.coalesce(func.sum(CustomerPeriodSummary.so_du_tien_gui_ckh), 0),
-        func.coalesce(func.sum(CustomerPeriodSummary.so_du_tgtt_binh_quan), 0),
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_gui), 0),
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
     ).one()
 
     service_penetration = []
     for key in ACTIVE_SERVICE_KEYS:
-        count = query.filter(getattr(CustomerPeriodSummary, key) > 0).count()
+        count = query.filter(getattr(CustomerPeriodProfile, key) > 0).count()
         service_penetration.append({
             "key": key,
             "label": SERVICE_LABELS[key],
@@ -119,21 +152,21 @@ def dashboard_summary(
         })
     service_penetration.sort(key=lambda item: item["pct"], reverse=True)
 
-    cn_count = query.filter(CustomerPeriodSummary.loai_khach_hang == "KHCN").count()
-    dn_count = query.filter(CustomerPeriodSummary.loai_khach_hang == "KHDN").count()
-    cn_loan = query.filter(CustomerPeriodSummary.loai_khach_hang == "KHCN").with_entities(
-        func.coalesce(func.sum(CustomerPeriodSummary.so_du_tien_vay), 0)
+    cn_count = query.filter(CustomerPeriodProfile.loai_khach_hang == "KHCN").count()
+    dn_count = query.filter(CustomerPeriodProfile.loai_khach_hang == "KHDN").count()
+    cn_loan = query.filter(CustomerPeriodProfile.loai_khach_hang == "KHCN").with_entities(
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0)
     ).scalar() or 0
-    dn_loan = query.filter(CustomerPeriodSummary.loai_khach_hang == "KHDN").with_entities(
-        func.coalesce(func.sum(CustomerPeriodSummary.so_du_tien_vay), 0)
+    dn_loan = query.filter(CustomerPeriodProfile.loai_khach_hang == "KHDN").with_entities(
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0)
     ).scalar() or 0
 
     loan_type_rows = (
         query.with_entities(
-            func.coalesce(CustomerPeriodSummary.loai_vay, "Không xác định"),
-            func.coalesce(func.sum(CustomerPeriodSummary.so_du_tien_vay), 0),
+            func.coalesce(CustomerPeriodProfile.loai_vay, "Không xác định"),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
         )
-        .group_by(CustomerPeriodSummary.loai_vay)
+        .group_by(CustomerPeriodProfile.loai_vay)
         .all()
     )
     total_loan = float(totals[0] or 0)
@@ -148,24 +181,26 @@ def dashboard_summary(
     loan_type_breakdown.sort(key=lambda item: item["amt"], reverse=True)
 
     officer_rows = (
-        query.filter(CustomerPeriodSummary.ma_cb.isnot(None))
+        query.filter(CustomerPeriodProfile.ma_cb.isnot(None))
         .with_entities(
-            CustomerPeriodSummary.ma_cb,
-            CustomerPeriodSummary.ten_can_bo,
-            func.count(CustomerPeriodSummary.id),
-            func.coalesce(func.sum(CustomerPeriodSummary.so_du_tien_vay), 0),
-            func.coalesce(func.sum(CustomerPeriodSummary.so_du_tgtt_binh_quan), 0),
+            CustomerPeriodProfile.ma_cb,
+            CustomerPeriodProfile.ten_can_bo,
+            func.count(CustomerPeriodProfile.id),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
+            *[
+                func.coalesce(func.sum(getattr(CustomerPeriodProfile, key)), 0).label(key)
+                for key in ACTIVE_SERVICE_KEYS
+            ],
         )
-        .group_by(CustomerPeriodSummary.ma_cb, CustomerPeriodSummary.ten_can_bo)
+        .group_by(CustomerPeriodProfile.ma_cb, CustomerPeriodProfile.ten_can_bo)
         .all()
     )
 
     officer_leaderboard = []
-    for ma_cb, ten_can_bo, cust_count, total_loan_amt, total_casa in officer_rows:
-        officer_query = query.filter(CustomerPeriodSummary.ma_cb == ma_cb)
-        used_services_total = 0
-        for officer_row in officer_query.all():
-            used_services_total += _count_used(officer_row)
+    for row in officer_rows:
+        ma_cb, ten_can_bo, cust_count, total_loan_amt, total_casa = row[:5]
+        used_services_total = sum(float(value or 0) for value in row[5:])
         officer_leaderboard.append({
             "code": ma_cb,
             "name": ten_can_bo or ma_cb,
@@ -176,15 +211,19 @@ def dashboard_summary(
         })
     officer_leaderboard.sort(key=lambda item: item["totalLoan"], reverse=True)
 
-    all_rows = query.all()
-    no_service_count = sum(1 for row in all_rows if _count_used(row) == 0)
+    no_service_count = query.filter(_no_service_condition()).count()
 
     campaign_candidates = []
-    for row in all_rows:
-        total_assets = float(row.so_du_tien_vay or 0) + float(row.so_du_tien_gui_ckh or 0) + float(row.so_du_tgtt_binh_quan or 0)
+    campaign_rows = (
+        query.filter(_asset_expr() >= 80_000_000)
+        .filter(_used_count_expr() <= 2)
+        .order_by(desc(_asset_expr()), _used_count_expr())
+        .limit(50)
+        .all()
+    )
+    for row in campaign_rows:
+        total_assets = float(row.so_du_tien_vay or 0) + float(row.so_du_tien_gui or 0) + float(row.so_du_tgtt_binh_quan or 0)
         used_count = _count_used(row)
-        if total_assets < 80_000_000 or used_count > 2:
-            continue
         unused = _unused_services(row)
         campaign_candidates.append({
             **_row_to_dict(row),
@@ -226,8 +265,9 @@ def dashboard_trends(
 ):
     period_keys = [
         item.period_key
-        for item in db.query(ImportBatch.period_key)
-        .order_by(desc(ImportBatch.period_key))
+        for item in db.query(CustomerPeriodProfile.period_key)
+        .distinct()
+        .order_by(desc(CustomerPeriodProfile.period_key))
         .limit(periods)
         .all()
     ]
@@ -240,8 +280,8 @@ def dashboard_trends(
     for index, period_key in enumerate(period_keys):
         query = _base_query(db, period_key, scope.ma_cn, scope.ma_pgd)
         totals = query.with_entities(
-            func.coalesce(func.sum(CustomerPeriodSummary.so_du_tien_vay), 0),
-            func.coalesce(func.sum(CustomerPeriodSummary.so_du_tgtt_binh_quan), 0),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
         ).one()
         is_current = index == len(period_keys) - 1
         month_label = f"T{period_key[4:6]}" if len(period_key) >= 6 else period_key

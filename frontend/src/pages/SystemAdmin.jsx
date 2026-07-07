@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
   ApartmentOutlined,
   BankOutlined,
@@ -510,7 +510,7 @@ function SystemAdmin({ section = 'branches' }) {
       title: 'Cán bộ',
       key: 'user',
       render: (_, row) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Text strong>{row.full_name}</Text>
           <Text type="secondary">{row.username}</Text>
         </Space>
@@ -524,7 +524,7 @@ function SystemAdmin({ section = 'branches' }) {
   ];
 
   return (
-    <Space direction="vertical" size={14} className="page-stack">
+    <Space orientation="vertical" size={14} className="page-stack">
       <section className={`admin-title-panel admin-title-${meta.theme}`}>
         <div>
           <Tag color="gold">{meta.tag}</Tag>
@@ -800,7 +800,7 @@ function SystemAdmin({ section = 'branches' }) {
                                 onClick={(event) => event.stopPropagation()}
                                 onChange={(event) => togglePermissionCode(item.permission_code, event.target.checked)}
                               >
-                                <Space direction="vertical" size={0}>
+                                <Space orientation="vertical" size={0}>
                                   <Text>{item.permission_name}</Text>
                                   <Text type="secondary">{item.permission_code}</Text>
                                 </Space>
@@ -841,3 +841,4 @@ function SystemAdmin({ section = 'branches' }) {
 }
 
 export default SystemAdmin;
+

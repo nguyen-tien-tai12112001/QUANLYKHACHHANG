@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
   Button,
@@ -309,7 +309,7 @@ function CustomerProcessing() {
       key: 'ready',
       width: 180,
       render: (_, row) => (
-        <Space direction="vertical" size={2} style={{ width: '100%' }}>
+        <Space orientation="vertical" size={2} style={{ width: '100%' }}>
           <Progress
             percent={Math.round((row.available_required_file_count / row.required_file_count) * 100)}
             size="small"
@@ -324,7 +324,7 @@ function CustomerProcessing() {
       key: 'result',
       width: 190,
       render: (_, row) => (
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Text>{money(row.profile_count)} khách hàng đã xử lý</Text>
           {row.last_job ? jobStatusTag(row.last_job.status) : <Tag>Chưa chạy</Tag>}
         </Space>
@@ -443,7 +443,7 @@ function CustomerProcessing() {
   ];
 
   return (
-    <Space direction="vertical" size={18} className="page-stack">
+    <Space orientation="vertical" size={18} className="page-stack">
       <div>
         <Title level={2}>Xử lý dữ liệu khách hàng</Title>
         <Paragraph className="dashboard-description">
@@ -531,7 +531,7 @@ function CustomerProcessing() {
                   items={optionalFiles.slice(0, 5).map((item) => ({
                     color: 'blue',
                     children: (
-                      <Space direction="vertical" size={0}>
+                      <Space orientation="vertical" size={0}>
                         <Text strong>{item.original_filename}</Text>
                         <Text type="secondary">{fileSize(item.file_size)} · {item.status}</Text>
                       </Space>
@@ -559,7 +559,7 @@ function CustomerProcessing() {
             }
           >
             {selectedPeriodInfo ? (
-              <Space direction="vertical" size={12} style={{ width: '100%' }}>
+              <Space orientation="vertical" size={12} style={{ width: '100%' }}>
                 <Space size={[6, 6]} wrap>
                   {selectedPeriodInfo.is_ready ? (
                     <Tag color="success" icon={<CheckCircleOutlined />}>Đủ nhóm file chuẩn</Tag>
@@ -666,7 +666,7 @@ function CustomerProcessing() {
         title={detailCustomer ? `Chi tiết chi nhánh của khách hàng ${detailCustomer.ma_kh}` : 'Chi tiết khách hàng'}
       >
         {detailCustomer ? (
-          <Space direction="vertical" size={12} style={{ width: '100%' }}>
+          <Space orientation="vertical" size={12} style={{ width: '100%' }}>
             <Space wrap>
               <Tag color="blue">{detailCustomer.ten_kh}</Tag>
               <Tag color={detailCustomer.branch_count > 1 ? 'volcano' : 'default'}>
@@ -714,3 +714,4 @@ function CustomerProcessing() {
 }
 
 export default CustomerProcessing;
+

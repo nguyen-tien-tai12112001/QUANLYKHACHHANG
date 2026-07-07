@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+﻿import { useEffect, useState } from 'react';
 import {
   AuditOutlined,
   ClockCircleOutlined,
@@ -109,7 +109,7 @@ function AuditLogs() {
       key: 'actor',
       width: 220,
       render: (_, row) => (
-        <Space direction="vertical" size={0}>
+        <Space orientation="vertical" size={0}>
           <Text strong>{row.actor_name || row.actor_username}</Text>
           <Text type="secondary">{row.actor_username}</Text>
         </Space>
@@ -122,7 +122,7 @@ function AuditLogs() {
   ];
 
   return (
-    <Space direction="vertical" size={14} className="page-stack">
+    <Space orientation="vertical" size={14} className="page-stack">
       <section className="admin-title-panel admin-title-role">
         <div>
           <Tag color="blue">Kiểm soát</Tag>
@@ -200,3 +200,4 @@ function AuditLogs() {
 }
 
 export default AuditLogs;
+

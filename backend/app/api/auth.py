@@ -22,9 +22,24 @@ class LoginRequest(BaseModel):
 
 def serialize_user(user: SystemUser) -> dict:
     role = user.role.role_code if isinstance(user.role, SystemRole) else None
+    permission_codes = []
+    if user.role:
+        permission_codes = [
+            item.permission.permission_code
+            for item in user.role.permissions
+            if item.permission
+        ]
+    if user.is_superuser and "admin" not in permission_codes:
+        permission_codes.append("admin")
+
+    data_scope = user.data_scope or "branch"
+    scope = "province" if user.is_superuser or data_scope == "system" else "pgd" if data_scope == "department" else "branch"
+    branch_code = user.branch.branch_code if user.branch else None
+    department_code = user.department.department_code if user.department else None
     return {
         "id": user.id,
         "username": user.username,
+        "display_name": user.full_name,
         "full_name": user.full_name,
         "employee_code": user.employee_code,
         "ipcas_username": user.ipcas_username,
@@ -32,9 +47,16 @@ def serialize_user(user: SystemUser) -> dict:
         "role": role,
         "role_name": user.role.role_name if user.role else None,
         "branch": user.branch.branch_name if user.branch else None,
-        "branch_code": user.branch.branch_code if user.branch else None,
+        "branch_code": branch_code,
+        "ma_cn": branch_code,
         "department": user.department.department_name if user.department else None,
-        "department_code": user.department.department_code if user.department else None,
+        "department_code": department_code,
+        "ma_pgd": department_code if scope == "pgd" else None,
+        "data_scope": data_scope,
+        "scope": scope,
+        "allowed_branches": [branch_code] if branch_code and scope != "province" else [],
+        "allowed_pgds": [department_code] if department_code and scope == "pgd" else [],
+        "permissions": permission_codes,
     }
 
 

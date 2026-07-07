@@ -20,6 +20,8 @@ from app.models import (
     CustomerProcessingJob,
     CustomerProcessingOptionalFile,
     ImportBatch,
+    OrgBranch,
+    OrgDepartment,
 )
 
 
@@ -81,6 +83,12 @@ def no_service_condition():
     return and_(*(getattr(CustomerPeriodProfile, field) == 0 for field in PROFILE_SERVICE_FIELDS))
 
 
+def split_filter_values(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 def apply_profile_filters(
     query,
     *,
@@ -109,13 +117,16 @@ def apply_profile_filters(
     if pgd_code:
         query = query.filter(CustomerPeriodProfile.pgd_codes.ilike(f"%{pgd_code.strip()}%"))
     if loan_type:
-        query = query.filter(CustomerPeriodProfile.loai_vay.ilike(f"%{loan_type.strip()}%"))
+        loan_types = split_filter_values(loan_type)
+        if loan_types:
+            query = query.filter(or_(*(CustomerPeriodProfile.loai_vay.ilike(f"%{item}%") for item in loan_types)))
     if officer_code:
         query = query.filter(CustomerPeriodProfile.ma_cb == officer_code)
     if multi_branch is not None:
         query = query.filter(CustomerPeriodProfile.branch_count > 1 if multi_branch else CustomerPeriodProfile.branch_count <= 1)
-    if unused_service in PROFILE_SERVICE_FIELDS:
-        query = query.filter(getattr(CustomerPeriodProfile, unused_service) == 0)
+    unused_services = [item for item in split_filter_values(unused_service) if item in PROFILE_SERVICE_FIELDS]
+    for service in unused_services:
+        query = query.filter(getattr(CustomerPeriodProfile, service) == 0)
     if no_service:
         query = query.filter(no_service_condition())
     return query
@@ -363,6 +374,123 @@ def get_profile_summary(
         "total_deposit": serialize_value(summary[2]),
         "total_casa": serialize_value(summary[3]),
         "no_service_customers": no_service_count,
+    }
+
+
+@router.get("/profile-filter-options")
+def get_profile_filter_options(
+    period_key: str = Query(...),
+    branch_code: str | None = None,
+    pgd_code: str | None = None,
+    db: Session = Depends(get_db),
+):
+    base_query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
+    scoped_query = apply_profile_filters(base_query, branch_code=branch_code, pgd_code=pgd_code)
+
+    branch_rows = (
+        db.query(CustomerPeriodProfile.branch_codes)
+        .filter(CustomerPeriodProfile.period_key == period_key, CustomerPeriodProfile.branch_codes.isnot(None))
+        .distinct()
+        .all()
+    )
+    branches = sorted(
+        {
+            item.strip()
+            for row in branch_rows
+            for item in str(row[0] or "").split(",")
+            if item.strip()
+        }
+    )
+
+    pgd_rows = scoped_query.with_entities(CustomerPeriodProfile.pgd_codes).filter(CustomerPeriodProfile.pgd_codes.isnot(None)).distinct().all()
+    pgds = set()
+    for row in pgd_rows:
+        for item in str(row[0] or "").split(","):
+            value = item.strip()
+            if not value:
+                continue
+            if ":" in value:
+                branch, pgd = [part.strip() for part in value.split(":", 1)]
+                if branch_code and branch != branch_code:
+                    continue
+                if pgd:
+                    pgds.add(pgd)
+            else:
+                pgds.add(value)
+    pgds = sorted(pgds)
+
+    pgd_name_map: dict[str, str] = {}
+    detail_rows = (
+        db.query(CustomerPeriodBranchDetail.branch_code, CustomerPeriodBranchDetail.ma_pgd, CustomerPeriodBranchDetail.ten_pgd)
+        .filter(CustomerPeriodBranchDetail.period_key == period_key, CustomerPeriodBranchDetail.ma_pgd.isnot(None))
+        .distinct()
+        .all()
+    )
+    for branch, pgd, name in detail_rows:
+        branch_value = str(branch or "").strip()
+        pgd_value = str(pgd or "").strip()
+        name_value = str(name or "").strip()
+        if not pgd_value or not name_value:
+            continue
+        pgd_name_map.setdefault(pgd_value, name_value)
+        if branch_value:
+            pgd_name_map.setdefault(f"{branch_value}:{pgd_value}", name_value)
+
+    department_rows = (
+        db.query(OrgBranch.branch_code, OrgDepartment.department_code, OrgDepartment.department_name)
+        .join(OrgDepartment, OrgDepartment.branch_id == OrgBranch.id)
+        .filter(OrgDepartment.department_code.isnot(None))
+        .all()
+    )
+    for branch, pgd, name in department_rows:
+        branch_value = str(branch or "").strip()
+        pgd_value = str(pgd or "").strip()
+        name_value = str(name or "").strip()
+        if not pgd_value or not name_value:
+            continue
+        pgd_name_map.setdefault(pgd_value, name_value)
+        if branch_value:
+            pgd_name_map.setdefault(f"{branch_value}:{pgd_value}", name_value)
+
+    pgd_options = [
+        {
+            "value": pgd,
+            "label": (pgd_name_map.get(f"{branch_code}:{pgd}") if branch_code else None) or pgd_name_map.get(pgd) or pgd,
+        }
+        for pgd in pgds
+    ]
+
+    loan_rows = scoped_query.with_entities(CustomerPeriodProfile.loai_vay).filter(CustomerPeriodProfile.loai_vay.isnot(None)).distinct().all()
+    loan_types = sorted(
+        {
+            item.strip()
+            for row in loan_rows
+            for item in str(row[0] or "").split("/")
+            if item.strip()
+        }
+    )
+
+    officer_rows = (
+        scoped_query.with_entities(CustomerPeriodProfile.ma_cb, CustomerPeriodProfile.ten_can_bo)
+        .filter(CustomerPeriodProfile.ma_cb.isnot(None))
+        .distinct()
+        .order_by(CustomerPeriodProfile.ten_can_bo, CustomerPeriodProfile.ma_cb)
+        .limit(1000)
+        .all()
+    )
+    officers = [
+        {"value": row.ma_cb, "label": f"{row.ten_can_bo or row.ma_cb} ({row.ma_cb})"}
+        for row in officer_rows
+        if row.ma_cb
+    ]
+
+    return {
+        "branches": branches,
+        "pgds": pgds,
+        "pgd_options": pgd_options,
+        "pgd_names": pgd_name_map,
+        "loan_types": loan_types,
+        "officers": officers,
     }
 
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+﻿import { useCallback, useEffect, useState } from 'react';
 
 import client from '../api/client';
 import { buildMockDashboardAggregate } from '../constants/mockDashboardAggregate';
@@ -49,8 +49,8 @@ export function useCustomerSummary() {
 
       let periodList = periods;
       if (!periodList.length) {
-        const { data: periodData } = await client.get('/imports/periods');
-        periodList = Array.isArray(periodData) ? periodData : [];
+        const { data: periodData } = await client.get('/customer-processing/periods');
+        periodList = Array.isArray(periodData) ? periodData.filter((item) => Number(item.profile_count || 0) > 0) : [];
         setPeriods(periodList);
       }
 

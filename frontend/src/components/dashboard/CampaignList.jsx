@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+﻿import { memo, useMemo } from 'react';
 import { CheckOutlined, PhoneOutlined } from '@ant-design/icons';
 import { Button, Card, Empty, Space, Table, Tag, Typography } from 'antd';
 
@@ -134,7 +134,7 @@ function CampaignList({ candidates = [], contactedIds, loading = false, onContac
           <strong>Top 5 Khách hàng ưu tiên tiếp cận (Bán chéo trong ngày)</strong>
         </Space>
       }
-      bordered={false}
+      variant="borderless"
       style={{ borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}
     >
       <Table
@@ -150,3 +150,4 @@ function CampaignList({ candidates = [], contactedIds, loading = false, onContac
 }
 
 export default memo(CampaignList);
+

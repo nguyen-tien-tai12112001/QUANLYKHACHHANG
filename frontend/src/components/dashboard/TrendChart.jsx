@@ -1,4 +1,4 @@
-import { memo } from 'react';
+﻿import { memo } from 'react';
 import { LineChartOutlined } from '@ant-design/icons';
 import { Card, Space } from 'antd';
 
@@ -38,7 +38,7 @@ function TrendChart({ trends, loading }) {
           {isDemo && !loading ? ' — Demo' : ''}
         </span>
       }
-      bordered={false}
+      variant="borderless"
       style={{ borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}
       loading={loading}
     >
@@ -112,3 +112,4 @@ function TrendChart({ trends, loading }) {
 }
 
 export default memo(TrendChart);
+

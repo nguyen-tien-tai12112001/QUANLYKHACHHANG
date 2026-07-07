@@ -21,13 +21,13 @@ export function resolveBranchScope(user, requestedCn = null, requestedPgd = null
   }
 
   const permissions = user.permissions || [];
+  const homeCn = user.ma_cn || user.branch_code || null;
+  const homePgd = user.ma_pgd || user.department_code || null;
   const canViewAll =
     permissions.includes(PERMISSIONS.BRANCH_VIEW_ALL) ||
     permissions.includes(PERMISSIONS.ADMIN) ||
-    user.scope === SCOPES.PROVINCE;
-
-  const homeCn = user.ma_cn || null;
-  const homePgd = user.ma_pgd || null;
+    user.scope === SCOPES.PROVINCE ||
+    (!user.scope && !homeCn);
   const allowedBranches =
     user.allowed_branches?.length > 0
       ? user.allowed_branches
@@ -91,7 +91,7 @@ export function resolveBranchScope(user, requestedCn = null, requestedPgd = null
     filterPgd: filterPgd ?? null,
     canViewProvince: false,
     canChangeBranch: allowedBranches.length > 1,
-    canChangePgd: allowedPgds.length > 1,
+    canChangePgd: allowedPgds.length === 0 || allowedPgds.length > 1,
     allowedBranches,
     allowedPgds,
     defaultCn: homeCn,

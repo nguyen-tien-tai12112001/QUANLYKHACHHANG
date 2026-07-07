@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+﻿import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ApiOutlined,
   BankOutlined,
@@ -14,7 +14,8 @@ import { Alert, Button, Card, Col, Modal, Row, Select, Skeleton, Space, Spin, Ta
 
 import CampaignList from '../components/dashboard/CampaignList';
 import VisualDashboard from '../components/dashboard/VisualDashboard';
-import { getScopeLabel, toApiBranchParams } from '../auth';
+import { getScopeLabel, resolveBranchScope, toApiBranchParams, useAuth } from '../auth';
+import client from '../api/client';
 import {
   generateCallScript,
   loadContactedIds,
@@ -23,7 +24,6 @@ import {
 } from '../utils/customerMetrics';
 import { formatPeriodKey } from '../utils/periodUtils';
 import { useCustomerSummary } from '../hooks/useCustomerSummary';
-import { useBranchFilters } from '../hooks/useBranchFilters';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -87,6 +87,7 @@ function KpiCard({ loading, label, value, icon, borderColor, bgGradient, valueCo
 }
 
 function Dashboard() {
+  const { user } = useAuth();
   const {
     status,
     rows,
@@ -99,24 +100,70 @@ function Dashboard() {
     trendsLoading,
   } = useCustomerSummary();
 
-  const onScopeApply = useCallback(
-    (params) => {
-      if (periodKey) reload(periodKey, params);
+  const [filterCn, setFilterCn] = useState(null);
+  const [filterPgd, setFilterPgd] = useState(null);
+  const [scopeOptions, setScopeOptions] = useState({ branches: [], pgds: [] });
+
+  const branchScope = useMemo(
+    () => resolveBranchScope(user, filterCn, filterPgd),
+    [user, filterCn, filterPgd],
+  );
+  const effectiveFilterCn = branchScope.filterCn;
+  const effectiveFilterPgd = branchScope.filterPgd;
+  const branchSelectValue = effectiveFilterCn || undefined;
+
+  const cnOptions = useMemo(() => {
+    const allowed = new Set(branchScope.allowedBranches || []);
+    const source = scopeOptions.branches || [];
+    const visible = branchScope.canViewProvince || allowed.size === 0
+      ? source
+      : source.filter((code) => allowed.has(code));
+    return visible.map((code) => ({ value: code, label: code }));
+  }, [branchScope.allowedBranches, branchScope.canViewProvince, scopeOptions.branches]);
+
+  const pgdOptions = useMemo(() => {
+    const allowed = new Set(branchScope.allowedPgds || []);
+    const source = scopeOptions.pgds || [];
+    const visible = branchScope.canViewProvince || allowed.size === 0
+      ? source
+      : source.filter((item) => allowed.has(typeof item === 'string' ? item : item.value));
+    return visible.map((item) => ({
+      value: typeof item === 'string' ? item : item.value,
+      label: typeof item === 'string' ? item : item.label,
+    }));
+  }, [branchScope.allowedPgds, branchScope.canViewProvince, scopeOptions.pgds]);
+
+  const reloadWithScope = useCallback(
+    (nextPeriod = periodKey, cn = effectiveFilterCn, pgd = effectiveFilterPgd) => {
+      if (nextPeriod) reload(nextPeriod, toApiBranchParams(cn, pgd));
     },
-    [reload, periodKey],
+    [effectiveFilterCn, effectiveFilterPgd, periodKey, reload],
   );
 
-  const {
-    filterCn,
-    filterPgd,
-    cnOptions,
-    pgdOptions,
-    cnSelectValue: branchSelectValue,
-    handleCnChange,
-    handlePgdChange,
-    branchSelectDisabled,
-    pgdSelectDisabled,
-  } = useBranchFilters(rows, { onScopeApply });
+  const handleCnChange = useCallback((value) => {
+    const resolved = resolveBranchScope(user, value || null, null);
+    if (resolved.denied) {
+      message.warning('Bạn không có quyền xem chi nhánh này');
+      setFilterCn(resolved.defaultCn);
+      setFilterPgd(resolved.defaultPgd);
+      reloadWithScope(periodKey, resolved.defaultCn, resolved.defaultPgd);
+      return;
+    }
+    setFilterCn(resolved.filterCn);
+    setFilterPgd(resolved.filterPgd);
+    reloadWithScope(periodKey, resolved.filterCn, resolved.filterPgd);
+  }, [periodKey, reloadWithScope, user]);
+
+  const handlePgdChange = useCallback((value) => {
+    const resolved = resolveBranchScope(user, effectiveFilterCn, value || null);
+    if (resolved.denied) {
+      message.warning('Bạn không có quyền xem phòng giao dịch này');
+      return;
+    }
+    setFilterCn(resolved.filterCn);
+    setFilterPgd(resolved.filterPgd);
+    reloadWithScope(periodKey, resolved.filterCn, resolved.filterPgd);
+  }, [effectiveFilterCn, periodKey, reloadWithScope, user]);
 
   const [contactOpen, setContactOpen] = useState(false);
   const [selectedCust, setSelectedCust] = useState(null);
@@ -127,6 +174,31 @@ function Dashboard() {
       setContactedIds(loadContactedIds(periodKey));
     }
   }, [periodKey]);
+
+  useEffect(() => {
+    if (!periodKey || isDemo) return;
+    let mounted = true;
+    client
+      .get('/customer-processing/profile-filter-options', {
+        params: {
+          period_key: periodKey,
+          branch_code: effectiveFilterCn || undefined,
+        },
+      })
+      .then(({ data }) => {
+        if (!mounted) return;
+        setScopeOptions({
+          branches: data?.branches || [],
+          pgds: data?.pgd_options || data?.pgds || [],
+        });
+      })
+      .catch(() => {
+        if (mounted) setScopeOptions({ branches: [], pgds: [] });
+      });
+    return () => {
+      mounted = false;
+    };
+  }, [effectiveFilterCn, isDemo, periodKey]);
 
   const kpis = dashboardAggregate?.kpis;
   const metrics = useMemo(
@@ -156,7 +228,7 @@ function Dashboard() {
 
   const handlePeriodChange = (value) => {
     setContactedIds(loadContactedIds(value));
-    reload(value, toApiBranchParams(filterCn, filterPgd));
+    reload(value, toApiBranchParams(effectiveFilterCn, effectiveFilterPgd));
   };
 
   const handleContactClick = useCallback((cust) => {
@@ -184,7 +256,7 @@ function Dashboard() {
   const dataLoading = status.loading;
 
   return (
-    <Space direction="vertical" size={20} className="page-stack">
+    <Space orientation="vertical" size={20} className="page-stack">
       <section
         className="brand-panel"
         style={{ padding: '16px 24px', minHeight: 'auto', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
@@ -220,19 +292,19 @@ function Dashboard() {
               value={branchSelectValue}
               onChange={handleCnChange}
               options={cnOptions}
-              allowClear={false}
-              disabled={dataLoading || branchSelectDisabled}
+              allowClear
+              disabled={dataLoading || !branchScope.canChangeBranch}
             />
             <Select
-              placeholder="Lọc PGD"
+              placeholder={effectiveFilterCn ? 'Lọc PGD thuộc chi nhánh' : 'Lọc toàn bộ PGD'}
               style={{ minWidth: 140 }}
-              value={filterPgd}
+              value={effectiveFilterPgd}
               onChange={handlePgdChange}
               options={pgdOptions}
               allowClear
-              disabled={dataLoading || pgdSelectDisabled || !filterCn}
+              disabled={dataLoading || !branchScope.canChangePgd}
             />
-            <Tag color="blue">{getScopeLabel(filterCn, filterPgd)}</Tag>
+            <Tag color="blue">{getScopeLabel(effectiveFilterCn, effectiveFilterPgd)}</Tag>
           </Space>
         </div>
         <BankOutlined className="brand-panel-icon" style={{ fontSize: 44, opacity: 0.2 }} />
@@ -250,7 +322,7 @@ function Dashboard() {
 
       <Spin spinning={dataLoading}>
         <Row gutter={[12, 12]}>
-          <Col xs={12} md={6}>
+          <Col xs={12} md={8} xl={4}>
             <KpiCard
               loading={dataLoading}
               label="Tổng số khách hàng"
@@ -266,7 +338,7 @@ function Dashboard() {
               valueColor="#1e3a8a"
             />
           </Col>
-          <Col xs={12} md={6}>
+          <Col xs={12} md={8} xl={5}>
             <KpiCard
               loading={dataLoading}
               label="Tổng dư nợ cho vay"
@@ -281,7 +353,22 @@ function Dashboard() {
               valueColor="#9f1239"
             />
           </Col>
-          <Col xs={12} md={6}>
+          <Col xs={12} md={8} xl={5}>
+            <KpiCard
+              loading={dataLoading}
+              label="Tổng tiền gửi CKH"
+              value={
+                <>
+                  {money(metrics.deposit)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
+                </>
+              }
+              icon={<BankOutlined style={{ fontSize: 14 }} />}
+              borderColor="#10b981"
+              bgGradient="linear-gradient(to bottom right, #ffffff, #ecfdf5)"
+              valueColor="#064e3b"
+            />
+          </Col>
+          <Col xs={12} md={8} xl={5}>
             <KpiCard
               loading={dataLoading}
               label="Tổng CASA (TGTT bình quan)"
@@ -296,7 +383,7 @@ function Dashboard() {
               valueColor="#164e63"
             />
           </Col>
-          <Col xs={12} md={6}>
+          <Col xs={12} md={8} xl={5}>
             <KpiCard
               loading={dataLoading}
               label="Chưa dùng dịch vụ nào"
@@ -360,7 +447,7 @@ function Dashboard() {
         width={600}
       >
         {selectedCust && (
-          <Space direction="vertical" size={16} style={{ width: '100%', paddingTop: 10 }}>
+          <Space orientation="vertical" size={16} style={{ width: '100%', paddingTop: 10 }}>
             <Card size="small" style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: '8px' }}>
               <Row gutter={[16, 12]}>
                 <Col span={12}>
@@ -424,3 +511,4 @@ function Dashboard() {
 }
 
 export default Dashboard;
+

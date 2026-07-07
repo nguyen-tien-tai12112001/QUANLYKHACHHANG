@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Card,
@@ -199,10 +199,10 @@ function ImportJobTimeline({ jobs }) {
 
   return (
     <div className="import-job-timeline">
-      <Space direction="vertical" size={10} className="full-width">
+      <Space orientation="vertical" size={10} className="full-width">
         {jobs.map((job) => (
           <div className="import-job-item" key={job.uid}>
-            <Space direction="vertical" size={6} className="full-width">
+            <Space orientation="vertical" size={6} className="full-width">
               <Space wrap>
                 <Text strong>{job.name}</Text>
                 {progressStatusTag(job.status)}
@@ -621,7 +621,7 @@ function ImportData() {
       dataIndex: 'name',
       key: 'name',
       render: (value, row) => (
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           <Text strong>{value}</Text>
           <Text type="secondary">
             {row.meta?.branchCode} · {row.meta?.fileType} · {row.meta?.periodKey}
@@ -725,7 +725,7 @@ function ImportData() {
   }, [importJobs]);
 
   return (
-    <Space direction="vertical" size={20} className="page-stack">
+    <Space orientation="vertical" size={20} className="page-stack">
       <section className="brand-panel warehouse-hero">
         <div>
           <Tag color="gold">Kho dữ liệu theo kỳ</Tag>
@@ -777,7 +777,7 @@ function ImportData() {
 
         {uploadPreview.length ? (
           <div className="upload-preview-panel">
-            <Space direction="vertical" size={12} className="full-width">
+            <Space orientation="vertical" size={12} className="full-width">
               <Text strong>Kiểm tra ràng buộc theo kỳ</Text>
               <Space wrap>
                 <Tag color={detectedPeriod ? 'gold' : 'error'}>
@@ -837,7 +837,7 @@ function ImportData() {
             <span className="warehouse-filter-title-icon">
               <FilterOutlined />
             </span>
-            <Space direction="vertical" size={0}>
+            <Space orientation="vertical" size={0}>
               <Text strong>Bộ lọc kho dữ liệu</Text>
               <Text type="secondary">Tìm file theo kỳ, chi nhánh, trạng thái và thời gian upload</Text>
             </Space>
@@ -965,7 +965,7 @@ function ImportData() {
 
       <Card
         title={
-          <Space direction="vertical" size={0}>
+          <Space orientation="vertical" size={0}>
             <Text strong>File trong kho dữ liệu</Text>
             <Text type="secondary">{sortedFiles.length} file theo điều kiện lọc hiện tại</Text>
           </Space>
@@ -997,7 +997,7 @@ function ImportData() {
         ]}
         width={980}
       >
-        <Space direction="vertical" size={16} className="full-width">
+        <Space orientation="vertical" size={16} className="full-width">
           <Row gutter={[12, 12]}>
             <Col xs={24} md={8}>
               <Card size="small">
@@ -1042,3 +1042,4 @@ function ImportData() {
 }
 
 export default ImportData;
+

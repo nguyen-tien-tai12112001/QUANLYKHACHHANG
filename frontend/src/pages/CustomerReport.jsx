@@ -1,9 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useMemo, useState } from 'react';
 import {
   Badge,
   Button,
   Card,
+  Checkbox,
   Col,
+  Collapse,
   Descriptions,
   Divider,
   Empty,
@@ -45,6 +47,7 @@ import {
 } from '@ant-design/icons';
 
 import client from '../api/client';
+import { resolveBranchScope, useAuth } from '../auth';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -111,6 +114,116 @@ function money(value) {
   return moneyFormatter.format(Number(value || 0));
 }
 
+function compactMoney(value) {
+  const amount = Math.abs(Number(value || 0));
+  const sign = Number(value || 0) < 0 ? '-' : '';
+  if (amount >= 1_000_000_000_000) {
+    return `${sign}${moneyFormatter.format(Number((amount / 1_000_000_000_000).toFixed(1)))} nghìn tỷ`;
+  }
+  if (amount >= 1_000_000_000) {
+    return `${sign}${moneyFormatter.format(Number((amount / 1_000_000_000).toFixed(1)))} tỷ`;
+  }
+  if (amount >= 1_000_000) {
+    return `${sign}${moneyFormatter.format(Number((amount / 1_000_000).toFixed(1)))} triệu`;
+  }
+  return `${sign}${moneyFormatter.format(amount)}`;
+}
+
+function moneyTooltip(value) {
+  return `${money(value || 0)} đ`;
+}
+
+function splitList(value) {
+  return String(value || '')
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function normalizePgdCodes(value) {
+  return splitList(value).map((item) => {
+    if (!item.includes(':')) return item;
+    const [branch, pgd] = item.split(':').map((part) => part.trim());
+    return pgd ? `${branch}:${pgd}` : `${branch}: Chưa có PGD`;
+  });
+}
+
+function formatPgdLabel(value, pgdNameMap = {}) {
+  if (!value || String(value).includes('Chưa có PGD')) return value;
+  const text = String(value).trim();
+  if (pgdNameMap[text]) return pgdNameMap[text];
+  if (text.includes(':')) {
+    const [, pgd] = text.split(':').map((part) => part.trim());
+    return pgdNameMap[pgd] || PGD_NAMES[text]?.name || PGD_NAMES[pgd]?.name || text;
+  }
+  return pgdNameMap[text] || PGD_NAMES[text]?.name || text;
+}
+
+function CheckboxPopoverFilter({ title, placeholder, options, value, onChange, className = '' }) {
+  const selected = Array.isArray(value) ? value : [];
+  const selectedLabels = options
+    .filter((item) => selected.includes(item.value))
+    .map((item) => item.label);
+  const buttonText = selectedLabels.length
+    ? `${selectedLabels.length} đã chọn`
+    : placeholder;
+
+  const content = (
+    <div className={`report-checkbox-filter ${className}`}>
+      <Checkbox.Group
+        value={selected}
+        onChange={onChange}
+        options={options}
+      />
+      {selected.length > 0 && (
+        <Button
+          type="link"
+          size="small"
+          onClick={() => onChange([])}
+          style={{ paddingLeft: 0, marginTop: 6 }}
+        >
+          Bỏ chọn tất cả
+        </Button>
+      )}
+    </div>
+  );
+
+  return (
+    <Popover
+      trigger="click"
+      placement="bottomLeft"
+      title={title}
+      content={content}
+      overlayClassName="report-filter-popover"
+    >
+      <Button className={selected.length ? 'report-filter-button is-active' : 'report-filter-button'}>
+        <span>{buttonText}</span>
+        <FilterOutlined />
+      </Button>
+    </Popover>
+  );
+}
+
+function ReportStatCard({ tone, icon, label, value, unit, tooltip, onClick }) {
+  const content = (
+    <div
+      className={`report-stat-card report-stat-card--${tone}${onClick ? ' is-clickable' : ''}`}
+      onClick={onClick}
+    >
+      <div className="report-stat-card-head">
+        <span className="report-stat-label">{label}</span>
+        <span className="report-stat-icon">{icon}</span>
+      </div>
+      <div className="report-stat-number-wrap">
+        <span className="report-stat-value">{value}</span>
+        {unit && <span className="report-stat-unit">{unit}</span>}
+      </div>
+    </div>
+  );
+
+  return tooltip ? <Tooltip title={tooltip}>{content}</Tooltip> : content;
+}
+
 // Tính số dịch vụ đã dùng (không tính pending)
 function countUsed(row) {
   return SERVICE_DEFS.filter(
@@ -127,6 +240,43 @@ function getUsedServices(row) {
 }
 function getPendingServices() {
   return SERVICE_DEFS.filter((s) => s.pending);
+}
+
+const CROSS_SELL_RULES = [
+  {
+    key: 'deposit_plus',
+    label: 'TG lớn chưa dùng Agribank Plus',
+    color: 'green',
+    test: (row) =>
+      Number(row.so_du_tien_gui_ckh || 0) + Number(row.so_du_tgtt_binh_quan || 0) >= 1_000_000_000
+      && Number(row.agribank_plus || 0) === 0,
+  },
+  {
+    key: 'loan_sms',
+    label: 'Có dư nợ thiếu SMS nhắc nợ',
+    color: 'volcano',
+    test: (row) => Number(row.so_du_tien_vay || 0) > 0 && Number(row.sms_nhac_no_vay || 0) === 0,
+  },
+  {
+    key: 'casa_card',
+    label: 'TGTT cao chưa có thẻ',
+    color: 'blue',
+    test: (row) =>
+      Number(row.so_du_tgtt_binh_quan || 0) >= 500_000_000
+      && Number(row.the_ghi_no_noi_dia || 0) === 0
+      && Number(row.the_td_quoc_te || 0) === 0
+      && Number(row.the_td_loc_viet || 0) === 0,
+  },
+  {
+    key: 'multi_branch_owner',
+    label: 'Nhiều CN cần quản lý chính',
+    color: 'purple',
+    test: (row) => Number(row.branch_count || 0) > 1,
+  },
+];
+
+function getCrossSellOpportunities(row) {
+  return CROSS_SELL_RULES.filter((rule) => rule.test(row));
 }
 
 // ─── Mini dot-grid hiển thị trong 1 ô bảng ───────────────────────────────────
@@ -636,7 +786,7 @@ function ServiceDetailView({ customer }) {
 
 // ─── Cột bảng chính – KHỚP VỚI MẪU EXCEL (các cột màu xanh) ──────────────────────────
 // ─── Cột bảng chính – KHỚP VỚI MẪU EXCEL (các cột màu xanh) ──────────────────────────
-function buildColumns(onDetailClick, onUnusedClick) {
+function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
   return [
     {
       title: 'STT',
@@ -678,10 +828,27 @@ function buildColumns(onDetailClick, onUnusedClick) {
       title: 'PGD',
       dataIndex: 'ma_pgd',
       key: 'ma_pgd',
-      width: 120,
+      width: 180,
       align: 'center',
       sorter: (a, b) => (a.ma_pgd || '').localeCompare(b.ma_pgd || ''),
-      render: (v) => <Text style={{ fontSize: 12 }}>{PGD_NAMES[v]?.name || v || '—'}</Text>,
+      render: (value) => {
+        const items = normalizePgdCodes(value);
+        if (!items.length) return <Text type="secondary">—</Text>;
+        return (
+          <Space size={[4, 4]} wrap>
+            {items.slice(0, 3).map((item) => (
+              <Tooltip key={item} title={item}>
+                <Tag>{formatPgdLabel(item, pgdNameMap)}</Tag>
+              </Tooltip>
+            ))}
+            {items.length > 3 && (
+              <Tooltip title={items.map((item) => formatPgdLabel(item, pgdNameMap)).join(', ')}>
+                <Tag>+{items.length - 3}</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
     },
     {
       title: 'Mã KH chuẩn',
@@ -806,6 +973,29 @@ function buildColumns(onDetailClick, onUnusedClick) {
         );
       },
     },
+    {
+      title: 'Cơ hội bán chéo',
+      key: 'cross_sell',
+      width: 220,
+      render: (_, row) => {
+        const opportunities = getCrossSellOpportunities(row);
+        if (!opportunities.length) return <Text type="secondary">—</Text>;
+        return (
+          <Space size={[4, 4]} wrap>
+            {opportunities.slice(0, 2).map((item) => (
+              <Tag key={item.key} color={item.color} className="cross-sell-tag">
+                {item.label}
+              </Tag>
+            ))}
+            {opportunities.length > 2 && (
+              <Tooltip title={opportunities.map((item) => item.label).join(', ')}>
+                <Tag color="gold">+{opportunities.length - 2}</Tag>
+              </Tooltip>
+            )}
+          </Space>
+        );
+      },
+    },
   ];
 }
 
@@ -813,6 +1003,7 @@ function buildColumns(onDetailClick, onUnusedClick) {
 // ─── Component chính ───────────────────────────────────────────────────────────
 function CustomerReport() {
   const [form] = Form.useForm();
+  const { user } = useAuth();
   const [rows, setRows] = useState([]);
   const [sourceRows, setSourceRows] = useState([]);
   const [reportPeriods, setReportPeriods] = useState([]);
@@ -830,32 +1021,49 @@ function CustomerReport() {
   const [viewMode, setViewMode] = useState('report');
   const [searchText, setSearchText] = useState('');
   const [filterOfficer, setFilterOfficer] = useState(null);   // mã CB
-  const [filterUnusedSvc, setFilterUnusedSvc] = useState(null); // key dịch vụ chưa dùng
+  const [filterUnusedSvc, setFilterUnusedSvc] = useState([]); // key dịch vụ chưa dùng
   const [filterCn, setFilterCn] = useState(null);               // mã CN
   const [filterPgd, setFilterPgd] = useState(null);             // mã PGD
-  const [filterLoanType, setFilterLoanType] = useState(null);
+  const [filterLoanType, setFilterLoanType] = useState([]);
   const [filterMultiBranch, setFilterMultiBranch] = useState(null);
+  const [filterOptions, setFilterOptions] = useState({
+    branches: [],
+    pgds: [],
+    pgd_options: [],
+    pgd_names: {},
+    loan_types: [],
+    officers: [],
+  });
+  const branchScope = useMemo(
+    () => resolveBranchScope(user, filterCn, filterPgd),
+    [user, filterCn, filterPgd],
+  );
+  const effectiveFilterCn = branchScope.filterCn;
+  const effectiveFilterPgd = branchScope.filterPgd;
 
   const handlePgdChange = (val) => {
-    setFilterPgd(val);
-    if (val) {
-      const pgdInfo = PGD_NAMES[val];
-      if (pgdInfo && pgdInfo.parent) {
-        setFilterCn(pgdInfo.parent);
-      }
+    const resolved = resolveBranchScope(user, filterCn, val || null);
+    if (resolved.denied) {
+      message.warning('Bạn không có quyền xem phòng giao dịch này');
+      setFilterCn(resolved.defaultCn);
+      setFilterPgd(resolved.defaultPgd);
+      return;
     }
+    setFilterCn(resolved.filterCn);
+    setFilterPgd(resolved.filterPgd);
   };
 
   const handleCnChange = (val) => {
-    setFilterCn(val);
-    if (val) {
-      const pgdInfo = PGD_NAMES[filterPgd];
-      if (pgdInfo && pgdInfo.parent !== val) {
-        setFilterPgd(null);
-      }
+    const resolved = resolveBranchScope(user, val || null, null);
+    if (resolved.denied) {
+      message.warning('Bạn không có quyền xem chi nhánh này');
+      setFilterCn(resolved.defaultCn);
+      setFilterPgd(resolved.defaultPgd);
     } else {
-      setFilterPgd(null);
+      setFilterCn(resolved.filterCn);
+      setFilterPgd(resolved.filterPgd);
     }
+    setFilterOfficer(null);
   };
 
   // Modal states
@@ -871,7 +1079,18 @@ function CustomerReport() {
   function openDetail(row) { setDetailCustomer(row); setDetailOpen(true); }
   function openUnused(row) { setUnusedCustomer(row); setUnusedOpen(true); }
 
-  const columns = useMemo(() => buildColumns(openDetail, openUnused), []);
+  const columns = useMemo(
+    () => buildColumns(openDetail, openUnused, filterOptions.pgd_names || {}),
+    [filterOptions.pgd_names],
+  );
+
+  useEffect(() => {
+    if (!user) return;
+    const initial = resolveBranchScope(user, filterCn, filterPgd);
+    if (initial.filterCn !== filterCn) setFilterCn(initial.filterCn);
+    if (initial.filterPgd !== filterPgd) setFilterPgd(initial.filterPgd);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   function normalizeProcessedProfile(row) {
     return {
@@ -898,11 +1117,11 @@ function CustomerReport() {
     return {
       period_key: periodKey,
       keyword: searchText || undefined,
-      branch_code: filterCn || undefined,
-      pgd_code: filterPgd || undefined,
-      loan_type: filterLoanType || undefined,
+      branch_code: effectiveFilterCn || undefined,
+      pgd_code: effectiveFilterPgd || undefined,
+      loan_type: filterLoanType.length ? filterLoanType.join(',') : undefined,
       officer_code: filterOfficer || undefined,
-      unused_service: filterUnusedSvc || undefined,
+      unused_service: filterUnusedSvc.length ? filterUnusedSvc.join(',') : undefined,
       multi_branch: filterMultiBranch === null ? undefined : filterMultiBranch,
     };
   }
@@ -951,6 +1170,22 @@ function CustomerReport() {
     }
   }
 
+  async function loadFilterOptions(period = selectedPeriod) {
+    if (!period) return;
+    try {
+      const { data } = await client.get('/customer-processing/profile-filter-options', {
+        params: {
+          period_key: period,
+          branch_code: effectiveFilterCn || undefined,
+          pgd_code: effectiveFilterPgd || undefined,
+        },
+      });
+      setFilterOptions(data || { branches: [], pgds: [], pgd_options: [], pgd_names: {}, loan_types: [], officers: [] });
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    }
+  }
+
   useEffect(() => {
     async function initReport() {
       setLoading(true);
@@ -969,13 +1204,19 @@ function CustomerReport() {
   }, []);
 
   useEffect(() => {
+    if (!reportReady || !selectedPeriod) return;
+    loadFilterOptions(selectedPeriod);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportReady, selectedPeriod, effectiveFilterCn, effectiveFilterPgd]);
+
+  useEffect(() => {
     if (!reportReady || !selectedPeriod) return undefined;
     const timer = window.setTimeout(() => {
       loadReport(selectedPeriod, { ...reportPagination, current: 1 });
     }, 350);
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchText, filterOfficer, filterUnusedSvc, filterCn, filterPgd, filterLoanType, filterMultiBranch]);
+  }, [searchText, filterOfficer, filterUnusedSvc, effectiveFilterCn, effectiveFilterPgd, filterLoanType, filterMultiBranch]);
 
   async function loadNoServiceCustomers(nextPagination = noServicePagination) {
     if (!selectedPeriod) return;
@@ -1082,6 +1323,7 @@ function CustomerReport() {
 
   // ── Danh sách CB duy nhất để dropdown filter ────────────────────────────────
   const officerOptions = useMemo(() => {
+    if (filterOptions.officers?.length) return filterOptions.officers;
     const map = new Map();
     rows.forEach((r) => {
       if (r.ma_cb) map.set(r.ma_cb, r.ten_can_bo || r.ma_cb);
@@ -1090,68 +1332,96 @@ function CustomerReport() {
       value: code,
       label: `${name} (${code})`,
     }));
-  }, [rows]);
-
-  // ── Danh sách dịch vụ chưa dùng (active) chia theo nhóm (OptGroup) ─────────
-  const groupedUnusedSvcOptions = useMemo(() => {
-    const groups = {};
-    ACTIVE_SERVICES.forEach((s) => {
-      if (!groups[s.group]) groups[s.group] = [];
-      groups[s.group].push({
-        value: s.key,
-        label: s.label,
-        group: s.group,
-      });
-    });
-    return Object.entries(groups).map(([groupName, items]) => ({
-      label: groupName,
-      options: items,
-    }));
-  }, []);
+  }, [filterOptions.officers, rows]);
 
   const cnOptions = useMemo(() => {
-    const uniqueCns = [...new Set(
-      rows.flatMap((r) => String(r.ma_cn || '').split(',').map((item) => item.trim()).filter(Boolean))
-    )];
-    return uniqueCns.map(cn => ({
-      value: cn,
-      label: CN_NAMES[cn] || `Chi nhánh ${cn}`
+    const allowed = new Set(branchScope.allowedBranches || []);
+    const sourceBranches = filterOptions.branches?.length
+      ? filterOptions.branches
+      : [...new Set(
+        rows.flatMap((r) => String(r.ma_cn || '').split(',').map((item) => item.trim()).filter(Boolean))
+      )];
+    const visibleBranches = branchScope.canViewProvince || allowed.size === 0
+      ? sourceBranches
+      : sourceBranches.filter((cn) => allowed.has(cn));
+    return visibleBranches.map(cn => ({
+        value: cn,
+        label: CN_NAMES[cn] || `Chi nhánh ${cn}`
     }));
-  }, [rows]);
+  }, [branchScope.allowedBranches, branchScope.canViewProvince, filterOptions.branches, rows]);
 
   const pgdOptions = useMemo(() => {
-    const uniquePgds = [...new Set(
+    const allowed = new Set(branchScope.allowedPgds || []);
+    const sourcePgds = filterOptions.pgd_options?.length
+      ? filterOptions.pgd_options
+      : [...new Set(
       rows
-        .filter(r => !filterCn || String(r.ma_cn || '').includes(filterCn))
+        .filter((r) => !effectiveFilterCn || String(r.ma_cn || '').includes(effectiveFilterCn))
         .flatMap(r => String(r.ma_pgd || '').split(',').map((item) => item.trim()).filter(Boolean))
         .filter(Boolean)
     )];
-    return uniquePgds.map(pgd => ({
-      value: pgd,
-      label: PGD_NAMES[pgd]?.name || pgd
+    const visiblePgds = branchScope.canViewProvince || allowed.size === 0
+      ? sourcePgds
+      : sourcePgds.filter((pgd) => allowed.has(typeof pgd === 'string' ? pgd : pgd.value));
+    return visiblePgds.map(pgd => ({
+      value: typeof pgd === 'string' ? pgd : pgd.value,
+      label: typeof pgd === 'string' ? formatPgdLabel(pgd, filterOptions.pgd_names || {}) : pgd.label,
     }));
-  }, [rows, filterCn]);
+  }, [branchScope.allowedPgds, branchScope.canViewProvince, filterOptions.pgd_options, filterOptions.pgd_names, rows, effectiveFilterCn]);
 
   const loanTypeOptions = useMemo(() => {
+    if (filterOptions.loan_types?.length) {
+      return filterOptions.loan_types.map((value) => ({ value, label: value }));
+    }
     const values = [...new Set(rows.map((row) => row.loai_vay).filter(Boolean))];
     return values.sort().map((value) => ({ value, label: value }));
-  }, [rows]);
+  }, [filterOptions.loan_types, rows]);
 
-  const stats = useMemo(() => {
-    return rows.reduce(
-      (acc, row) => {
-        acc.loan    += Number(row.so_du_tien_vay || 0);
-        acc.deposit += Number(row.so_du_tien_gui_ckh || 0);
-        acc.casa    += Number(row.so_du_tgtt_binh_quan || 0);
-        const usedCount = countUsed(row);
-        if (usedCount === 0) acc.noService++;
-        const total = ACTIVE_SERVICES.length;
-        if (usedCount < total * 0.3) acc.lowService++;
-        return acc;
+  const reportStatCards = useMemo(() => {
+    const totalCustomers = reportSummary.total_customers || reportPagination.total;
+    return [
+      {
+        tone: 'blue',
+        icon: <UserOutlined />,
+        label: filterOfficer || filterUnusedSvc.length ? 'KH đã lọc' : 'Khách hàng',
+        value: money(totalCustomers),
+        unit: 'toàn bộ',
       },
-      { loan: 0, deposit: 0, casa: 0, noService: 0, lowService: 0 },
-    );
-  }, [rows]);
+      {
+        tone: 'red',
+        icon: <WalletOutlined />,
+        label: 'Tổng dư nợ',
+        value: compactMoney(reportSummary.total_loan),
+        unit: 'đ',
+        tooltip: moneyTooltip(reportSummary.total_loan),
+      },
+      {
+        tone: 'green',
+        icon: <BankOutlined />,
+        label: 'Tổng tiền gửi',
+        value: compactMoney(reportSummary.total_deposit),
+        unit: 'đ',
+        tooltip: moneyTooltip(reportSummary.total_deposit),
+      },
+      {
+        tone: 'cyan',
+        icon: <RiseOutlined />,
+        label: 'TGTT bình quân',
+        value: compactMoney(reportSummary.total_casa),
+        unit: 'đ',
+        tooltip: moneyTooltip(reportSummary.total_casa),
+      },
+      {
+        tone: 'gold',
+        icon: <WarningOutlined />,
+        label: 'Chưa dùng DV nào',
+        value: `${money(reportSummary.no_service_customers)} / ${money(totalCustomers)}`,
+        unit: 'KH',
+        tooltip: 'KH chưa sử dụng dịch vụ nào từ dữ liệu CN05',
+        onClick: openNoServiceModal,
+      },
+    ];
+  }, [filterOfficer, filterUnusedSvc.length, reportPagination.total, reportSummary]);
 
   // ── Lọc kết hợp: text search + cán bộ + dịch vụ chưa dùng + CN + PGD ─────────
   const filteredRows = useMemo(() => {
@@ -1172,29 +1442,29 @@ function CustomerReport() {
       result = result.filter((r) => r.ma_cb === filterOfficer);
     }
     // 3. lọc KH chưa dùng dịch vụ cụ thể
-    if (filterUnusedSvc) {
-      result = result.filter((r) => Number(r[filterUnusedSvc] || 0) === 0);
+    if (filterUnusedSvc.length) {
+      result = result.filter((r) => filterUnusedSvc.every((service) => Number(r[service] || 0) === 0));
     }
-    if (filterLoanType) {
-      result = result.filter((r) => String(r.loai_vay || '').includes(filterLoanType));
+    if (filterLoanType.length) {
+      result = result.filter((r) => filterLoanType.some((type) => String(r.loai_vay || '').includes(type)));
     }
     if (filterMultiBranch !== null) {
       result = result.filter((r) => filterMultiBranch ? Number(r.branch_count || 0) > 1 : Number(r.branch_count || 0) <= 1);
     }
     // 4. lọc theo Chi nhánh (CN)
-    if (filterCn) {
-      result = result.filter((r) => String(r.ma_cn || '').split(',').map((item) => item.trim()).includes(filterCn));
+    if (effectiveFilterCn) {
+      result = result.filter((r) => String(r.ma_cn || '').split(',').map((item) => item.trim()).includes(effectiveFilterCn));
     }
     // 5. lọc theo Phòng giao dịch (PGD)
-    if (filterPgd) {
-      result = result.filter((r) => String(r.ma_pgd || '').includes(filterPgd));
+    if (effectiveFilterPgd) {
+      result = result.filter((r) => String(r.ma_pgd || '').includes(effectiveFilterPgd));
     }
     // 6. Sắp xếp theo PGD nếu chỉ chọn lọc theo CN mà không chọn PGD cụ thể
-    if (filterCn && !filterPgd) {
+    if (effectiveFilterCn && !effectiveFilterPgd) {
       result = [...result].sort((a, b) => (a.ma_pgd || '').localeCompare(b.ma_pgd || ''));
     }
     return result;
-  }, [rows, searchText, filterOfficer, filterUnusedSvc, filterCn, filterPgd, filterLoanType, filterMultiBranch]);
+  }, [rows, searchText, filterOfficer, filterUnusedSvc, effectiveFilterCn, effectiveFilterPgd, filterLoanType, filterMultiBranch]);
 
   const sourceColumns = useMemo(() => [
     {
@@ -1203,7 +1473,7 @@ function CustomerReport() {
       key: 'source_code',
       width: 110,
       render: (value, row) => (
-        <Space direction="vertical" size={2}>
+        <Space orientation="vertical" size={2}>
           {sourceTag(value)}
           <Text strong style={{ fontSize: 12 }}>{row.source_name}</Text>
         </Space>
@@ -1280,14 +1550,27 @@ function CustomerReport() {
   ], []);
 
   return (
-    <Space direction="vertical" size={5} className="page-stack">
-      <div>
-        <Title level={2}>Bảng quản lý khách hàng</Title>
-        
+    <div className="customer-report-page page-stack">
+      <div className="report-page-header">
+        <div>
+          <Title level={2}>Bảng quản lý khách hàng</Title>
+          <Text type="secondary">
+            Theo dõi dữ liệu khách hàng theo kỳ, đối chiếu sản phẩm dịch vụ và cơ hội chăm sóc.
+          </Text>
+        </div>
+        <Tag color="red" className="report-header-badge">C360</Tag>
       </div>
 
       {/* Bộ lọc */}
-      <Card>
+      <Card
+        className="report-filter-card"
+        title={
+          <Space>
+            <FilterOutlined />
+            <span>Bộ lọc báo cáo</span>
+          </Space>
+        }
+      >
         <Form form={form} layout="vertical">
           {/* Hàng 1: Tham số chính & Tác vụ */}
           <Row gutter={[16, 12]} align="bottom">
@@ -1337,16 +1620,17 @@ function CustomerReport() {
                   <Button icon={<DownloadOutlined />} disabled style={{ opacity: 0.65 }}>
                     Xuất Excel
                   </Button>
-                  {(filterOfficer || filterUnusedSvc || searchText || filterCn || filterPgd || filterLoanType || filterMultiBranch !== null) && (
+                  {(filterOfficer || filterUnusedSvc.length || searchText || effectiveFilterCn || effectiveFilterPgd || filterLoanType.length || filterMultiBranch !== null) && (
                     <Button
                       danger
                       onClick={() => {
                         setFilterOfficer(null);
-                        setFilterUnusedSvc(null);
+                        setFilterUnusedSvc([]);
                         setSearchText('');
-                        setFilterCn(null);
-                        setFilterPgd(null);
-                        setFilterLoanType(null);
+                        const resetScope = resolveBranchScope(user, null, null);
+                        setFilterCn(resetScope.filterCn);
+                        setFilterPgd(resetScope.filterPgd);
+                        setFilterLoanType([]);
                         setFilterMultiBranch(null);
                       }}
                     >
@@ -1358,310 +1642,161 @@ function CustomerReport() {
             </Col>
           </Row>
 
-          <div style={{ margin: '16px 0', borderTop: '1px dashed #e2e8f0' }} />
-
-          {/* Hàng 2: Các bộ lọc nâng cao */}
-          <Row gutter={[12, 12]}>
-            <Col xs={24} sm={12} md={4}>
-              <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="Tất cả chi nhánh"
-                  value={filterCn}
-                  onChange={handleCnChange}
-                  allowClear
-                  options={cnOptions}
-                  showSearch
-                  filterOption={(input, opt) =>
-                    (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                  }
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={5}>
-              <Form.Item label="Phòng giao dịch" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="Tất cả phòng GD"
-                  value={filterPgd}
-                  onChange={handlePgdChange}
-                  allowClear
-                  options={pgdOptions}
-                  showSearch
-                  filterOption={(input, opt) =>
-                    (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                  }
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={4}>
-              <Form.Item label="Loại vay" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="Tất cả loại vay"
-                  value={filterLoanType}
-                  onChange={setFilterLoanType}
-                  allowClear
-                  options={loanTypeOptions}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={5}>
-              <Form.Item label="Cán bộ phụ trách" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="Tất cả cán bộ"
-                  value={filterOfficer}
-                  onChange={setFilterOfficer}
-                  allowClear
-                  options={officerOptions}
-                  showSearch
-                  filterOption={(input, opt) =>
-                    (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                  }
-                  notFoundContent={<Empty description="Không có cán bộ" imageStyle={{ height: 30 }} />}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={4}>
-              <Form.Item label="Phạm vi KH" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="Tất cả"
-                  value={filterMultiBranch}
-                  onChange={setFilterMultiBranch}
-                  allowClear
-                  options={[
-                    { value: true, label: 'Nhiều chi nhánh' },
-                    { value: false, label: 'Một chi nhánh' },
-                  ]}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} md={5}>
-              <Form.Item label="KH chưa dùng dịch vụ" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="Chọn dịch vụ chưa dùng"
-                  value={filterUnusedSvc}
-                  onChange={setFilterUnusedSvc}
-                  allowClear
-                  showSearch
-                  filterOption={(input, opt) => {
-                    const q = input.toLowerCase();
-                    const label = (opt?.label || '').toLowerCase();
-                    const group = (opt?.group || '').toLowerCase();
-                    return label.includes(q) || group.includes(q);
-                  }}
-                  options={groupedUnusedSvcOptions}
-                  notFoundContent={null}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={24} md={5}>
-              <Form.Item label="Tìm kiếm nhanh" style={{ marginBottom: 0 }}>
-                <Input
-                  placeholder="Tên KH / CIF / Mã CB"
-                  value={searchText}
-                  onChange={(e) => setSearchText(e.target.value)}
-                  allowClear
-                  prefix={<SearchOutlined style={{ color: '#cbd5e1' }} />}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-          </Row>
+          <Collapse
+            className="report-filter-collapse"
+            variant="borderless"
+            defaultActiveKey={[]}
+            items={[
+              {
+                key: 'advanced',
+                label: 'Điều kiện lọc chi tiết',
+                extra: (
+                  <Text type="secondary">
+                    {(filterOfficer || filterUnusedSvc.length || searchText || effectiveFilterCn || effectiveFilterPgd || filterLoanType.length || filterMultiBranch !== null)
+                      ? 'Đang có bộ lọc'
+                      : 'Bấm để mở'}
+                  </Text>
+                ),
+                children: (
+                  <Row gutter={[12, 12]}>
+                    <Col xs={24} sm={12} md={4}>
+                      <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
+                        <Select
+                          placeholder="Tất cả chi nhánh"
+                          value={filterCn}
+                          onChange={handleCnChange}
+                          allowClear
+                          options={cnOptions}
+                          showSearch
+                          disabled={!branchScope.canChangeBranch}
+                          filterOption={(input, opt) =>
+                            (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                          }
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12} md={5}>
+                      <Form.Item label="Phòng giao dịch" style={{ marginBottom: 0 }}>
+                        <Select
+                          placeholder={effectiveFilterCn ? 'Tất cả phòng GD thuộc chi nhánh' : 'Tất cả phòng GD'}
+                          value={filterPgd}
+                          onChange={handlePgdChange}
+                          allowClear
+                          options={pgdOptions}
+                          showSearch
+                          disabled={!branchScope.canChangePgd}
+                          filterOption={(input, opt) =>
+                            (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                          }
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12} md={4}>
+                      <Form.Item label="Loại vay" style={{ marginBottom: 0 }}>
+                        <CheckboxPopoverFilter
+                          title="Chọn loại vay"
+                          placeholder="Tất cả loại vay"
+                          options={loanTypeOptions}
+                          value={filterLoanType}
+                          onChange={setFilterLoanType}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12} md={5}>
+                      <Form.Item label="Cán bộ phụ trách" style={{ marginBottom: 0 }}>
+                        <Select
+                          placeholder={effectiveFilterCn ? 'Tất cả cán bộ thuộc chi nhánh' : 'Tất cả cán bộ'}
+                          value={filterOfficer}
+                          onChange={setFilterOfficer}
+                          allowClear
+                          options={officerOptions}
+                          showSearch
+                          filterOption={(input, opt) =>
+                            (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
+                          }
+                          notFoundContent={<Empty description="Không có cán bộ" imageStyle={{ height: 30 }} />}
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12} md={4}>
+                      <Form.Item label="Phạm vi KH" style={{ marginBottom: 0 }}>
+                        <Select
+                          placeholder="Tất cả"
+                          value={filterMultiBranch}
+                          onChange={setFilterMultiBranch}
+                          allowClear
+                          options={[
+                            { value: true, label: 'Nhiều chi nhánh' },
+                            { value: false, label: 'Một chi nhánh' },
+                          ]}
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={12} md={5}>
+                      <Form.Item label="KH chưa dùng dịch vụ" style={{ marginBottom: 0 }}>
+                        <CheckboxPopoverFilter
+                          title="Chọn dịch vụ khách hàng chưa dùng"
+                          placeholder="Tất cả dịch vụ"
+                          options={ACTIVE_SERVICES.map((item) => ({ value: item.key, label: item.label }))}
+                          value={filterUnusedSvc}
+                          onChange={setFilterUnusedSvc}
+                          className="report-checkbox-filter--services"
+                        />
+                      </Form.Item>
+                    </Col>
+                    <Col xs={24} sm={24} md={5}>
+                      <Form.Item label="Tìm kiếm nhanh" style={{ marginBottom: 0 }}>
+                        <Input
+                          placeholder="Tên KH / CIF / Mã CB"
+                          value={searchText}
+                          onChange={(e) => setSearchText(e.target.value)}
+                          allowClear
+                          prefix={<SearchOutlined style={{ color: '#cbd5e1' }} />}
+                          style={{ width: '100%' }}
+                        />
+                      </Form.Item>
+                    </Col>
+                  </Row>
+                ),
+              },
+            ]}
+          />
         </Form>
       </Card>
 
 
-      {/* Thống kê nhanh */}
-      <Row gutter={[12, 12]}>
-        {/* Khách hàng */}
-        <Col xs={12} md={4}>
-          <div style={{
-            background: 'linear-gradient(to bottom right, #ffffff, #f8fafc)',
-            border: '1px solid #e2e8f0',
-            borderLeft: '4px solid #3b82f6',
-            borderRadius: '8px',
-            padding: '12px 16px',
-            position: 'relative',
-            boxShadow: '0 2px 8px rgba(59, 130, 246, 0.05)',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            height: '92px'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                {filterOfficer || filterUnusedSvc ? 'KH (đã lọc)' : 'Khách hàng'}
-              </span>
-              <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#3b82f6' }}>
-                <UserOutlined style={{ fontSize: 14 }} />
-              </div>
-            </div>
-            <div>
-              <span style={{ fontSize: 22, fontWeight: 800, color: '#1e3a8a', lineHeight: 1 }}>
-                {money(reportSummary.total_customers || reportPagination.total)}
-              </span>
-              <span style={{ fontSize: 11, color: '#64748b', marginLeft: 4 }}>toàn bộ</span>
-            </div>
-          </div>
-        </Col>
-
-        {/* Tổng dư nợ */}
-        <Col xs={12} md={5}>
-          <div style={{
-            background: 'linear-gradient(to bottom right, #ffffff, #fff1f2)',
-            border: '1px solid #ffe4e6',
-            borderLeft: '4px solid #f43f5e',
-            borderRadius: '8px',
-            padding: '12px 16px',
-            position: 'relative',
-            boxShadow: '0 2px 8px rgba(244, 63, 94, 0.05)',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            height: '92px'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#f43f5e', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Tổng dư nợ
-              </span>
-              <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#fff1f2', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#f43f5e' }}>
-                <WalletOutlined style={{ fontSize: 14 }} />
-              </div>
-            </div>
-            <div>
-              <span style={{ fontSize: 20, fontWeight: 800, color: '#881337', lineHeight: 1 }}>
-                {money(reportSummary.total_loan)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
-              </span>
-            </div>
-          </div>
-        </Col>
-
-        {/* Tổng tiền gửi */}
-        <Col xs={12} md={5}>
-          <div style={{
-            background: 'linear-gradient(to bottom right, #ffffff, #ecfdf5)',
-            border: '1px solid #d1fae5',
-            borderLeft: '4px solid #10b981',
-            borderRadius: '8px',
-            padding: '12px 16px',
-            position: 'relative',
-            boxShadow: '0 2px 8px rgba(16, 185, 129, 0.05)',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            height: '92px'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#059669', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Tổng tiền gửi
-              </span>
-              <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#ecfdf5', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#10b981' }}>
-                <BankOutlined style={{ fontSize: 14 }} />
-              </div>
-            </div>
-            <div>
-              <span style={{ fontSize: 20, fontWeight: 800, color: '#064e3b', lineHeight: 1 }}>
-                {money(reportSummary.total_deposit)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
-              </span>
-            </div>
-          </div>
-        </Col>
-
-        {/* TGTT bình quan */}
-        <Col xs={12} md={5}>
-          <div style={{
-            background: 'linear-gradient(to bottom right, #ffffff, #ecfeff)',
-            border: '1px solid #cffafe',
-            borderLeft: '4px solid #06b6d4',
-            borderRadius: '8px',
-            padding: '12px 16px',
-            position: 'relative',
-            boxShadow: '0 2px 8px rgba(6, 182, 212, 0.05)',
-            display: 'flex',
-            flexDirection: 'column',
-            justifyContent: 'space-between',
-            height: '92px'
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color: '#0891b2', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                TGTT bình quân
-              </span>
-              <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#ecfeff', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#06b6d4' }}>
-                <RiseOutlined style={{ fontSize: 14 }} />
-              </div>
-            </div>
-            <div>
-              <span style={{ fontSize: 20, fontWeight: 800, color: '#164e63', lineHeight: 1 }}>
-                {money(reportSummary.total_casa)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
-              </span>
-            </div>
-          </div>
-        </Col>
-
-        {/* Chưa sử dụng DV nào */}
-        <Col xs={12} md={5}>
-          <Tooltip title="KH chưa sử dụng dịch vụ nào (từ dữ liệu CN05) — cơ hội bán chéo cao">
-            <div onClick={openNoServiceModal} style={{
-              background: 'linear-gradient(to bottom right, #ffffff, #fffbeb)',
-              border: '1px solid #fef3c7',
-              borderLeft: '4px solid #d97706',
-              borderRadius: '8px',
-              padding: '12px 16px',
-              position: 'relative',
-              boxShadow: '0 2px 8px rgba(217, 119, 6, 0.05)',
-              display: 'flex',
-              flexDirection: 'column',
-              justifyContent: 'space-between',
-              height: '92px',
-              cursor: 'pointer'
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                <span style={{ fontSize: 11, fontWeight: 700, color: '#b45309', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                  Chưa dùng DV nào
-                </span>
-                <div style={{ width: 28, height: 28, borderRadius: '50%', backgroundColor: '#fffbeb', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d97706' }}>
-                  <WarningOutlined style={{ fontSize: 14 }} />
-                </div>
-              </div>
-              <div>
-                <span style={{ fontSize: 20, fontWeight: 800, color: '#78350f', lineHeight: 1 }}>
-                  {money(reportSummary.no_service_customers)}
-                </span>
-                <span style={{ fontSize: 12, color: '#78350f', fontWeight: 600, marginLeft: 4 }}>
-                  / {money(reportSummary.total_customers || reportPagination.total)} KH
-                </span>
-              </div>
-            </div>
-          </Tooltip>
-        </Col>
-      </Row>
+      <div className="report-stat-grid">
+        {reportStatCards.map((item) => (
+          <ReportStatCard key={item.label} {...item} />
+        ))}
+      </div>
 
       {/* Thanh trạng thái bộ lọc đang active */}
-      {(filterOfficer || filterUnusedSvc || filterCn || filterPgd || filterLoanType || filterMultiBranch !== null) && (
+      {(filterOfficer || filterUnusedSvc.length || effectiveFilterCn || effectiveFilterPgd || filterLoanType.length || filterMultiBranch !== null) && (
         <div className="active-filter-bar">
           <Space size={8} wrap>
             <RiseOutlined style={{ color: '#7c3aed' }} />
             <Text strong style={{ fontSize: 13 }}>Đang lọc:</Text>
-            {filterCn && (
+            {effectiveFilterCn && (
               <Tag
                 color="blue"
                 closable
                 onClose={() => handleCnChange(null)}
               >
-                CN: {CN_NAMES[filterCn] || filterCn}
+                CN: {CN_NAMES[effectiveFilterCn] || effectiveFilterCn}
               </Tag>
             )}
-            {filterPgd && (
+            {effectiveFilterPgd && (
               <Tag
                 color="cyan"
                 closable
                 onClose={() => handlePgdChange(null)}
               >
-                PGD: {PGD_NAMES[filterPgd]?.name || filterPgd}
+                PGD: {formatPgdLabel(effectiveFilterPgd, filterOptions.pgd_names || {})}
               </Tag>
             )}
             {filterOfficer && (
@@ -1674,15 +1809,16 @@ function CustomerReport() {
                 CB: {officerOptions.find((o) => o.value === filterOfficer)?.label || filterOfficer}
               </Tag>
             )}
-            {filterLoanType && (
+            {filterLoanType.map((item) => (
               <Tag
+                key={item}
                 color="volcano"
                 closable
-                onClose={() => setFilterLoanType(null)}
+                onClose={() => setFilterLoanType((values) => values.filter((value) => value !== item))}
               >
-                Loại vay: {filterLoanType}
+                Loại vay: {item}
               </Tag>
-            )}
+            ))}
             {filterMultiBranch !== null && (
               <Tag
                 color="geekblue"
@@ -1692,16 +1828,17 @@ function CustomerReport() {
                 {filterMultiBranch ? 'KH nhiều chi nhánh' : 'KH một chi nhánh'}
               </Tag>
             )}
-            {filterUnusedSvc && (
+            {filterUnusedSvc.map((serviceKey) => (
               <Tag
+                key={serviceKey}
                 color="red"
                 closable
-                onClose={() => setFilterUnusedSvc(null)}
+                onClose={() => setFilterUnusedSvc((values) => values.filter((value) => value !== serviceKey))}
                 icon={<AimOutlined />}
               >
-                Chưa dùng: {SERVICE_DEFS.find((s) => s.key === filterUnusedSvc)?.label}
+                Chưa dùng: {SERVICE_DEFS.find((s) => s.key === serviceKey)?.label}
               </Tag>
-            )}
+            ))}
             <Text type="secondary" style={{ fontSize: 12 }}>
               → {filteredRows.length} khách hàng phù hợp
             </Text>
@@ -1712,11 +1849,13 @@ function CustomerReport() {
       {/* Nội dung chính */}
       {viewMode === 'sources' ? (
         <Card
+          className="report-data-card"
           title="Theo dõi nguồn dữ liệu"
           extra={<Text type="secondary">Nguồn dữ liệu của kỳ đang xem</Text>}
         >
           {sourceRows.length > 0 ? (
             <Table
+              className="report-table"
               bordered
               size="small"
               rowKey="source_code"
@@ -1731,7 +1870,7 @@ function CustomerReport() {
               {sourceGroups.map((item) => (
                 <Col xs={24} md={8} key={item.label}>
                   <div className="source-tile">
-                    <Space direction="vertical" size={8}>
+                    <Space orientation="vertical" size={8}>
                       <Text strong>{item.label}</Text>
                       {sourceTag(item.source)}
                       <Text type="secondary">{item.note}</Text>
@@ -1744,6 +1883,7 @@ function CustomerReport() {
         </Card>
       ) : (
         <Card
+          className="report-data-card"
           title={
             <Space>
              
@@ -1753,9 +1893,9 @@ function CustomerReport() {
           }
           extra={
             <Space size={12}>
-              {filterUnusedSvc && (
+              {filterUnusedSvc.length > 0 && (
                 <Tag color="orange" icon={<AimOutlined />}>
-                  Chưa dùng: {SERVICE_DEFS.find((s) => s.key === filterUnusedSvc)?.label}
+                  Chưa dùng: {filterUnusedSvc.length} dịch vụ
                 </Tag>
               )}
               {filterOfficer && (
@@ -1770,6 +1910,7 @@ function CustomerReport() {
           }
         >
           <Table
+            className="report-table"
             bordered
             size="small"
             rowKey="ma_kh_chuan"
@@ -1849,7 +1990,18 @@ function CustomerReport() {
             { title: 'Tên khách hàng', dataIndex: 'ten_kh', width: 250, fixed: 'left', ellipsis: true },
             { title: 'Loại KH', dataIndex: 'loai_khach_hang', width: 90, render: (value) => value ? <Tag color="blue">{value}</Tag> : '—' },
             { title: 'Chi nhánh', dataIndex: 'ma_cn', width: 150, ellipsis: true },
-            { title: 'PGD', dataIndex: 'ma_pgd', width: 160, ellipsis: true },
+            {
+              title: 'PGD',
+              dataIndex: 'ma_pgd',
+              width: 180,
+              ellipsis: true,
+              render: (value) => {
+                const items = normalizePgdCodes(value);
+                return items.length
+                  ? items.map((item) => formatPgdLabel(item, filterOptions.pgd_names || {})).join(', ')
+                  : '—';
+              },
+            },
             { title: 'Cán bộ', key: 'officer', width: 170, ellipsis: true, render: (_, row) => row.ten_can_bo || row.ma_cb || '—' },
             { title: 'Dư nợ', dataIndex: 'so_du_tien_vay', width: 130, align: 'right', render: money },
             { title: 'CKH', dataIndex: 'so_du_tien_gui_ckh', width: 130, align: 'right', render: money },
@@ -1861,8 +2013,9 @@ function CustomerReport() {
       </Modal>
       <CustomerDetailModal customer={detailCustomer} open={detailOpen} onClose={() => setDetailOpen(false)} />
       <UnusedServicesModal customer={unusedCustomer} open={unusedOpen} onClose={() => setUnusedOpen(false)} />
-    </Space>
+    </div>
   );
 }
 
 export default CustomerReport;
+

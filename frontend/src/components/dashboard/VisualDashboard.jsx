@@ -1,4 +1,4 @@
-import { memo, useMemo } from 'react';
+﻿import { memo, useMemo } from 'react';
 import {
   AimOutlined,
   CrownOutlined,
@@ -56,7 +56,7 @@ function VisualDashboard({
               Xếp hạng thâm nhập dịch vụ (Bán chéo)
             </span>
           }
-          bordered={false}
+          variant="borderless"
           style={{ borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}
         >
           <div style={{ maxHeight: '340px', overflowY: 'auto', paddingRight: '8px' }}>
@@ -110,7 +110,7 @@ function VisualDashboard({
               Bảng vàng Cán bộ tín dụng (Dư nợ & Bán chéo)
             </span>
           }
-          bordered={false}
+          variant="borderless"
           style={{ borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}
         >
           <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
@@ -167,7 +167,7 @@ function VisualDashboard({
               Phân bổ Dư nợ theo Loại Vay
             </span>
           }
-          bordered={false}
+          variant="borderless"
           style={{ borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}
         >
           <div style={{ maxHeight: '180px', overflowY: 'auto' }}>
@@ -204,7 +204,7 @@ function VisualDashboard({
               Cơ cấu tỷ trọng Khách hàng (KHCN vs KHDN)
             </span>
           }
-          bordered={false}
+          variant="borderless"
           style={{ borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}
         >
           <Row gutter={[24, 16]}>
@@ -309,3 +309,4 @@ function VisualDashboard({
 }
 
 export default memo(VisualDashboard);
+

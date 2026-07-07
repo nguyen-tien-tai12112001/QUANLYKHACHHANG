@@ -22,6 +22,13 @@ export function AuthProvider({ children }) {
         return externalUser;
       }
 
+      const storedUser = localStorage.getItem('c360_user');
+      if (storedUser) {
+        const parsedUser = JSON.parse(storedUser);
+        setUser(parsedUser);
+        return parsedUser;
+      }
+
       const token = getRegisteredAccessToken();
       const headers = token ? { Authorization: `Bearer ${token}` } : {};
       const { data } = await client.get('/auth/me', { headers });

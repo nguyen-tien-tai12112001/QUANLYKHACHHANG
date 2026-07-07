@@ -1,4 +1,4 @@
-import { DatabaseOutlined, LockOutlined, SafetyCertificateOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
+﻿import { DatabaseOutlined, LockOutlined, SafetyCertificateOutlined, TeamOutlined, UserOutlined } from '@ant-design/icons';
 import { Button, Card, Form, Input, Space, Typography, message } from 'antd';
 
 import client from '../api/client';
@@ -46,7 +46,7 @@ function Login({ onLogin }) {
 
       <section className="login-form-wrap">
         <Card className="login-card">
-          <Space direction="vertical" size={8} className="full-width login-card-heading">
+          <Space orientation="vertical" size={8} className="full-width login-card-heading">
             <span className="login-card-icon">
               <SafetyCertificateOutlined />
             </span>
@@ -76,3 +76,4 @@ function Login({ onLogin }) {
 }
 
 export default Login;
+
