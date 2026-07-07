@@ -9,6 +9,7 @@ from app.models import (
     DP01DepositAccount,
     LN01Loan,
     PF14AccountBalance,
+    Customer,
 )
 
 
@@ -17,6 +18,7 @@ def _blank_summary(period_key: str, period_date, ma_kh_chuan: str) -> dict:
         "period_key": period_key,
         "period_date": period_date,
         "ma_kh_chuan": ma_kh_chuan,
+        "telephone": None,
         "so_du_tien_vay": Decimal("0"),
         "so_du_tien_gui_ckh": Decimal("0"),
         "doanh_so_chuyen_tien_ve_tai_khoan": Decimal("0"),
@@ -120,6 +122,12 @@ def summarize_period(db: Session, period_key: str) -> int:
     if not summaries:
         db.commit()
         return 0
+
+    # Lấy thông tin số điện thoại từ bảng Customer để điền vào bảng tổng hợp
+    customers = db.query(Customer.ma_kh_chuan, Customer.telephone).filter(Customer.ma_kh_chuan.in_(list(summaries.keys()))).all()
+    for ma_kh_chuan, tel in customers:
+        if ma_kh_chuan in summaries:
+            summaries[ma_kh_chuan]["telephone"] = tel
 
     db.bulk_insert_mappings(CustomerPeriodSummary, list(summaries.values()))
     db.commit()
