@@ -45,7 +45,6 @@ import {
 } from '@ant-design/icons';
 
 import client from '../api/client';
-import VisualDashboard from '../components/dashboard/VisualDashboard';
 import {
   ACTIVE_SERVICES,
   GROUP_COLORS,
@@ -58,7 +57,6 @@ import {
   CN_NAMES,
   PGD_NAMES,
 } from '../constants/branches';
-import { useBranchFilters } from '../hooks/useBranchFilters';
 import {
   countUsed,
   getPendingServices,
@@ -758,21 +756,40 @@ function CustomerReport() {
   const [searchText, setSearchText] = useState('');
   const [filterOfficer, setFilterOfficer] = useState(null);   // mã CB
   const [filterUnusedSvc, setFilterUnusedSvc] = useState(null); // key dịch vụ chưa dùng
+  const [filterCn, setFilterCn] = useState(null);
+  const [filterPgd, setFilterPgd] = useState(null);
   const [filterLoanType, setFilterLoanType] = useState(null);
   const [filterMultiBranch, setFilterMultiBranch] = useState(null);
 
-  const {
-    filterCn,
-    filterPgd,
-    cnOptions,
-    pgdOptions,
-    cnSelectValue: branchSelectValue,
-    handleCnChange,
-    handlePgdChange,
-    resetScope,
-    branchSelectDisabled,
-    pgdSelectDisabled,
-  } = useBranchFilters(rows);
+  const handlePgdChange = (value) => {
+    setFilterPgd(value || null);
+    if (value) {
+      const matchedRow = rows.find((row) =>
+        String(row.ma_pgd || '')
+          .split(',')
+          .map((item) => item.trim())
+          .includes(value),
+      );
+      const firstBranch = String(matchedRow?.ma_cn || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)[0];
+      if (firstBranch) setFilterCn(firstBranch);
+    }
+  };
+
+  const handleCnChange = (value) => {
+    setFilterCn(value || null);
+    if (value && filterPgd) {
+      const pgdBelongsToBranch = rows.some((row) => {
+        const branches = String(row.ma_cn || '').split(',').map((item) => item.trim());
+        const pgds = String(row.ma_pgd || '').split(',').map((item) => item.trim());
+        return branches.includes(value) && pgds.includes(filterPgd);
+      });
+      if (!pgdBelongsToBranch) setFilterPgd(null);
+    }
+    if (!value) setFilterPgd(null);
+  };
 
   // Modal states
   const [detailCustomer, setDetailCustomer] = useState(null);
@@ -1002,6 +1019,38 @@ function CustomerReport() {
     }));
   }, []);
 
+  const cnOptions = useMemo(() => {
+    const uniqueCns = [...new Set(
+      rows.flatMap((row) =>
+        String(row.ma_cn || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean),
+      ),
+    )].sort();
+    return uniqueCns.map((cn) => ({
+      value: cn,
+      label: CN_NAMES[cn] || `Chi nhánh ${cn}`,
+    }));
+  }, [rows]);
+
+  const pgdOptions = useMemo(() => {
+    const uniquePgds = [...new Set(
+      rows
+        .filter((row) => !filterCn || String(row.ma_cn || '').split(',').map((item) => item.trim()).includes(filterCn))
+        .flatMap((row) =>
+          String(row.ma_pgd || '')
+            .split(',')
+            .map((item) => item.trim())
+            .filter(Boolean),
+        ),
+    )].sort();
+    return uniquePgds.map((pgd) => ({
+      value: pgd,
+      label: PGD_NAMES[pgd]?.name || pgd,
+    }));
+  }, [rows, filterCn]);
+
   const stats = useMemo(() => {
     return rows.reduce(
       (acc, row) => {
@@ -1183,7 +1232,6 @@ function CustomerReport() {
                   onChange={setViewMode}
                   options={[
                     { label: 'Báo cáo', value: 'report' },
-                    { label: 'Trực quan', value: 'visual' },
                     { label: 'Nguồn DL', value: 'sources' },
                   ]}
                 />
@@ -1210,7 +1258,8 @@ function CustomerReport() {
                         setFilterOfficer(null);
                         setFilterUnusedSvc(null);
                         setSearchText('');
-                        resetScope();
+                        setFilterCn(null);
+                        setFilterPgd(null);
                         setFilterLoanType(null);
                         setFilterMultiBranch(null);
                       }}
@@ -1230,17 +1279,16 @@ function CustomerReport() {
             <Col xs={24} sm={12} md={4}>
               <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
                 <Select
-                  placeholder="Phạm vi xem"
-                  value={branchSelectValue}
+                  placeholder="Tất cả chi nhánh"
+                  value={filterCn}
                   onChange={handleCnChange}
-                  allowClear={false}
+                  allowClear
                   options={cnOptions}
                   showSearch
                   filterOption={(input, opt) =>
                     (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                   }
                   style={{ width: '100%' }}
-                  disabled={branchSelectDisabled}
                 />
               </Form.Item>
             </Col>
@@ -1257,7 +1305,7 @@ function CustomerReport() {
                     (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                   }
                   style={{ width: '100%' }}
-                  disabled={pgdSelectDisabled || !filterCn}
+                  disabled={!filterCn}
                 />
               </Form.Item>
             </Col>
@@ -1609,14 +1657,6 @@ function CustomerReport() {
             </Row>
           )}
         </Card>
-      )}
-
-      {viewMode === 'visual' && (
-        <VisualDashboard
-          rows={filteredRows}
-          showTrend={false}
-          emptyDescription="Hãy nhấn 'Demo Dữ Liệu' hoặc 'Xem báo cáo' để hiển thị biểu đồ phân tích trực quan"
-        />
       )}
 
       {viewMode === 'report' && (
