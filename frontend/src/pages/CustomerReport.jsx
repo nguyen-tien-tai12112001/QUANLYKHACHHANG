@@ -45,27 +45,48 @@ import {
 } from '@ant-design/icons';
 
 import client from '../api/client';
-import {
-  ACTIVE_SERVICES,
-  GROUP_COLORS,
-  SERVICE_BY_GROUP,
-  SERVICE_DEFS,
-  SERVICE_GROUPS_ORDER,
-  TOTAL_SERVICES,
-} from '../constants/services';
-import {
-  CN_NAMES,
-  PGD_NAMES,
-} from '../constants/branches';
-import {
-  countUsed,
-  getPendingServices,
-  getUnusedServices,
-  getUsedServices,
-  money,
-} from '../utils/customerMetrics';
 
 const { Paragraph, Text, Title } = Typography;
+
+// ─── Định nghĩa tất cả dịch vụ ────────────────────────────────────────────────
+const SERVICE_DEFS = [
+  { key: 'thau_chi',             label: 'Thấu chi',             group: 'Tài khoản',       pending: false },
+  { key: 'tk_so_dep',            label: 'TK số đẹp',            group: 'Tài khoản',       pending: false },
+  { key: 'agribank_plus',        label: 'Agribank Plus',        group: 'Digital',         pending: false },
+  { key: 'tin_nhan_ott',         label: 'Tin nhắn OTT',         group: 'Digital',         pending: false },
+  { key: 'e_banking',            label: 'e-Banking',            group: 'Digital',         pending: true  },
+  { key: 'sms_nhac_no_vay',      label: 'SMS nhắc nợ vay',      group: 'Digital',         pending: false },
+  { key: 'sms_tien_gui',         label: 'SMS tiền gửi',         group: 'Digital',         pending: false },
+  { key: 'the_ghi_no_noi_dia',   label: 'Thẻ ghi nợ nội địa',  group: 'Thẻ',             pending: false },
+  { key: 'the_td_quoc_te',       label: 'Thẻ TD quốc tế',      group: 'Thẻ',             pending: false },
+  { key: 'the_td_loc_viet',      label: 'Thẻ TD Lộc Việt',     group: 'Thẻ',             pending: false },
+  { key: 'tt_tien_dien',         label: 'TT tiền điện',         group: 'Thanh toán',      pending: true  },
+  { key: 'tt_tien_nuoc',         label: 'TT tiền nước',         group: 'Thanh toán',      pending: true  },
+  { key: 'tt_cuoc_vien_thong',   label: 'TT cước viễn thông',  group: 'Thanh toán',      pending: true  },
+  { key: 'tra_luong_qua_the',    label: 'Trả lương qua thẻ',   group: 'Thanh toán',      pending: true  },
+  { key: 'batd',                 label: 'BATD',                 group: 'Bảo hiểm',        pending: true  },
+  { key: 'batk',                 label: 'BATK',                 group: 'Bảo hiểm',        pending: true  },
+  { key: 'bh_oto_xe_may',        label: 'BH ô tô, xe máy',     group: 'Bảo hiểm',        pending: true  },
+  { key: 'bh_khac',              label: 'BH khác',              group: 'Bảo hiểm',        pending: true  },
+  { key: 'bao_lanh',             label: 'Bảo lãnh',             group: 'Bảo lãnh/TTQT',  pending: true  },
+  { key: 'loa_bien_dong_so_du',  label: 'Loa biến động số dư', group: 'Khác',            pending: true  },
+  { key: 'phan_mem_ban_hang',    label: 'Phần mềm bán hàng',   group: 'Khác',            pending: true  },
+  { key: 'pos',                  label: 'POS',                  group: 'Khác',            pending: true  },
+  { key: 'chi_tra_kieu_hoi',     label: 'Chi trả kiều hối',    group: 'Bảo lãnh/TTQT',  pending: true  },
+  { key: 'phat_hanh_lc',         label: 'Phát hành LC',         group: 'Bảo lãnh/TTQT',  pending: true  },
+  { key: 'thanh_toan_quoc_te',   label: 'Thanh toán quốc tế',  group: 'Bảo lãnh/TTQT',  pending: true  },
+  { key: 'mua_ban_ngoai_te',     label: 'Mua bán ngoại tệ',    group: 'Bảo lãnh/TTQT',  pending: true  },
+];
+
+const TOTAL_SERVICES = SERVICE_DEFS.length;
+const ACTIVE_SERVICES = SERVICE_DEFS.filter((s) => !s.pending);
+
+// Nhóm dịch vụ theo category để hiển thị mini-grid
+const SERVICE_GROUPS_ORDER = ['Tài khoản', 'Digital', 'Thẻ', 'Thanh toán', 'Bảo hiểm', 'Bảo lãnh/TTQT', 'Khác'];
+const SERVICE_BY_GROUP = SERVICE_GROUPS_ORDER.reduce((acc, g) => {
+  acc[g] = ACTIVE_SERVICES.filter((s) => s.group === g);
+  return acc;
+}, {});
 
 // ─── Tính điểm tiềm năng (dư nợ + dư gửi + CASA, quy về đơn vị triệu) ─────────
 function calcTiemNang(row) {
@@ -82,6 +103,60 @@ function tiemNangTag(score) {
   if (score >= 10_000_000)  return { label: 'TB',  color: '#0369a1',  bg: '#f0f9ff' };
   return                           { label: 'Thấp', color: '#64748b', bg: '#f8fafc' };
 }
+
+const moneyFormatter = new Intl.NumberFormat('vi-VN');
+
+function money(value) {
+  if (value === null || value === undefined || value === '') return '';
+  return moneyFormatter.format(Number(value || 0));
+}
+
+// Tính số dịch vụ đã dùng (không tính pending)
+function countUsed(row) {
+  return SERVICE_DEFS.filter(
+    (s) => !s.pending && Number(row[s.key] || 0) > 0
+  ).length;
+}
+
+// Danh sách dịch vụ chưa dùng (không tính pending chưa có dữ liệu)
+function getUnusedServices(row) {
+  return SERVICE_DEFS.filter((s) => !s.pending && Number(row[s.key] || 0) === 0);
+}
+function getUsedServices(row) {
+  return SERVICE_DEFS.filter((s) => !s.pending && Number(row[s.key] || 0) > 0);
+}
+function getPendingServices() {
+  return SERVICE_DEFS.filter((s) => s.pending);
+}
+
+// ─── Mini dot-grid hiển thị trong 1 ô bảng ───────────────────────────────────
+const GROUP_COLORS = {
+  'Tín dụng':       '#d4380d',
+  'Tài khoản':      '#0369a1',
+  'Digital':        '#7c3aed',
+  'Thẻ':            '#b45309',
+  'Thanh toán':     '#0891b2',
+  'Bảo hiểm':       '#15803d',
+  'Bảo lãnh/TTQT':  '#9333ea',
+  'Khác':           '#64748b',
+};
+
+const CN_NAMES = {
+  'CN01': 'Chi nhánh Đông Hà Nội',
+  'CN02': 'Chi nhánh Láng Hạ',
+  'CN03': 'Chi nhánh Tây Hồ',
+  'CN04': 'Chi nhánh Cầu Giấy',
+};
+
+const PGD_NAMES = {
+  'PGD01': { name: 'PGD Gia Lâm', parent: 'CN01' },
+  'PGD02': { name: 'PGD Long Biên', parent: 'CN01' },
+  'PGD03': { name: 'PGD Đống Đa', parent: 'CN02' },
+  'PGD04': { name: 'PGD Láng Hạ', parent: 'CN02' },
+  'PGD05': { name: 'PGD Tây Hồ', parent: 'CN03' },
+  'PGD06': { name: 'PGD Nhật Tân', parent: 'CN03' },
+  'PGD07': { name: 'PGD Cầu Giấy', parent: 'CN04' },
+};
 
 function ServiceMiniGrid({ row, onUnusedClick }) {
   const used  = countUsed(row);
@@ -756,39 +831,31 @@ function CustomerReport() {
   const [searchText, setSearchText] = useState('');
   const [filterOfficer, setFilterOfficer] = useState(null);   // mã CB
   const [filterUnusedSvc, setFilterUnusedSvc] = useState(null); // key dịch vụ chưa dùng
-  const [filterCn, setFilterCn] = useState(null);
-  const [filterPgd, setFilterPgd] = useState(null);
+  const [filterCn, setFilterCn] = useState(null);               // mã CN
+  const [filterPgd, setFilterPgd] = useState(null);             // mã PGD
   const [filterLoanType, setFilterLoanType] = useState(null);
   const [filterMultiBranch, setFilterMultiBranch] = useState(null);
 
-  const handlePgdChange = (value) => {
-    setFilterPgd(value || null);
-    if (value) {
-      const matchedRow = rows.find((row) =>
-        String(row.ma_pgd || '')
-          .split(',')
-          .map((item) => item.trim())
-          .includes(value),
-      );
-      const firstBranch = String(matchedRow?.ma_cn || '')
-        .split(',')
-        .map((item) => item.trim())
-        .filter(Boolean)[0];
-      if (firstBranch) setFilterCn(firstBranch);
+  const handlePgdChange = (val) => {
+    setFilterPgd(val);
+    if (val) {
+      const pgdInfo = PGD_NAMES[val];
+      if (pgdInfo && pgdInfo.parent) {
+        setFilterCn(pgdInfo.parent);
+      }
     }
   };
 
-  const handleCnChange = (value) => {
-    setFilterCn(value || null);
-    if (value && filterPgd) {
-      const pgdBelongsToBranch = rows.some((row) => {
-        const branches = String(row.ma_cn || '').split(',').map((item) => item.trim());
-        const pgds = String(row.ma_pgd || '').split(',').map((item) => item.trim());
-        return branches.includes(value) && pgds.includes(filterPgd);
-      });
-      if (!pgdBelongsToBranch) setFilterPgd(null);
+  const handleCnChange = (val) => {
+    setFilterCn(val);
+    if (val) {
+      const pgdInfo = PGD_NAMES[filterPgd];
+      if (pgdInfo && pgdInfo.parent !== val) {
+        setFilterPgd(null);
+      }
+    } else {
+      setFilterPgd(null);
     }
-    if (!value) setFilterPgd(null);
   };
 
   // Modal states
@@ -850,10 +917,33 @@ function CustomerReport() {
     const pageSize = nextPagination?.pageSize || 25;
     setLoading(true);
     try {
-      const { data } = await client.get('/imports/summary', {
-        params: { period_key: periodKey, limit: 1000 },
-      });
-      setRows(Array.isArray(data) ? data : data.value || []);
+      const [profileResponse, summaryResponse, sourceResponse] = await Promise.all([
+        client.get('/customer-processing/profiles', {
+          params: {
+            ...getReportParams(periodKey),
+            include_total: true,
+            page: current,
+            page_size: pageSize,
+          },
+        }),
+        client.get('/customer-processing/profile-summary', {
+          params: getReportParams(periodKey),
+        }),
+        client.get('/imports/report-sources', {
+          params: { period_key: periodKey },
+        }),
+      ]);
+      const profilePayload = profileResponse.data;
+      const profileData = Array.isArray(profilePayload) ? profilePayload : profilePayload?.items;
+      const normalizedRows = (Array.isArray(profileData) ? profileData : []).map(normalizeProcessedProfile);
+      const total = Array.isArray(profilePayload) ? normalizedRows.length : Number(profilePayload?.total || 0);
+      if (!normalizedRows.length && total === 0) {
+        message.warning(`Kỳ ${periodKey} chưa có dữ liệu khách hàng đã xử lý`);
+      }
+      setRows(normalizedRows);
+      setReportPagination({ current, pageSize, total });
+      setReportSummary(summaryResponse.data || {});
+      setSourceRows(Array.isArray(sourceResponse.data) ? sourceResponse.data : []);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -1021,35 +1111,31 @@ function CustomerReport() {
 
   const cnOptions = useMemo(() => {
     const uniqueCns = [...new Set(
-      rows.flatMap((row) =>
-        String(row.ma_cn || '')
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
-      ),
-    )].sort();
-    return uniqueCns.map((cn) => ({
+      rows.flatMap((r) => String(r.ma_cn || '').split(',').map((item) => item.trim()).filter(Boolean))
+    )];
+    return uniqueCns.map(cn => ({
       value: cn,
-      label: CN_NAMES[cn] || `Chi nhánh ${cn}`,
+      label: CN_NAMES[cn] || `Chi nhánh ${cn}`
     }));
   }, [rows]);
 
   const pgdOptions = useMemo(() => {
     const uniquePgds = [...new Set(
       rows
-        .filter((row) => !filterCn || String(row.ma_cn || '').split(',').map((item) => item.trim()).includes(filterCn))
-        .flatMap((row) =>
-          String(row.ma_pgd || '')
-            .split(',')
-            .map((item) => item.trim())
-            .filter(Boolean),
-        ),
-    )].sort();
-    return uniquePgds.map((pgd) => ({
+        .filter(r => !filterCn || String(r.ma_cn || '').includes(filterCn))
+        .flatMap(r => String(r.ma_pgd || '').split(',').map((item) => item.trim()).filter(Boolean))
+        .filter(Boolean)
+    )];
+    return uniquePgds.map(pgd => ({
       value: pgd,
-      label: PGD_NAMES[pgd]?.name || pgd,
+      label: PGD_NAMES[pgd]?.name || pgd
     }));
   }, [rows, filterCn]);
+
+  const loanTypeOptions = useMemo(() => {
+    const values = [...new Set(rows.map((row) => row.loai_vay).filter(Boolean))];
+    return values.sort().map((value) => ({ value, label: value }));
+  }, [rows]);
 
   const stats = useMemo(() => {
     return rows.reduce(
@@ -1305,7 +1391,6 @@ function CustomerReport() {
                     (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                   }
                   style={{ width: '100%' }}
-                  disabled={!filterCn}
                 />
               </Form.Item>
             </Col>
@@ -1625,7 +1710,7 @@ function CustomerReport() {
       )}
 
       {/* Nội dung chính */}
-      {viewMode === 'sources' && (
+      {viewMode === 'sources' ? (
         <Card
           title="Theo dõi nguồn dữ liệu"
           extra={<Text type="secondary">Nguồn dữ liệu của kỳ đang xem</Text>}
@@ -1657,9 +1742,7 @@ function CustomerReport() {
             </Row>
           )}
         </Card>
-      )}
-
-      {viewMode === 'report' && (
+      ) : (
         <Card
           title={
             <Space>
