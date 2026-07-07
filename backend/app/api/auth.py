@@ -5,6 +5,8 @@ from pydantic import BaseModel
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import get_current_user
+from app.auth.schemas import CurrentUser
 from app.database import get_db
 from app.models import SystemRole, SystemUser
 from app.security import verify_password
@@ -58,3 +60,8 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     return {"user": serialize_user(user)}
+
+
+@router.get("/me")
+async def auth_me(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    return user

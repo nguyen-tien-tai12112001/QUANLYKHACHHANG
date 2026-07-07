@@ -45,6 +45,28 @@ import {
 } from '@ant-design/icons';
 
 import client from '../api/client';
+import VisualDashboard from '../components/dashboard/VisualDashboard';
+import { getScopeLabel, toApiBranchParams } from '../auth';
+import {
+  ACTIVE_SERVICES,
+  GROUP_COLORS,
+  SERVICE_BY_GROUP,
+  SERVICE_DEFS,
+  SERVICE_GROUPS_ORDER,
+  TOTAL_SERVICES,
+} from '../constants/services';
+import {
+  CN_NAMES,
+  PGD_NAMES,
+} from '../constants/branches';
+import { useBranchFilters } from '../hooks/useBranchFilters';
+import {
+  countUsed,
+  getPendingServices,
+  getUnusedServices,
+  getUsedServices,
+  money,
+} from '../utils/customerMetrics';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -59,7 +81,7 @@ const SERVICE_DEFS = [
   { key: 'sms_tien_gui',         label: 'SMS tiền gửi',         group: 'Digital',         pending: false },
   { key: 'the_ghi_no_noi_dia',   label: 'Thẻ ghi nợ nội địa',  group: 'Thẻ',             pending: false },
   { key: 'the_td_quoc_te',       label: 'Thẻ TD quốc tế',      group: 'Thẻ',             pending: false },
-  { key: 'the_td_loc_viet',      label: 'Thẻ TD Lộc Việt',     group: 'Thẻ',             pending: false },
+  { key: 'the_td_loc_viet',      label: 'Thẻ TD Lộc Việt',     group: 'Thẻ',             pending: true  },
   { key: 'tt_tien_dien',         label: 'TT tiền điện',         group: 'Thanh toán',      pending: true  },
   { key: 'tt_tien_nuoc',         label: 'TT tiền nước',         group: 'Thanh toán',      pending: true  },
   { key: 'tt_cuoc_vien_thong',   label: 'TT cước viễn thông',  group: 'Thanh toán',      pending: true  },
@@ -103,60 +125,6 @@ function tiemNangTag(score) {
   if (score >= 10_000_000)  return { label: 'TB',  color: '#0369a1',  bg: '#f0f9ff' };
   return                           { label: 'Thấp', color: '#64748b', bg: '#f8fafc' };
 }
-
-const moneyFormatter = new Intl.NumberFormat('vi-VN');
-
-function money(value) {
-  if (value === null || value === undefined || value === '') return '';
-  return moneyFormatter.format(Number(value || 0));
-}
-
-// Tính số dịch vụ đã dùng (không tính pending)
-function countUsed(row) {
-  return SERVICE_DEFS.filter(
-    (s) => !s.pending && Number(row[s.key] || 0) > 0
-  ).length;
-}
-
-// Danh sách dịch vụ chưa dùng (không tính pending chưa có dữ liệu)
-function getUnusedServices(row) {
-  return SERVICE_DEFS.filter((s) => !s.pending && Number(row[s.key] || 0) === 0);
-}
-function getUsedServices(row) {
-  return SERVICE_DEFS.filter((s) => !s.pending && Number(row[s.key] || 0) > 0);
-}
-function getPendingServices() {
-  return SERVICE_DEFS.filter((s) => s.pending);
-}
-
-// ─── Mini dot-grid hiển thị trong 1 ô bảng ───────────────────────────────────
-const GROUP_COLORS = {
-  'Tín dụng':       '#d4380d',
-  'Tài khoản':      '#0369a1',
-  'Digital':        '#7c3aed',
-  'Thẻ':            '#b45309',
-  'Thanh toán':     '#0891b2',
-  'Bảo hiểm':       '#15803d',
-  'Bảo lãnh/TTQT':  '#9333ea',
-  'Khác':           '#64748b',
-};
-
-const CN_NAMES = {
-  'CN01': 'Chi nhánh Đông Hà Nội',
-  'CN02': 'Chi nhánh Láng Hạ',
-  'CN03': 'Chi nhánh Tây Hồ',
-  'CN04': 'Chi nhánh Cầu Giấy',
-};
-
-const PGD_NAMES = {
-  'PGD01': { name: 'PGD Gia Lâm', parent: 'CN01' },
-  'PGD02': { name: 'PGD Long Biên', parent: 'CN01' },
-  'PGD03': { name: 'PGD Đống Đa', parent: 'CN02' },
-  'PGD04': { name: 'PGD Láng Hạ', parent: 'CN02' },
-  'PGD05': { name: 'PGD Tây Hồ', parent: 'CN03' },
-  'PGD06': { name: 'PGD Nhật Tân', parent: 'CN03' },
-  'PGD07': { name: 'PGD Cầu Giấy', parent: 'CN04' },
-};
 
 function ServiceMiniGrid({ row, onUnusedClick }) {
   const used  = countUsed(row);
@@ -833,8 +801,6 @@ function CustomerReport() {
   const [filterUnusedSvc, setFilterUnusedSvc] = useState(null); // key dịch vụ chưa dùng
   const [filterCn, setFilterCn] = useState(null);               // mã CN
   const [filterPgd, setFilterPgd] = useState(null);             // mã PGD
-  const [filterLoanType, setFilterLoanType] = useState(null);
-  const [filterMultiBranch, setFilterMultiBranch] = useState(null);
 
   const handlePgdChange = (val) => {
     setFilterPgd(val);
@@ -917,33 +883,10 @@ function CustomerReport() {
     const pageSize = nextPagination?.pageSize || 25;
     setLoading(true);
     try {
-      const [profileResponse, summaryResponse, sourceResponse] = await Promise.all([
-        client.get('/customer-processing/profiles', {
-          params: {
-            ...getReportParams(periodKey),
-            include_total: true,
-            page: current,
-            page_size: pageSize,
-          },
-        }),
-        client.get('/customer-processing/profile-summary', {
-          params: getReportParams(periodKey),
-        }),
-        client.get('/imports/report-sources', {
-          params: { period_key: periodKey },
-        }),
-      ]);
-      const profilePayload = profileResponse.data;
-      const profileData = Array.isArray(profilePayload) ? profilePayload : profilePayload?.items;
-      const normalizedRows = (Array.isArray(profileData) ? profileData : []).map(normalizeProcessedProfile);
-      const total = Array.isArray(profilePayload) ? normalizedRows.length : Number(profilePayload?.total || 0);
-      if (!normalizedRows.length && total === 0) {
-        message.warning(`Kỳ ${periodKey} chưa có dữ liệu khách hàng đã xử lý`);
-      }
-      setRows(normalizedRows);
-      setReportPagination({ current, pageSize, total });
-      setReportSummary(summaryResponse.data || {});
-      setSourceRows(Array.isArray(sourceResponse.data) ? sourceResponse.data : []);
+      const { data } = await client.get('/imports/summary', {
+        params: { period_key: periodKey, limit: 1000 },
+      });
+      setRows(Array.isArray(data) ? data : data.value || []);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -1110,9 +1053,7 @@ function CustomerReport() {
   }, []);
 
   const cnOptions = useMemo(() => {
-    const uniqueCns = [...new Set(
-      rows.flatMap((r) => String(r.ma_cn || '').split(',').map((item) => item.trim()).filter(Boolean))
-    )];
+    const uniqueCns = [...new Set(rows.map(r => r.ma_cn).filter(Boolean))];
     return uniqueCns.map(cn => ({
       value: cn,
       label: CN_NAMES[cn] || `Chi nhánh ${cn}`
@@ -1122,8 +1063,8 @@ function CustomerReport() {
   const pgdOptions = useMemo(() => {
     const uniquePgds = [...new Set(
       rows
-        .filter(r => !filterCn || String(r.ma_cn || '').includes(filterCn))
-        .flatMap(r => String(r.ma_pgd || '').split(',').map((item) => item.trim()).filter(Boolean))
+        .filter(r => !filterCn || r.ma_cn === filterCn)
+        .map(r => r.ma_pgd)
         .filter(Boolean)
     )];
     return uniquePgds.map(pgd => ({
@@ -1131,11 +1072,6 @@ function CustomerReport() {
       label: PGD_NAMES[pgd]?.name || pgd
     }));
   }, [rows, filterCn]);
-
-  const loanTypeOptions = useMemo(() => {
-    const values = [...new Set(rows.map((row) => row.loai_vay).filter(Boolean))];
-    return values.sort().map((value) => ({ value, label: value }));
-  }, [rows]);
 
   const stats = useMemo(() => {
     return rows.reduce(
@@ -1318,6 +1254,7 @@ function CustomerReport() {
                   onChange={setViewMode}
                   options={[
                     { label: 'Báo cáo', value: 'report' },
+                    { label: 'Trực quan', value: 'visual' },
                     { label: 'Nguồn DL', value: 'sources' },
                   ]}
                 />
@@ -1365,16 +1302,17 @@ function CustomerReport() {
             <Col xs={24} sm={12} md={4}>
               <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
                 <Select
-                  placeholder="Tất cả chi nhánh"
-                  value={filterCn}
+                  placeholder="Phạm vi xem"
+                  value={branchSelectValue}
                   onChange={handleCnChange}
-                  allowClear
+                  allowClear={false}
                   options={cnOptions}
                   showSearch
                   filterOption={(input, opt) =>
                     (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                   }
                   style={{ width: '100%' }}
+                  disabled={branchSelectDisabled}
                 />
               </Form.Item>
             </Col>
@@ -1391,6 +1329,7 @@ function CustomerReport() {
                     (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
                   }
                   style={{ width: '100%' }}
+                  disabled={pgdSelectDisabled || !filterCn}
                 />
               </Form.Item>
             </Col>
@@ -1711,38 +1650,32 @@ function CustomerReport() {
 
       {/* Nội dung chính */}
       {viewMode === 'sources' ? (
-        <Card
-          title="Theo dõi nguồn dữ liệu"
-          extra={<Text type="secondary">Nguồn dữ liệu của kỳ đang xem</Text>}
-        >
-          {sourceRows.length > 0 ? (
-            <Table
-              bordered
-              size="small"
-              rowKey="source_code"
-              columns={sourceColumns}
-              dataSource={sourceRows}
-              pagination={false}
-              scroll={{ x: 980 }}
-              locale={{ emptyText: <Empty description="Chưa có trạng thái nguồn dữ liệu" /> }}
-            />
-          ) : (
-            <Row gutter={[12, 12]}>
-              {sourceGroups.map((item) => (
-                <Col xs={24} md={8} key={item.label}>
-                  <div className="source-tile">
-                    <Space direction="vertical" size={8}>
-                      <Text strong>{item.label}</Text>
-                      {sourceTag(item.source)}
-                      <Text type="secondary">{item.note}</Text>
-                    </Space>
-                  </div>
-                </Col>
-              ))}
-            </Row>
-          )}
+        <Card title="Theo dõi nguồn dữ liệu">
+          <Row gutter={[12, 12]}>
+            {sourceGroups.map((item) => (
+              <Col xs={24} md={8} key={item.label}>
+                <div className="source-tile">
+                  <Space direction="vertical" size={8}>
+                    <Text strong>{item.label}</Text>
+                    {sourceTag(item.source)}
+                    <Text type="secondary">{item.note}</Text>
+                  </Space>
+                </div>
+              </Col>
+            ))}
+          </Row>
         </Card>
-      ) : (
+      )}
+
+      {viewMode === 'visual' && (
+        <VisualDashboard
+          rows={filteredRows}
+          showTrend={false}
+          emptyDescription="Hãy nhấn 'Demo Dữ Liệu' hoặc 'Xem báo cáo' để hiển thị biểu đồ phân tích trực quan"
+        />
+      )}
+
+      {viewMode === 'report' && (
         <Card
           title={
             <Space>

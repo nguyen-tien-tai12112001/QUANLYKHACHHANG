@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { notification } from 'antd';
 
+import { AuthProvider } from './auth';
 import MainLayout from './components/MainLayout';
 import Dashboard from './pages/Dashboard';
 import ImportData from './pages/ImportData';
@@ -88,9 +89,11 @@ function App() {
   }
 
   return (
-    <MainLayout activeMenu={activeMenu} onMenuChange={setActiveMenu} currentUser={currentUser} onLogout={handleLogout}>
-      {pages[activeMenu] || <Dashboard />}
-    </MainLayout>
+    <AuthProvider>
+      <MainLayout activeMenu={activeMenu} onMenuChange={setActiveMenu} currentUser={currentUser} onLogout={handleLogout}>
+        {pages[activeMenu] || <Dashboard />}
+      </MainLayout>
+    </AuthProvider>
   );
 }
 
