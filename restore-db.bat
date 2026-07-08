@@ -1,6 +1,8 @@
 @echo off
 setlocal
 
+set PATH=%PATH%;C:\Program Files\Docker\Docker\resources\bin
+
 if "%~1"=="" (
   echo Usage: restore-db.bat database\backups\your_backup.sql
   exit /b 1

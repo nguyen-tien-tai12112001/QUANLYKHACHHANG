@@ -1,6 +1,8 @@
 @echo off
 setlocal
 
+set PATH=%PATH%;C:\Program Files\Docker\Docker\resources\bin
+
 echo Starting PostgreSQL with Docker Compose...
 docker compose up -d
 

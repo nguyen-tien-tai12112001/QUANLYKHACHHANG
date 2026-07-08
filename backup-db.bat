@@ -1,6 +1,8 @@
 @echo off
 setlocal
 
+set PATH=%PATH%;C:\Program Files\Docker\Docker\resources\bin
+
 if not exist database\backups (
   mkdir database\backups
 )
