@@ -584,10 +584,174 @@ function CustomerDetailModal({ customer, open, onClose }) {
             {customer.ghi_chu || <Text type="secondary">Chưa có ghi chú</Text>}
           </Descriptions.Item>
         </Descriptions>
+
+        <BranchDetailSection customer={customer} />
         
         <ServiceDetailView customer={customer} />
       </div>
     </Modal>
+  );
+}
+
+function BranchDetailSection({ customer }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+
+  async function loadBranchDetails() {
+    if (!customer?.period_key || !customer?.ma_kh) {
+      message.warning('Thiếu kỳ dữ liệu hoặc mã khách hàng để xem chi tiết chi nhánh');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { data } = await client.get('/customer-processing/branch-details', {
+        params: {
+          period_key: customer.period_key,
+          ma_kh: customer.ma_kh,
+        },
+      });
+      setRows(data || []);
+      setLoaded(true);
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message || 'Không tải được chi tiết theo chi nhánh');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const columns = [
+    {
+      title: 'Chi nhánh / PGD',
+      key: 'branch',
+      fixed: 'left',
+      width: 230,
+      render: (_, row) => (
+        <Space orientation="vertical" size={2}>
+          <Tag color="blue">{row.branch_code || 'Chưa có chi nhánh'}</Tag>
+          <Text strong>{row.ten_pgd || formatPgdLabel(row.ma_pgd) || 'Chưa có PGD'}</Text>
+          {row.ma_pgd && <Text type="secondary">Mã PGD: {row.ma_pgd}</Text>}
+        </Space>
+      ),
+    },
+    {
+      title: 'Dư nợ vay',
+      dataIndex: 'so_du_tien_vay',
+      width: 130,
+      align: 'right',
+      render: (value) => `${money(value) || 0} đ`,
+    },
+    {
+      title: 'Loại vay',
+      dataIndex: 'loai_vay',
+      width: 130,
+      render: (value) => value ? <Tag color="volcano">{value}</Tag> : <Text type="secondary">—</Text>,
+    },
+    {
+      title: 'Tiền gửi CKH',
+      dataIndex: 'so_du_tien_gui',
+      width: 130,
+      align: 'right',
+      render: (value) => `${money(value) || 0} đ`,
+    },
+    {
+      title: 'TGTT bình quân',
+      dataIndex: 'so_du_tgtt_binh_quan',
+      width: 140,
+      align: 'right',
+      render: (value) => `${money(value) || 0} đ`,
+    },
+    {
+      title: 'Doanh số CR',
+      dataIndex: 'doanh_so_cramt',
+      width: 130,
+      align: 'right',
+      render: (value) => `${money(value) || 0} đ`,
+    },
+    {
+      title: 'Doanh số DR',
+      dataIndex: 'doanh_so_dramt',
+      width: 130,
+      align: 'right',
+      render: (value) => `${money(value) || 0} đ`,
+    },
+    {
+      title: 'Dịch vụ tại chi nhánh',
+      key: 'services',
+      width: 320,
+      render: (_, row) => {
+        const used = getUsedServices(row);
+        if (!used.length) return <Text type="secondary">Chưa ghi nhận dịch vụ</Text>;
+        return (
+          <Space size={[4, 4]} wrap>
+            {used.map((service) => (
+              <Tag key={service.key} color="success">
+                {service.label}
+              </Tag>
+            ))}
+          </Space>
+        );
+      },
+    },
+  ];
+
+  const summary = rows.reduce(
+    (acc, row) => ({
+      loan: acc.loan + Number(row.so_du_tien_vay || 0),
+      deposit: acc.deposit + Number(row.so_du_tien_gui || 0),
+      casa: acc.casa + Number(row.so_du_tgtt_binh_quan || 0),
+    }),
+    { loan: 0, deposit: 0, casa: 0 },
+  );
+
+  return (
+    <Card
+      size="small"
+      className="branch-detail-card"
+      title={
+        <Space>
+          <BankOutlined />
+          <span>Chi tiết theo chi nhánh / PGD</span>
+          {loaded && <Tag color="blue">{rows.length} điểm phát sinh</Tag>}
+        </Space>
+      }
+      extra={
+        <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={loadBranchDetails}>
+          {loaded ? 'Tải lại' : 'Xem chi tiết'}
+        </Button>
+      }
+    >
+      {!loaded ? (
+        <Empty
+          image={Empty.PRESENTED_IMAGE_SIMPLE}
+          description="Bấm Xem chi tiết để biết khách hàng vay, gửi tiền và dùng dịch vụ ở chi nhánh/PGD nào"
+        />
+      ) : (
+        <>
+          <Row gutter={[8, 8]} className="branch-detail-summary">
+            <Col xs={24} md={8}>
+              <Tag color="volcano">Dư nợ: {money(summary.loan)} đ</Tag>
+            </Col>
+            <Col xs={24} md={8}>
+              <Tag color="green">Tiền gửi CKH: {money(summary.deposit)} đ</Tag>
+            </Col>
+            <Col xs={24} md={8}>
+              <Tag color="cyan">TGTT BQ: {money(summary.casa)} đ</Tag>
+            </Col>
+          </Row>
+          <Table
+            size="small"
+            rowKey={(row) => `${row.branch_code || ''}-${row.ma_pgd || ''}`}
+            columns={columns}
+            dataSource={rows}
+            loading={loading}
+            pagination={false}
+            scroll={{ x: 1250 }}
+            locale={{ emptyText: <Empty description="Chưa có dữ liệu chi tiết theo chi nhánh" /> }}
+          />
+        </>
+      )}
+    </Card>
   );
 }
 
