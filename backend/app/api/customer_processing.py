@@ -1,10 +1,14 @@
 from datetime import date, datetime
 from decimal import Decimal
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import and_, desc, func, or_
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
+from sqlalchemy import and_, asc, desc, func, or_
 from sqlalchemy.orm import Session
 
+from app.auth.branch_scope import BranchScope
+from app.auth.dependencies import get_current_user
+from app.auth.schemas import CurrentUser
+from app.auth.branch_scope import resolve_branch_scope
 from app.customer_processing import (
     REQUIRED_FILE_TYPES,
     create_processing_job,
@@ -78,15 +82,90 @@ PROFILE_SERVICE_FIELDS = {
     "the_td_loc_viet",
 }
 
+SERVICE_LABELS = {
+    "thau_chi": "Thấu chi",
+    "tk_so_dep": "TK số đẹp",
+    "agribank_plus": "Agribank Plus",
+    "tin_nhan_ott": "Tin nhắn OTT",
+    "sms_nhac_no_vay": "SMS nhắc nợ vay",
+    "sms_tien_gui": "SMS tiền gửi",
+    "the_ghi_no_noi_dia": "Thẻ ghi nợ nội địa",
+    "the_td_quoc_te": "Thẻ TD quốc tế",
+    "the_td_loc_viet": "Thẻ TD Lộc Việt",
+}
+
+SERVICE_GROUPS = {
+    "thau_chi": "Tài khoản",
+    "tk_so_dep": "Tài khoản",
+    "agribank_plus": "Digital",
+    "tin_nhan_ott": "Digital",
+    "sms_nhac_no_vay": "Digital",
+    "sms_tien_gui": "Digital",
+    "the_ghi_no_noi_dia": "Thẻ",
+    "the_td_quoc_te": "Thẻ",
+    "the_td_loc_viet": "Thẻ",
+}
+
+SORTABLE_FIELDS = {
+    "ma_kh": CustomerPeriodProfile.ma_kh,
+    "ten_kh": CustomerPeriodProfile.ten_kh,
+    "so_du_tien_vay": CustomerPeriodProfile.so_du_tien_vay,
+    "so_du_tgtt_binh_quan": CustomerPeriodProfile.so_du_tgtt_binh_quan,
+    "so_du_tien_gui": CustomerPeriodProfile.so_du_tien_gui,
+    "branch_count": CustomerPeriodProfile.branch_count,
+}
+
 
 def no_service_condition():
     return and_(*(getattr(CustomerPeriodProfile, field) == 0 for field in PROFILE_SERVICE_FIELDS))
+
+
+def used_count_expression():
+    return sum(func.coalesce(getattr(CustomerPeriodProfile, field), 0) for field in PROFILE_SERVICE_FIELDS)
+
+
+async def get_report_branch_scope(
+    request: Request,
+    branch_code: str | None = Query(default=None),
+    pgd_code: str | None = Query(default=None),
+    user: CurrentUser = Depends(get_current_user),
+) -> BranchScope:
+    return resolve_branch_scope(user, branch_code, pgd_code)
+
+
+def effective_scope_filters(scope: BranchScope, branch_code: str | None, pgd_code: str | None) -> tuple[str | None, str | None]:
+    return scope.ma_cn or branch_code, scope.ma_pgd or pgd_code
 
 
 def split_filter_values(value: str | None) -> list[str]:
     if not value:
         return []
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+def apply_cross_sell_rule(query, rule: str | None):
+    if not rule:
+        return query
+    if rule == "deposit_plus":
+        return query.filter(
+            (func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0)) >= 1_000_000_000,
+            CustomerPeriodProfile.agribank_plus == 0,
+        )
+    if rule == "loan_sms":
+        return query.filter(
+            func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) > 0,
+            CustomerPeriodProfile.sms_nhac_no_vay == 0,
+        )
+    if rule == "casa_card":
+        return query.filter(
+            func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= 500_000_000,
+            CustomerPeriodProfile.the_ghi_no_noi_dia == 0,
+            CustomerPeriodProfile.the_td_quoc_te == 0,
+            CustomerPeriodProfile.the_td_loc_viet == 0,
+        )
+    if rule == "multi_branch":
+        return query.filter(CustomerPeriodProfile.branch_count > 1)
+    return query
 
 
 def apply_profile_filters(
@@ -98,6 +177,17 @@ def apply_profile_filters(
     loan_type: str | None = None,
     officer_code: str | None = None,
     unused_service: str | None = None,
+    used_service: str | None = None,
+    customer_type: str | None = None,
+    loan_min: float | None = None,
+    loan_max: float | None = None,
+    deposit_min: float | None = None,
+    deposit_max: float | None = None,
+    casa_min: float | None = None,
+    casa_max: float | None = None,
+    service_count_min: int | None = None,
+    service_count_max: int | None = None,
+    cross_sell_rule: str | None = None,
     multi_branch: bool | None = None,
     no_service: bool = False,
 ):
@@ -116,6 +206,8 @@ def apply_profile_filters(
         query = query.filter(CustomerPeriodProfile.branch_codes.ilike(f"%{branch_code.strip()}%"))
     if pgd_code:
         query = query.filter(CustomerPeriodProfile.pgd_codes.ilike(f"%{pgd_code.strip()}%"))
+    if customer_type:
+        query = query.filter(CustomerPeriodProfile.loai_khach_hang == customer_type.strip())
     if loan_type:
         loan_types = split_filter_values(loan_type)
         if loan_types:
@@ -124,12 +216,60 @@ def apply_profile_filters(
         query = query.filter(CustomerPeriodProfile.ma_cb == officer_code)
     if multi_branch is not None:
         query = query.filter(CustomerPeriodProfile.branch_count > 1 if multi_branch else CustomerPeriodProfile.branch_count <= 1)
+    if loan_min is not None:
+        query = query.filter(func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) >= loan_min)
+    if loan_max is not None:
+        query = query.filter(func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) <= loan_max)
+    if deposit_min is not None:
+        query = query.filter(func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) >= deposit_min)
+    if deposit_max is not None:
+        query = query.filter(func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) <= deposit_max)
+    if casa_min is not None:
+        query = query.filter(func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= casa_min)
+    if casa_max is not None:
+        query = query.filter(func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) <= casa_max)
+    used_services = [item for item in split_filter_values(used_service) if item in PROFILE_SERVICE_FIELDS]
+    if used_services:
+        query = query.filter(or_(*(getattr(CustomerPeriodProfile, service) > 0 for service in used_services)))
     unused_services = [item for item in split_filter_values(unused_service) if item in PROFILE_SERVICE_FIELDS]
     for service in unused_services:
         query = query.filter(getattr(CustomerPeriodProfile, service) == 0)
+    used_count = used_count_expression()
+    if service_count_min is not None:
+        query = query.filter(used_count >= service_count_min)
+    if service_count_max is not None:
+        query = query.filter(used_count <= service_count_max)
+    query = apply_cross_sell_rule(query, cross_sell_rule)
     if no_service:
         query = query.filter(no_service_condition())
     return query
+
+
+def apply_profile_sort(query, sort_by: str | None = None, sort_order: str | None = None):
+    column = SORTABLE_FIELDS.get(sort_by or "")
+    if column is None:
+        return query.order_by(desc(CustomerPeriodProfile.branch_count), CustomerPeriodProfile.ma_kh)
+    direction = desc if (sort_order or "desc").lower() == "desc" else asc
+    return query.order_by(direction(column), CustomerPeriodProfile.ma_kh)
+
+
+def build_filtered_profile_query(
+    db: Session,
+    period_key: str,
+    scope: BranchScope,
+    *,
+    branch_code: str | None = None,
+    pgd_code: str | None = None,
+    **filters,
+):
+    effective_branch, effective_pgd = effective_scope_filters(scope, branch_code, pgd_code)
+    query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
+    return apply_profile_filters(
+        query,
+        branch_code=effective_branch,
+        pgd_code=effective_pgd,
+        **filters,
+    )
 
 
 @router.get("/periods")
@@ -269,23 +409,49 @@ def list_profiles(
     loan_type: str | None = None,
     officer_code: str | None = None,
     unused_service: str | None = None,
+    used_service: str | None = None,
+    customer_type: str | None = None,
+    loan_min: float | None = None,
+    loan_max: float | None = None,
+    deposit_min: float | None = None,
+    deposit_max: float | None = None,
+    casa_min: float | None = None,
+    casa_max: float | None = None,
+    service_count_min: int | None = None,
+    service_count_max: int | None = None,
+    cross_sell_rule: str | None = None,
     no_service: bool = False,
     multi_branch: bool | None = None,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
     limit: int | None = Query(default=None, ge=1, le=1000),
     include_total: bool = False,
+    scope: BranchScope = Depends(get_report_branch_scope),
     db: Session = Depends(get_db),
 ):
-    query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
-    query = apply_profile_filters(
-        query,
-        keyword=keyword,
+    query = build_filtered_profile_query(
+        db,
+        period_key,
+        scope,
         branch_code=branch_code,
         pgd_code=pgd_code,
+        keyword=keyword,
         loan_type=loan_type,
         officer_code=officer_code,
         unused_service=unused_service,
+        used_service=used_service,
+        customer_type=customer_type,
+        loan_min=loan_min,
+        loan_max=loan_max,
+        deposit_min=deposit_min,
+        deposit_max=deposit_max,
+        casa_min=casa_min,
+        casa_max=casa_max,
+        service_count_min=service_count_min,
+        service_count_max=service_count_max,
+        cross_sell_rule=cross_sell_rule,
         multi_branch=multi_branch,
         no_service=no_service,
     )
@@ -327,7 +493,7 @@ def list_profiles(
     total = query.count() if include_total else None
     effective_page_size = limit if isinstance(limit, int) else page_size
     rows = (
-        query.order_by(desc(CustomerPeriodProfile.branch_count), CustomerPeriodProfile.ma_kh)
+        apply_profile_sort(query, sort_by, sort_order)
         .offset((page - 1) * effective_page_size)
         .limit(effective_page_size)
         .all()
@@ -347,18 +513,42 @@ def get_profile_summary(
     loan_type: str | None = None,
     officer_code: str | None = None,
     unused_service: str | None = None,
+    used_service: str | None = None,
+    customer_type: str | None = None,
+    loan_min: float | None = None,
+    loan_max: float | None = None,
+    deposit_min: float | None = None,
+    deposit_max: float | None = None,
+    casa_min: float | None = None,
+    casa_max: float | None = None,
+    service_count_min: int | None = None,
+    service_count_max: int | None = None,
+    cross_sell_rule: str | None = None,
     multi_branch: bool | None = None,
+    scope: BranchScope = Depends(get_report_branch_scope),
     db: Session = Depends(get_db),
 ):
-    query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
-    query = apply_profile_filters(
-        query,
-        keyword=keyword,
+    query = build_filtered_profile_query(
+        db,
+        period_key,
+        scope,
         branch_code=branch_code,
         pgd_code=pgd_code,
+        keyword=keyword,
         loan_type=loan_type,
         officer_code=officer_code,
         unused_service=unused_service,
+        used_service=used_service,
+        customer_type=customer_type,
+        loan_min=loan_min,
+        loan_max=loan_max,
+        deposit_min=deposit_min,
+        deposit_max=deposit_max,
+        casa_min=casa_min,
+        casa_max=casa_max,
+        service_count_min=service_count_min,
+        service_count_max=service_count_max,
+        cross_sell_rule=cross_sell_rule,
         multi_branch=multi_branch,
     )
     summary = query.with_entities(
@@ -377,15 +567,168 @@ def get_profile_summary(
     }
 
 
+@router.get("/profile-analytics")
+def get_profile_analytics(
+    period_key: str = Query(...),
+    keyword: str | None = None,
+    branch_code: str | None = None,
+    pgd_code: str | None = None,
+    loan_type: str | None = None,
+    officer_code: str | None = None,
+    unused_service: str | None = None,
+    used_service: str | None = None,
+    customer_type: str | None = None,
+    loan_min: float | None = None,
+    loan_max: float | None = None,
+    deposit_min: float | None = None,
+    deposit_max: float | None = None,
+    casa_min: float | None = None,
+    casa_max: float | None = None,
+    service_count_min: int | None = None,
+    service_count_max: int | None = None,
+    cross_sell_rule: str | None = None,
+    multi_branch: bool | None = None,
+    scope: BranchScope = Depends(get_report_branch_scope),
+    db: Session = Depends(get_db),
+):
+    query = build_filtered_profile_query(
+        db,
+        period_key,
+        scope,
+        branch_code=branch_code,
+        pgd_code=pgd_code,
+        keyword=keyword,
+        loan_type=loan_type,
+        officer_code=officer_code,
+        unused_service=unused_service,
+        used_service=used_service,
+        customer_type=customer_type,
+        loan_min=loan_min,
+        loan_max=loan_max,
+        deposit_min=deposit_min,
+        deposit_max=deposit_max,
+        casa_min=casa_min,
+        casa_max=casa_max,
+        service_count_min=service_count_min,
+        service_count_max=service_count_max,
+        cross_sell_rule=cross_sell_rule,
+        multi_branch=multi_branch,
+    )
+
+    total_customers = query.count()
+    totals = query.with_entities(
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_gui), 0),
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
+    ).one()
+    no_service_count = query.filter(no_service_condition()).count()
+
+    service_penetration = []
+    for key in PROFILE_SERVICE_FIELDS:
+        count = query.filter(getattr(CustomerPeriodProfile, key) > 0).count()
+        service_penetration.append({
+            "key": key,
+            "label": SERVICE_LABELS[key],
+            "group": SERVICE_GROUPS.get(key, "Khác"),
+            "count": count,
+            "pct": round((count / total_customers) * 100) if total_customers else 0,
+        })
+    service_penetration.sort(key=lambda item: item["pct"], reverse=True)
+
+    cn_count = query.filter(CustomerPeriodProfile.loai_khach_hang == "KHCN").count()
+    dn_count = query.filter(CustomerPeriodProfile.loai_khach_hang == "KHDN").count()
+    cn_loan = query.filter(CustomerPeriodProfile.loai_khach_hang == "KHCN").with_entities(
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0)
+    ).scalar() or 0
+    dn_loan = query.filter(CustomerPeriodProfile.loai_khach_hang == "KHDN").with_entities(
+        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0)
+    ).scalar() or 0
+
+    loan_type_rows = (
+        query.with_entities(
+            func.coalesce(CustomerPeriodProfile.loai_vay, "Không xác định"),
+            func.count(CustomerPeriodProfile.id),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
+        )
+        .group_by(CustomerPeriodProfile.loai_vay)
+        .all()
+    )
+    total_loan = float(totals[0] or 0)
+    loan_type_breakdown = [
+        {
+            "type": loan_type_value or "Không xác định",
+            "count": count,
+            "amt": float(amt or 0),
+            "pct": round((float(amt or 0) / total_loan) * 100) if total_loan else 0,
+        }
+        for loan_type_value, count, amt in loan_type_rows
+    ]
+    loan_type_breakdown.sort(key=lambda item: item["amt"], reverse=True)
+
+    officer_rows = (
+        query.filter(CustomerPeriodProfile.ma_cb.isnot(None))
+        .with_entities(
+            CustomerPeriodProfile.ma_cb,
+            CustomerPeriodProfile.ten_can_bo,
+            func.count(CustomerPeriodProfile.id),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
+            *[
+                func.coalesce(func.sum(getattr(CustomerPeriodProfile, key)), 0).label(key)
+                for key in PROFILE_SERVICE_FIELDS
+            ],
+        )
+        .group_by(CustomerPeriodProfile.ma_cb, CustomerPeriodProfile.ten_can_bo)
+        .order_by(desc(func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0)))
+        .limit(10)
+        .all()
+    )
+
+    officer_top10 = []
+    for row in officer_rows:
+        ma_cb, ten_can_bo, cust_count, total_loan_amt, total_casa = row[:5]
+        used_services_total = sum(float(value or 0) for value in row[5:])
+        officer_top10.append({
+            "code": ma_cb,
+            "name": ten_can_bo or ma_cb,
+            "custCount": cust_count,
+            "totalLoan": float(total_loan_amt or 0),
+            "totalCASA": float(total_casa or 0),
+            "avgCrossSell": round(used_services_total / cust_count, 1) if cust_count else 0,
+        })
+
+    return {
+        "period_key": period_key,
+        "kpis": {
+            "total_customers": total_customers,
+            "total_loan": float(totals[0] or 0),
+            "total_deposit": float(totals[1] or 0),
+            "total_casa": float(totals[2] or 0),
+            "no_service_customers": no_service_count,
+        },
+        "segment": {
+            "cn": cn_count,
+            "dn": dn_count,
+            "cn_loan": float(cn_loan or 0),
+            "dn_loan": float(dn_loan or 0),
+        },
+        "loan_type_breakdown": loan_type_breakdown,
+        "service_penetration": service_penetration[:5],
+        "officer_top10": officer_top10,
+    }
+
+
 @router.get("/profile-filter-options")
 def get_profile_filter_options(
     period_key: str = Query(...),
     branch_code: str | None = None,
     pgd_code: str | None = None,
+    scope: BranchScope = Depends(get_report_branch_scope),
     db: Session = Depends(get_db),
 ):
+    effective_branch, effective_pgd = effective_scope_filters(scope, branch_code, pgd_code)
     base_query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
-    scoped_query = apply_profile_filters(base_query, branch_code=branch_code, pgd_code=pgd_code)
+    scoped_query = apply_profile_filters(base_query, branch_code=effective_branch, pgd_code=effective_pgd)
 
     branch_rows = (
         db.query(CustomerPeriodProfile.branch_codes)
@@ -455,7 +798,7 @@ def get_profile_filter_options(
     pgd_options = [
         {
             "value": pgd,
-            "label": (pgd_name_map.get(f"{branch_code}:{pgd}") if branch_code else None) or pgd_name_map.get(pgd) or pgd,
+            "label": (pgd_name_map.get(f"{effective_branch}:{pgd}") if effective_branch else None) or pgd_name_map.get(pgd) or pgd,
         }
         for pgd in pgds
     ]
