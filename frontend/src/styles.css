@@ -1310,6 +1310,20 @@ body {
   background: linear-gradient(90deg, rgba(140, 24, 43, 0.06), rgba(245, 158, 11, 0.08));
 }
 
+.branch-detail-card {
+  margin: 10px 0;
+  border-color: rgba(143, 20, 56, 0.12);
+}
+
+.branch-detail-card .ant-card-head-title {
+  color: var(--agri-red-dark);
+  font-weight: 600;
+}
+
+.branch-detail-summary {
+  margin-bottom: 8px;
+}
+
 .customer-report-page {
   display: flex;
   flex-direction: column;
