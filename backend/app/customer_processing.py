@@ -1,10 +1,12 @@
 import shutil
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from fastapi import UploadFile
 from sqlalchemy import delete, func, text
 from sqlalchemy.orm import Session
+from openpyxl import load_workbook
 
 from app.database import SessionLocal
 from app.models import (
@@ -15,11 +17,15 @@ from app.models import (
     CustomerProcessingOptionalFile,
     ImportBatch,
     ImportFile,
+    SupplementalBaoLanhRecord,
+    SupplementalOABRecord,
 )
 
 
 OPTIONAL_UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads" / "optional"
 REQUIRED_FILE_TYPES = ("DP01", "LN01", "CN05", "PF14")
+BAO_LANH_LC_CODES = {"ILU", "ILS"}
+BAO_LANH_CODES = {"VPB", "VMB", "VAB", "VBB", "VSB", "VRT"}
 
 
 EXCHANGE_RATE_SQL = text(
@@ -315,6 +321,9 @@ PROFILE_SQL = text(
             MAX(the_td_noi_dia) AS the_td_noi_dia,
             MAX(the_td_quoc_te) AS the_td_quoc_te,
             MAX(the_td_loc_viet) AS the_td_loc_viet,
+            MAX(bao_lanh) AS bao_lanh,
+            MAX(loa_bien_dong_so_du) AS loa_bien_dong_so_du,
+            MAX(phat_hanh_lc) AS phat_hanh_lc,
             jsonb_agg(
                 jsonb_build_object(
                     'branch_code', branch_code,
@@ -334,6 +343,9 @@ PROFILE_SQL = text(
                     'the_ghi_no_noi_dia', the_ghi_no_noi_dia,
                     'the_td_quoc_te', the_td_quoc_te,
                     'the_td_loc_viet', the_td_loc_viet,
+                    'bao_lanh', bao_lanh,
+                    'loa_bien_dong_so_du', loa_bien_dong_so_du,
+                    'phat_hanh_lc', phat_hanh_lc,
                     'ma_cb', ma_cb,
                     'ten_can_bo', ten_can_bo
                 )
@@ -402,6 +414,9 @@ PROFILE_SQL = text(
         the_td_noi_dia,
         the_td_quoc_te,
         the_td_loc_viet,
+        bao_lanh,
+        loa_bien_dong_so_du,
+        phat_hanh_lc,
         ma_cb,
         ten_can_bo,
         telephone,
@@ -435,6 +450,9 @@ PROFILE_SQL = text(
         detail_agg.the_td_noi_dia,
         detail_agg.the_td_quoc_te,
         detail_agg.the_td_loc_viet,
+        detail_agg.bao_lanh,
+        detail_agg.loa_bien_dong_so_du,
+        detail_agg.phat_hanh_lc,
         COALESCE(loan_staff.ln_ma_cb, staff.dp_ma_cb),
         COALESCE(loan_staff.ln_ten_can_bo, staff.dp_ten_can_bo),
         phones.telephone,
@@ -446,6 +464,253 @@ PROFILE_SQL = text(
     LEFT JOIN phones ON phones.ma_kh = detail_agg.ma_kh
     """
 )
+
+
+SUPPLEMENT_BRANCH_UPDATE_SQL = text(
+    """
+    UPDATE customer_period_branch_details detail
+    SET
+        bao_lanh = CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM supplemental_bao_lanh_records bao_lanh
+                WHERE bao_lanh.period_key = detail.period_key
+                    AND bao_lanh.ma_kh = detail.ma_kh
+                    AND bao_lanh.branch_code = detail.branch_code
+                    AND bao_lanh.is_bao_lanh = 1
+            ) THEN 1 ELSE detail.bao_lanh END,
+        phat_hanh_lc = CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM supplemental_bao_lanh_records bao_lanh
+                WHERE bao_lanh.period_key = detail.period_key
+                    AND bao_lanh.ma_kh = detail.ma_kh
+                    AND bao_lanh.branch_code = detail.branch_code
+                    AND bao_lanh.is_lc = 1
+            ) THEN 1 ELSE detail.phat_hanh_lc END,
+        loa_bien_dong_so_du = CASE
+            WHEN EXISTS (
+                SELECT 1
+                FROM supplemental_oab_records oab
+                INNER JOIN dp01_deposit_accounts dp
+                    ON dp.period_key = oab.period_key
+                    AND TRIM(BOTH FROM REPLACE(COALESCE(dp.so_tai_khoan, ''), '''', '')) =
+                        TRIM(BOTH FROM REPLACE(COALESCE(oab.tk_agribank, ''), '''', ''))
+                WHERE oab.period_key = detail.period_key
+                    AND dp.ma_kh = detail.ma_kh
+                    AND dp.ma_cn = detail.branch_code
+            ) THEN 1 ELSE detail.loa_bien_dong_so_du END
+    WHERE detail.period_key = :period_key
+    """
+)
+
+
+def clean_text(value) -> str | None:
+    if value is None:
+        return None
+    text_value = str(value).strip()
+    if not text_value:
+        return None
+    if text_value.endswith(".0") and text_value[:-2].isdigit():
+        text_value = text_value[:-2]
+    return text_value.replace("'", "").strip() or None
+
+
+def clean_customer_code(value) -> str | None:
+    text_value = clean_text(value)
+    if not text_value:
+        return None
+    return text_value.lstrip("`'").strip()
+
+
+def parse_decimal_value(value) -> Decimal | None:
+    if value is None or value == "":
+        return None
+    try:
+        if isinstance(value, Decimal):
+            return value
+        if isinstance(value, (int, float)):
+            return Decimal(str(value))
+        normalized = str(value).strip().replace(",", "")
+        if not normalized:
+            return None
+        return Decimal(normalized)
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def parse_date_value(value):
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        return value.date()
+    text_value = str(value).strip()
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(text_value, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
+def detect_optional_file_type(filename: str) -> str | None:
+    normalized = filename.lower().replace(" ", "")
+    if "baolanh" in normalized or "bao_lanh" in normalized:
+        return "BAO_LANH"
+    if "oab" in normalized or "loa" in normalized:
+        return "OAB_LOA"
+    return None
+
+
+def excel_rows_from_xls(path: Path):
+    import xlrd
+
+    workbook = xlrd.open_workbook(str(path))
+    sheet = workbook.sheet_by_index(0)
+    for row_index in range(sheet.nrows):
+        yield [sheet.cell_value(row_index, col_index) for col_index in range(sheet.ncols)]
+
+
+def excel_rows_from_xlsx(path: Path):
+    workbook = load_workbook(path, read_only=True, data_only=True)
+    sheet = workbook.worksheets[0]
+    try:
+        for row in sheet.iter_rows(values_only=True):
+            yield list(row)
+    finally:
+        workbook.close()
+
+
+def parse_bao_lanh_file(db: Session, item: CustomerProcessingOptionalFile) -> int:
+    file_path = Path(item.file_path)
+    rows = excel_rows_from_xls(file_path) if file_path.suffix.lower() == ".xls" else excel_rows_from_xlsx(file_path)
+    inserted = 0
+    headers: list[str] | None = None
+    batch: list[SupplementalBaoLanhRecord] = []
+
+    for row in rows:
+        if headers is None:
+            headers = [str(cell or "").strip() for cell in row]
+            continue
+        values = {headers[index]: row[index] if index < len(row) else None for index in range(len(headers))}
+        branch_code = clean_text(values.get("Ma_CN"))
+        ma_kh = clean_customer_code(values.get("Ma_Kh"))
+        loai_bllc = (clean_text(values.get("Loaibllc")) or "").upper()
+        if not branch_code or not ma_kh:
+            continue
+        record = SupplementalBaoLanhRecord(
+            optional_file_id=item.id,
+            period_key=item.period_key,
+            branch_code=branch_code,
+            ma_kh=ma_kh,
+            ma_kh_chuan=f"{branch_code}{ma_kh}",
+            ten_kh=clean_text(values.get("Ten_KH")),
+            tai_khoan=clean_text(values.get("Tai_Khoan")),
+            so_hdbl=clean_text(values.get("So_HDBL")),
+            ngay_bd=parse_date_value(values.get("Ngay_bd")),
+            ngay_het_hl=parse_date_value(values.get("Ngayhethl")),
+            loai_bllc=loai_bllc or None,
+            tien_te=clean_text(values.get("tien_te")),
+            nguyen_te=parse_decimal_value(values.get("Nguyete")),
+            ty_gia=parse_decimal_value(values.get("Ty_gia")),
+            vnd=parse_decimal_value(values.get("VND")),
+            so_tien=parse_decimal_value(values.get("SoTien")),
+            is_bao_lanh=1 if loai_bllc in BAO_LANH_CODES or loai_bllc.startswith("V") else 0,
+            is_lc=1 if loai_bllc in BAO_LANH_LC_CODES else 0,
+            raw_data={key: clean_text(value) for key, value in values.items()},
+        )
+        batch.append(record)
+        inserted += 1
+        if len(batch) >= 1000:
+            db.add_all(batch)
+            db.flush()
+            batch = []
+
+    if batch:
+        db.add_all(batch)
+        db.flush()
+    return inserted
+
+
+def parse_oab_file(db: Session, item: CustomerProcessingOptionalFile) -> int:
+    file_path = Path(item.file_path)
+    rows = excel_rows_from_xls(file_path) if file_path.suffix.lower() == ".xls" else excel_rows_from_xlsx(file_path)
+    inserted = 0
+    batch: list[SupplementalOABRecord] = []
+
+    for row_index, row in enumerate(rows):
+        if row_index < 1:
+            continue
+        branch_full = clean_text(row[3] if len(row) > 3 else None)
+        ten_kh = clean_text(row[6] if len(row) > 6 else None)
+        tk_agribank = clean_text(row[8] if len(row) > 8 else None)
+        if not branch_full or not tk_agribank:
+            continue
+        branch_code = branch_full.split("-", 1)[0].strip()
+        branch_name = branch_full.split("-", 1)[1].strip() if "-" in branch_full else branch_full
+        record = SupplementalOABRecord(
+            optional_file_id=item.id,
+            period_key=item.period_key,
+            branch_code=branch_code,
+            branch_name=branch_name,
+            provider=clean_text(row[4] if len(row) > 4 else None),
+            ten_kh=ten_kh,
+            tk_ao=clean_text(row[7] if len(row) > 7 else None),
+            tk_agribank=tk_agribank,
+            phone=clean_text(row[9] if len(row) > 9 else None),
+            id_number=clean_text(row[10] if len(row) > 10 else None),
+            raw_data={
+                "ma": clean_text(row[1] if len(row) > 1 else None),
+                "chi_nhanh": branch_full,
+                "nha_cung_cap_loa": clean_text(row[4] if len(row) > 4 else None),
+                "ten_kh": ten_kh,
+                "tk_ao": clean_text(row[7] if len(row) > 7 else None),
+                "tk_agribank": tk_agribank,
+                "sdt": clean_text(row[9] if len(row) > 9 else None),
+                "so_can_cuoc": clean_text(row[10] if len(row) > 10 else None),
+            },
+        )
+        batch.append(record)
+        inserted += 1
+        if len(batch) >= 1000:
+            db.add_all(batch)
+            db.flush()
+            batch = []
+
+    if batch:
+        db.add_all(batch)
+        db.flush()
+    return inserted
+
+
+def load_supported_optional_files(db: Session, period_key: str) -> int:
+    db.execute(delete(SupplementalBaoLanhRecord).where(SupplementalBaoLanhRecord.period_key == period_key))
+    db.execute(delete(SupplementalOABRecord).where(SupplementalOABRecord.period_key == period_key))
+    db.flush()
+
+    total_rows = 0
+    rows = (
+        db.query(CustomerProcessingOptionalFile)
+        .filter(CustomerProcessingOptionalFile.period_key == period_key)
+        .order_by(CustomerProcessingOptionalFile.uploaded_at)
+        .all()
+    )
+    for item in rows:
+        file_type = detect_optional_file_type(item.original_filename)
+        if not file_type:
+            continue
+        try:
+            if file_type == "BAO_LANH":
+                total_rows += parse_bao_lanh_file(db, item)
+            elif file_type == "OAB_LOA":
+                total_rows += parse_oab_file(db, item)
+            item.status = "ready"
+            item.note = f"{item.note or ''}".strip()
+        except Exception as exc:
+            item.status = "error"
+            item.note = f"Lỗi đọc file bổ sung: {exc}"
+            raise
+    return total_rows
 
 
 def active_import_files_query(db: Session, period_key: str):
@@ -540,6 +805,10 @@ def process_customer_period(job_id: int) -> None:
         db.execute(delete(CustomerPeriodExchangeRate).where(CustomerPeriodExchangeRate.period_key == job.period_key))
         db.commit()
 
+        update_job(db, job, "processing", "Đọc file bổ sung Bảo lãnh/OAB nếu có", 24)
+        load_supported_optional_files(db, job.period_key)
+        db.commit()
+
         update_job(db, job, "processing", "Tạo bảng tỷ giá theo CCY từ DP01 trong kỳ", 30)
         db.execute(EXCHANGE_RATE_SQL, {"period_key": job.period_key})
         db.execute(DEFAULT_VND_RATE_SQL, {"period_key": job.period_key})
@@ -547,6 +816,10 @@ def process_customer_period(job_id: int) -> None:
 
         update_job(db, job, "processing", "Đối chiếu DP01 với LN01, CN05, PF14 theo từng chi nhánh/PGD", 48)
         db.execute(BRANCH_DETAIL_SQL, {"period_key": job.period_key, "job_id": job.id})
+        db.commit()
+
+        update_job(db, job, "processing", "Đối chiếu file bổ sung Bảo lãnh, LC và Loa theo khách hàng", 62)
+        db.execute(SUPPLEMENT_BRANCH_UPDATE_SQL, {"period_key": job.period_key})
         db.commit()
 
         update_job(db, job, "processing", "Gom khách hàng trùng MA_KH trên nhiều chi nhánh thành một hồ sơ", 78)
@@ -565,6 +838,10 @@ def process_customer_period(job_id: int) -> None:
         job.stage = "Hoàn thành xử lý dữ liệu khách hàng"
         job.progress_percent = 100
         job.finished_at = datetime.now(timezone.utc)
+        batch = db.query(ImportBatch).filter(ImportBatch.period_key == job.period_key).first()
+        if batch and batch.status == "needs_reprocess":
+            batch.status = "active"
+            batch.note = None
         db.commit()
     except Exception as exc:
         db.rollback()

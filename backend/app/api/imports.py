@@ -1,25 +1,58 @@
+import os
+import subprocess
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
+from urllib.parse import unquote
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import desc, or_
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
+from pydantic import BaseModel
+from sqlalchemy import desc, func, or_
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.auth.branch_scope import BranchScope
 from app.auth.dependencies import get_branch_scope
+from app.config import settings
 from app.database import get_db
 from app.imports.importer import (
     delete_import_file_rows,
+    enqueue_import_file,
     import_uploaded_file,
-    process_delete_import_file,
-    process_import_file,
     queue_uploaded_file,
+    recover_import_jobs,
+    remove_stored_upload_file,
 )
 from app.imports.summarizer import refresh_report_sources, summarize_period
-from app.models import CustomerPeriodSummary, ImportBatch, ImportFile, ReportSourceStatus
+from app.models import (
+    AuditLog,
+    CN05CustomerService,
+    CustomerPeriodBranchDetail,
+    CustomerPeriodExchangeRate,
+    CustomerPeriodProfile,
+    CustomerPeriodSummary,
+    CustomerProcessingJob,
+    CustomerProcessingOptionalFile,
+    DP01DepositAccount,
+    ImportBatch,
+    ImportFile,
+    LN01Loan,
+    PF14AccountBalance,
+    ReportSourceStatus,
+    SupplementalBaoLanhRecord,
+    SupplementalOABRecord,
+)
 
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
+RUNNING_IMPORT_STATUSES = {"queued", "processing", "deleting"}
+RUNNING_PROCESSING_STATUSES = {"queued", "processing", "running"}
+
+
+class DeleteDataPayload(BaseModel):
+    reason: str
+    backup_before_delete: bool = False
+    backup_dir: str | None = None
 
 
 def serialize_value(value):
@@ -42,6 +75,164 @@ def compact_error_message(exc: Exception) -> str:
     return message[:1000]
 
 
+def require_delete_reason(reason: str | None) -> str:
+    cleaned = str(reason or "").strip()
+    if len(cleaned) < 5:
+        raise HTTPException(status_code=400, detail="Vui lòng nhập lý do xóa dữ liệu, tối thiểu 5 ký tự")
+    return cleaned
+
+
+def log_data_action(
+    db: Session,
+    request: Request,
+    action: str,
+    entity_type: str,
+    entity_id: str | int | None,
+    description: str,
+) -> None:
+    username = request.headers.get("X-C360-User") or "system"
+    actor_name = unquote(request.headers.get("X-C360-User-Name") or username)
+    db.add(
+        AuditLog(
+            actor_username=username,
+            actor_name=actor_name,
+            action=action,
+            entity_type=entity_type,
+            entity_id=str(entity_id) if entity_id is not None else None,
+            description=description,
+        )
+    )
+
+
+def processed_customer_count(db: Session, period_key: str) -> int:
+    profile_count = db.query(func.count(CustomerPeriodProfile.id)).filter(CustomerPeriodProfile.period_key == period_key).scalar() or 0
+    if profile_count:
+        return int(profile_count)
+    return int(db.query(func.count(CustomerPeriodSummary.id)).filter(CustomerPeriodSummary.period_key == period_key).scalar() or 0)
+
+
+def has_running_period_jobs(db: Session, period_key: str) -> bool:
+    running_import = (
+        db.query(ImportFile.id)
+        .filter(ImportFile.period_key == period_key, ImportFile.status.in_(RUNNING_IMPORT_STATUSES))
+        .first()
+    )
+    running_processing = (
+        db.query(CustomerProcessingJob.id)
+        .filter(CustomerProcessingJob.period_key == period_key, CustomerProcessingJob.status.in_(RUNNING_PROCESSING_STATUSES))
+        .first()
+    )
+    return bool(running_import or running_processing)
+
+
+def comparison_periods_for_delete_warning(db: Session, period_key: str) -> list[str]:
+    rows = (
+        db.query(CustomerPeriodProfile.period_key)
+        .filter(CustomerPeriodProfile.period_key != period_key)
+        .group_by(CustomerPeriodProfile.period_key)
+        .order_by(desc(CustomerPeriodProfile.period_key))
+        .limit(6)
+        .all()
+    )
+    return [row.period_key for row in rows]
+
+
+def mark_period_needs_reprocess(db: Session, period_key: str) -> bool:
+    if processed_customer_count(db, period_key) <= 0:
+        return False
+    batch = db.query(ImportBatch).filter(ImportBatch.period_key == period_key).first()
+    if not batch:
+        return False
+    batch.status = "needs_reprocess"
+    batch.note = "Cần chạy lại xử lý vì file nguồn trong kỳ đã thay đổi."
+    db.add(batch)
+    return True
+
+
+def create_database_backup(period_key: str, backup_dir: str | None = None) -> str:
+    target_dir = Path(backup_dir or (Path(__file__).resolve().parents[2] / "exports" / "backups"))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    backup_path = target_dir / f"c360_backup_truoc_xoa_ky_{period_key}_{timestamp}.dump"
+
+    db_url = make_url(settings.DATABASE_URL)
+    command = [
+        "pg_dump",
+        "--format=custom",
+        "--no-owner",
+        "--no-acl",
+        "--file",
+        str(backup_path),
+    ]
+    if db_url.host:
+        command.extend(["--host", db_url.host])
+    if db_url.port:
+        command.extend(["--port", str(db_url.port)])
+    if db_url.username:
+        command.extend(["--username", db_url.username])
+    if db_url.database:
+        command.append(db_url.database)
+
+    env = os.environ.copy()
+    if db_url.password:
+        env["PGPASSWORD"] = db_url.password
+
+    try:
+        result = subprocess.run(command, env=env, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Không tìm thấy pg_dump. Hãy cài PostgreSQL client hoặc thêm thư mục bin của PostgreSQL vào PATH trước khi bật backup.",
+        ) from exc
+    if result.returncode != 0:
+        raise HTTPException(status_code=500, detail=f"Backup không thành công: {result.stderr or result.stdout}")
+    return str(backup_path)
+
+
+def delete_file_record_and_rows(db: Session, import_file: ImportFile) -> None:
+    delete_import_file_rows(db, import_file.id)
+    remove_stored_upload_file(import_file)
+    db.delete(import_file)
+
+
+def delete_period_data(db: Session, period_key: str) -> dict:
+    import_files = db.query(ImportFile).filter(ImportFile.period_key == period_key).all()
+    optional_files = db.query(CustomerProcessingOptionalFile).filter(CustomerProcessingOptionalFile.period_key == period_key).all()
+    deleted_file_count = len(import_files) + len(optional_files)
+
+    for import_file in import_files:
+        remove_stored_upload_file(import_file)
+    for optional_file in optional_files:
+        if optional_file.file_path:
+            try:
+                path = Path(optional_file.file_path)
+                if path.exists() and path.is_file():
+                    path.unlink()
+            except Exception:
+                pass
+
+    for model in (
+        SupplementalBaoLanhRecord,
+        SupplementalOABRecord,
+        CustomerPeriodBranchDetail,
+        CustomerPeriodProfile,
+        CustomerPeriodSummary,
+        CustomerPeriodExchangeRate,
+        ReportSourceStatus,
+        DP01DepositAccount,
+        CN05CustomerService,
+        LN01Loan,
+        PF14AccountBalance,
+        CustomerProcessingOptionalFile,
+        CustomerProcessingJob,
+        ImportFile,
+        ImportBatch,
+    ):
+        db.query(model).filter(model.period_key == period_key).delete(synchronize_session=False)
+
+    return {"deleted_file_count": deleted_file_count}
+
+
 @router.post("/upload")
 def upload_import_file(
     background_tasks: BackgroundTasks,
@@ -53,13 +244,17 @@ def upload_import_file(
     try:
         if background:
             import_file = queue_uploaded_file(db, file, replace_existing=replace_existing)
-            background_tasks.add_task(process_import_file, import_file.id)
+            enqueue_import_file(import_file.id)
         else:
             import_file = import_uploaded_file(db, file, replace_existing=replace_existing)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=compact_error_message(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail=compact_error_message(exc)) from exc
+
+    needs_reprocess = mark_period_needs_reprocess(db, import_file.period_key)
+    if needs_reprocess:
+        db.commit()
 
     return {
         "id": import_file.id,
@@ -73,6 +268,7 @@ def upload_import_file(
         "error_rows": import_file.error_rows,
         "background": background,
         "summary_required": True,
+        "needs_reprocess": needs_reprocess,
     }
 
 
@@ -123,6 +319,9 @@ def list_import_files(
                 "error_rows",
                 "status",
                 "error_message",
+                "started_at",
+                "finished_at",
+                "duration_seconds",
                 "uploaded_at",
             ],
         )
@@ -150,7 +349,8 @@ def list_periods(db: Session = Depends(get_db)):
         active_files = [file for file in period_files if file.status not in {"deleted", "replaced", "deleting"}]
         file_types = sorted({file.file_type for file in active_files})
         branches = sorted({file.branch_code for file in active_files})
-        payload = serialize_model(item, ["id", "period_key", "period_date", "status", "description", "created_at"])
+        processed_count = processed_customer_count(db, item.period_key)
+        payload = serialize_model(item, ["id", "period_key", "period_date", "status", "description", "note", "created_at"])
         payload.update(
             {
                 "file_count": len(active_files),
@@ -158,6 +358,11 @@ def list_periods(db: Session = Depends(get_db)):
                 "total_size": sum(file.file_size or 0 for file in active_files),
                 "file_types": file_types,
                 "branches": branches,
+                "processed": processed_count > 0,
+                "processed_customer_count": processed_count,
+                "needs_reprocess": item.status == "needs_reprocess",
+                "running_job": has_running_period_jobs(db, item.period_key),
+                "comparison_periods": comparison_periods_for_delete_warning(db, item.period_key) if processed_count > 0 else [],
             }
         )
         result.append(payload)
@@ -167,40 +372,98 @@ def list_periods(db: Session = Depends(get_db)):
 @router.delete("/files/{file_id}")
 def delete_import_file(
     file_id: int,
-    background_tasks: BackgroundTasks,
-    background: bool = Query(default=True),
+    payload: DeleteDataPayload,
+    request: Request,
     db: Session = Depends(get_db),
 ):
+    reason = require_delete_reason(payload.reason)
     import_file = db.query(ImportFile).filter(ImportFile.id == file_id).first()
     if not import_file:
         raise HTTPException(status_code=404, detail="Không tìm thấy file import")
-    if import_file.status == "deleted":
-        return {"id": file_id, "status": "deleted", "message": "File đã được xóa trước đó"}
+    if import_file.status in RUNNING_IMPORT_STATUSES or has_running_period_jobs(db, import_file.period_key):
+        raise HTTPException(status_code=409, detail="Không thể xóa vì kỳ dữ liệu đang có job import hoặc xử lý đang chạy")
 
     period_key = import_file.period_key
     original_filename = import_file.original_filename
-
-    if background:
-        import_file.status = "deleting"
-        import_file.error_message = f"Deleting original filename: {original_filename}"
-        db.commit()
-        background_tasks.add_task(process_delete_import_file, file_id)
-        return {"id": file_id, "status": "deleting", "period_key": period_key, "summary_required": True}
-
-    delete_import_file_rows(db, file_id)
-
-    import_file.status = "deleted"
-    import_file.error_message = f"Deleted original filename: {original_filename}"
-    import_file.original_filename = f"{original_filename}.deleted.{file_id}"
+    was_processed = processed_customer_count(db, period_key) > 0
+    delete_file_record_and_rows(db, import_file)
+    needs_reprocess = mark_period_needs_reprocess(db, period_key)
+    refresh_report_sources(db, period_key)
+    log_data_action(
+        db,
+        request,
+        action="delete_import_file",
+        entity_type="import_file",
+        entity_id=file_id,
+        description=f"Xóa file {original_filename} thuộc kỳ {period_key}. Lý do: {reason}",
+    )
     db.commit()
 
-    return {"id": file_id, "status": "deleted", "period_key": period_key, "summary_required": True}
+    return {
+        "id": file_id,
+        "status": "deleted",
+        "period_key": period_key,
+        "summary_required": True,
+        "needs_reprocess": needs_reprocess or was_processed,
+        "message": "Đã xóa file và dữ liệu chi tiết khỏi DB",
+    }
 
+
+@router.delete("/periods/{period_key}")
+def delete_period(
+    period_key: str,
+    payload: DeleteDataPayload,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    reason = require_delete_reason(payload.reason)
+    batch = db.query(ImportBatch).filter(ImportBatch.period_key == period_key).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Không tìm thấy kỳ dữ liệu")
+    if has_running_period_jobs(db, period_key):
+        raise HTTPException(status_code=409, detail="Không thể xóa kỳ vì đang có job import hoặc xử lý dữ liệu chạy nền")
+
+    processed_count = processed_customer_count(db, period_key)
+    comparison_periods = comparison_periods_for_delete_warning(db, period_key) if processed_count > 0 else []
+    backup_path = create_database_backup(period_key, payload.backup_dir) if payload.backup_before_delete else None
+    result = delete_period_data(db, period_key)
+    log_data_action(
+        db,
+        request,
+        action="delete_import_period",
+        entity_type="import_period",
+        entity_id=period_key,
+        description=(
+            f"Xóa kỳ {period_key}; {result['deleted_file_count']} file; "
+            f"hồ sơ đã xử lý: {processed_count}; kỳ có thể đang dùng để so sánh: {', '.join(comparison_periods) or 'không'}; "
+            f"backup: {backup_path or 'không'}; lý do: {reason}"
+        ),
+    )
+    db.commit()
+    return {
+        "period_key": period_key,
+        "status": "deleted",
+        "deleted_file_count": result["deleted_file_count"],
+        "processed_customer_count": processed_count,
+        "comparison_periods": comparison_periods,
+        "backup_path": backup_path,
+    }
 
 @router.post("/summarize/{period_key}")
 def summarize(period_key: str, db: Session = Depends(get_db)):
     count = summarize_period(db, period_key)
     return {"period_key": period_key, "summary_rows": count}
+
+
+@router.post("/jobs/recover")
+def recover_jobs(period_key: str | None = Query(default=None)):
+    queued_count = recover_import_jobs(period_key=period_key)
+    return {
+        "status": "ok",
+        "period_key": period_key,
+        "queued_count": queued_count,
+        "message": "Đã đưa job import bị kẹt về hàng chờ xử lý lại",
+    }
 
 
 @router.get("/report-sources")
@@ -295,3 +558,4 @@ def list_summary(
         "ghi_chu",
     ]
     return [serialize_model(item, fields) for item in rows]
+

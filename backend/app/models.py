@@ -53,6 +53,9 @@ class ImportFile(Base):
     error_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="pending", nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    duration_seconds: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     uploaded_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     batch = relationship("ImportBatch", back_populates="files")
@@ -350,6 +353,9 @@ class CustomerPeriodProfile(Base):
     the_td_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_loc_viet: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    bao_lanh: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    loa_bien_dong_so_du: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    phat_hanh_lc: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ma_cb: Mapped[str | None] = mapped_column(String(50))
     ten_can_bo: Mapped[str | None] = mapped_column(String(255))
     telephone: Mapped[str | None] = mapped_column(String(50))
@@ -393,6 +399,9 @@ class CustomerPeriodBranchDetail(Base):
     the_td_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_loc_viet: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    bao_lanh: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    loa_bien_dong_so_du: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    phat_hanh_lc: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ma_cb: Mapped[str | None] = mapped_column(String(50))
     ten_can_bo: Mapped[str | None] = mapped_column(String(255))
     processing_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"), index=True)
@@ -416,6 +425,50 @@ class CustomerProcessingOptionalFile(Base):
     status: Mapped[str] = mapped_column(String(30), default="uploaded", nullable=False)
     note: Mapped[str | None] = mapped_column(Text)
     uploaded_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class SupplementalBaoLanhRecord(Base):
+    __tablename__ = "supplemental_bao_lanh_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    optional_file_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_optional_files.id"), index=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    branch_code: Mapped[str | None] = mapped_column(String(10), index=True)
+    ma_kh: Mapped[str | None] = mapped_column(String(32), index=True)
+    ma_kh_chuan: Mapped[str | None] = mapped_column(String(48), index=True)
+    ten_kh: Mapped[str | None] = mapped_column(String(255))
+    tai_khoan: Mapped[str | None] = mapped_column(String(80), index=True)
+    so_hdbl: Mapped[str | None] = mapped_column(String(120))
+    ngay_bd: Mapped[object | None] = mapped_column(Date)
+    ngay_het_hl: Mapped[object | None] = mapped_column(Date)
+    loai_bllc: Mapped[str | None] = mapped_column(String(30), index=True)
+    tien_te: Mapped[str | None] = mapped_column(String(10))
+    nguyen_te: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    ty_gia: Mapped[object | None] = mapped_column(Numeric(18, 6))
+    vnd: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    so_tien: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    is_bao_lanh: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_lc: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    raw_data: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SupplementalOABRecord(Base):
+    __tablename__ = "supplemental_oab_records"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    optional_file_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_optional_files.id"), index=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    branch_code: Mapped[str | None] = mapped_column(String(10), index=True)
+    branch_name: Mapped[str | None] = mapped_column(String(255))
+    provider: Mapped[str | None] = mapped_column(String(255))
+    ten_kh: Mapped[str | None] = mapped_column(String(255), index=True)
+    tk_ao: Mapped[str | None] = mapped_column(String(100), index=True)
+    tk_agribank: Mapped[str | None] = mapped_column(String(100), index=True)
+    phone: Mapped[str | None] = mapped_column(String(50))
+    id_number: Mapped[str | None] = mapped_column(String(80), index=True)
+    raw_data: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class CustomerPeriodExchangeRate(Base):

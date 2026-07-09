@@ -7,7 +7,7 @@ import {
   Col,
   Collapse,
   Descriptions,
-  Divider,
+  Drawer,
   Empty,
   Form,
   Input,
@@ -35,7 +35,6 @@ import {
   FieldTimeOutlined,
   FilterOutlined,
   QuestionCircleOutlined,
-  ReloadOutlined,
   RiseOutlined,
   SearchOutlined,
   TeamOutlined,
@@ -44,6 +43,7 @@ import {
   WalletOutlined,
   BankOutlined,
   WarningOutlined,
+  SwapOutlined,
 } from '@ant-design/icons';
 
 import client from '../api/client';
@@ -71,18 +71,22 @@ const SERVICE_DEFS = [
   { key: 'batk',                 label: 'BATK',                 group: 'Bảo hiểm',        pending: true  },
   { key: 'bh_oto_xe_may',        label: 'BH ô tô, xe máy',     group: 'Bảo hiểm',        pending: true  },
   { key: 'bh_khac',              label: 'BH khác',              group: 'Bảo hiểm',        pending: true  },
-  { key: 'bao_lanh',             label: 'Bảo lãnh',             group: 'Bảo lãnh/TTQT',  pending: true  },
-  { key: 'loa_bien_dong_so_du',  label: 'Loa biến động số dư', group: 'Khác',            pending: true  },
+  { key: 'bao_lanh',             label: 'Bảo lãnh',             group: 'Bảo lãnh/TTQT',  pending: false },
+  { key: 'loa_bien_dong_so_du',  label: 'Loa biến động số dư', group: 'Khác',            pending: false },
   { key: 'phan_mem_ban_hang',    label: 'Phần mềm bán hàng',   group: 'Khác',            pending: true  },
   { key: 'pos',                  label: 'POS',                  group: 'Khác',            pending: true  },
   { key: 'chi_tra_kieu_hoi',     label: 'Chi trả kiều hối',    group: 'Bảo lãnh/TTQT',  pending: true  },
-  { key: 'phat_hanh_lc',         label: 'Phát hành LC',         group: 'Bảo lãnh/TTQT',  pending: true  },
+  { key: 'phat_hanh_lc',         label: 'Phát hành LC',         group: 'Bảo lãnh/TTQT',  pending: false },
   { key: 'thanh_toan_quoc_te',   label: 'Thanh toán quốc tế',  group: 'Bảo lãnh/TTQT',  pending: true  },
   { key: 'mua_ban_ngoai_te',     label: 'Mua bán ngoại tệ',    group: 'Bảo lãnh/TTQT',  pending: true  },
 ];
 
 const TOTAL_SERVICES = SERVICE_DEFS.length;
 const ACTIVE_SERVICES = SERVICE_DEFS.filter((s) => !s.pending);
+const SERVICE_LABEL_BY_KEY = SERVICE_DEFS.reduce((acc, item) => {
+  acc[item.key] = item.label;
+  return acc;
+}, {});
 
 // Nhóm dịch vụ theo category để hiển thị mini-grid
 const SERVICE_GROUPS_ORDER = ['Tài khoản', 'Digital', 'Thẻ', 'Thanh toán', 'Bảo hiểm', 'Bảo lãnh/TTQT', 'Khác'];
@@ -133,6 +137,24 @@ function moneyTooltip(value) {
   return `${money(value || 0)} đ`;
 }
 
+function signedCompactMoney(value) {
+  const number = Number(value || 0);
+  const prefix = number > 0 ? '+' : '';
+  return `${prefix}${compactMoney(number)} đ`;
+}
+
+function signedNumber(value) {
+  const number = Number(value || 0);
+  const prefix = number > 0 ? '+' : '';
+  return `${prefix}${money(number)}`;
+}
+
+function trendTag(value, isMoney = true) {
+  const number = Number(value || 0);
+  const color = number > 0 ? 'green' : number < 0 ? 'red' : 'default';
+  return <Tag color={color}>{isMoney ? signedCompactMoney(number) : signedNumber(number)}</Tag>;
+}
+
 function splitList(value) {
   return String(value || '')
     .split(',')
@@ -161,6 +183,9 @@ function formatPgdLabel(value, pgdNameMap = {}) {
 
 function CheckboxPopoverFilter({ title, placeholder, options, value, onChange, className = '' }) {
   const selected = Array.isArray(value) ? value : [];
+  const allValues = options.map((item) => item.value);
+  const allChecked = options.length > 0 && selected.length === options.length;
+  const indeterminate = selected.length > 0 && selected.length < options.length;
   const selectedLabels = options
     .filter((item) => selected.includes(item.value))
     .map((item) => item.label);
@@ -170,6 +195,16 @@ function CheckboxPopoverFilter({ title, placeholder, options, value, onChange, c
 
   const content = (
     <div className={`report-checkbox-filter ${className}`}>
+      <div className="report-checkbox-filter-head">
+        <Checkbox
+          checked={allChecked}
+          indeterminate={indeterminate}
+          onChange={(event) => onChange(event.target.checked ? allValues : [])}
+        >
+          Chọn tất cả
+        </Checkbox>
+        <Text type="secondary">{selected.length}/{options.length}</Text>
+      </div>
       <Checkbox.Group
         value={selected}
         onChange={onChange}
@@ -585,9 +620,27 @@ function CustomerDetailModal({ customer, open, onClose }) {
           </Descriptions.Item>
         </Descriptions>
 
-        <BranchDetailSection customer={customer} />
-        
-        <ServiceDetailView customer={customer} />
+        <Tabs
+          size="small"
+          className="customer-detail-tabs"
+          items={[
+            {
+              key: 'services',
+              label: 'Dịch vụ',
+              children: <ServiceDetailView customer={customer} />,
+            },
+            {
+              key: 'branches',
+              label: 'Chi nhánh / PGD',
+              children: <BranchDetailSection customer={customer} />,
+            },
+            {
+              key: 'history',
+              label: 'Lịch sử qua kỳ',
+              children: <CustomerHistorySection customer={customer} />,
+            },
+          ]}
+        />
       </div>
     </Modal>
   );
@@ -619,6 +672,13 @@ function BranchDetailSection({ customer }) {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    setRows([]);
+    setLoaded(false);
+    loadBranchDetails();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer?.period_key, customer?.ma_kh]);
 
   const columns = [
     {
@@ -715,43 +775,84 @@ function BranchDetailSection({ customer }) {
           {loaded && <Tag color="blue">{rows.length} điểm phát sinh</Tag>}
         </Space>
       }
-      extra={
-        <Button size="small" icon={<ReloadOutlined />} loading={loading} onClick={loadBranchDetails}>
-          {loaded ? 'Tải lại' : 'Xem chi tiết'}
-        </Button>
-      }
     >
-      {!loaded ? (
-        <Empty
-          image={Empty.PRESENTED_IMAGE_SIMPLE}
-          description="Bấm Xem chi tiết để biết khách hàng vay, gửi tiền và dùng dịch vụ ở chi nhánh/PGD nào"
-        />
-      ) : (
-        <>
-          <Row gutter={[8, 8]} className="branch-detail-summary">
-            <Col xs={24} md={8}>
-              <Tag color="volcano">Dư nợ: {money(summary.loan)} đ</Tag>
-            </Col>
-            <Col xs={24} md={8}>
-              <Tag color="green">Tiền gửi CKH: {money(summary.deposit)} đ</Tag>
-            </Col>
-            <Col xs={24} md={8}>
-              <Tag color="cyan">TGTT BQ: {money(summary.casa)} đ</Tag>
-            </Col>
-          </Row>
-          <Table
-            size="small"
-            rowKey={(row) => `${row.branch_code || ''}-${row.ma_pgd || ''}`}
-            columns={columns}
-            dataSource={rows}
-            loading={loading}
-            pagination={false}
-            scroll={{ x: 1250 }}
-            locale={{ emptyText: <Empty description="Chưa có dữ liệu chi tiết theo chi nhánh" /> }}
-          />
-        </>
-      )}
+      <Row gutter={[8, 8]} className="branch-detail-summary">
+        <Col xs={24} md={8}>
+          <Tag color="volcano">Dư nợ: {money(summary.loan)} đ</Tag>
+        </Col>
+        <Col xs={24} md={8}>
+          <Tag color="green">Tiền gửi CKH: {money(summary.deposit)} đ</Tag>
+        </Col>
+        <Col xs={24} md={8}>
+          <Tag color="cyan">TGTT BQ: {money(summary.casa)} đ</Tag>
+        </Col>
+      </Row>
+      <Table
+        size="small"
+        rowKey={(row) => `${row.branch_code || ''}-${row.ma_pgd || ''}`}
+        columns={columns}
+        dataSource={rows}
+        loading={loading}
+        pagination={false}
+        scroll={{ x: 1250, y: 320 }}
+        locale={{ emptyText: <Empty description="Chưa có dữ liệu chi tiết theo chi nhánh" /> }}
+      />
     </Card>
+  );
+}
+
+function CustomerHistorySection({ customer }) {
+  const [rows, setRows] = useState([]);
+  const [loading, setLoading] = useState(false);
+
+  async function loadHistory() {
+    if (!customer?.ma_kh) return;
+    setLoading(true);
+    try {
+      const { data } = await client.get('/customer-processing/profile-history', {
+        params: { ma_kh: customer.ma_kh },
+      });
+      setRows((data || []).map((item) => ({
+        ...item,
+        ma_kh_chuan: item.ma_kh,
+        so_du_tien_gui_ckh: item.so_du_tien_gui,
+      })));
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message || 'Không tải được lịch sử khách hàng');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [customer?.ma_kh]);
+
+  return (
+    <Table
+      size="small"
+      rowKey={(row) => `${row.period_key}-${row.ma_kh}`}
+      loading={loading}
+      dataSource={rows}
+      pagination={false}
+      scroll={{ x: 980 }}
+      columns={[
+        { title: 'Kỳ', dataIndex: 'period_key', width: 100, fixed: 'left', render: (value) => <Tag color={value === customer.period_key ? 'blue' : 'default'}>{value}</Tag> },
+        { title: 'Chi nhánh', dataIndex: 'branch_codes', width: 140, ellipsis: true },
+        { title: 'Dư nợ', dataIndex: 'so_du_tien_vay', width: 130, align: 'right', render: (value) => `${money(value)} đ` },
+        { title: 'Tiền gửi CKH', dataIndex: 'so_du_tien_gui_ckh', width: 130, align: 'right', render: (value) => `${money(value)} đ` },
+        { title: 'TGTT BQ', dataIndex: 'so_du_tgtt_binh_quan', width: 130, align: 'right', render: (value) => `${money(value)} đ` },
+        { title: 'Loại vay', dataIndex: 'loai_vay', width: 130, render: (value) => value ? <Tag color="volcano">{value}</Tag> : '—' },
+        {
+          title: 'Dịch vụ',
+          width: 160,
+          render: (_, row) => <Tag color="green">{countUsed(row)}/{ACTIVE_SERVICES.length} dịch vụ</Tag>,
+        },
+        { title: 'Cán bộ', key: 'officer', width: 180, ellipsis: true, render: (_, row) => row.ten_can_bo || row.ma_cb || '—' },
+      ]}
+      locale={{ emptyText: <Empty description="Chưa có lịch sử khách hàng qua các kỳ" /> }}
+    />
   );
 }
 
@@ -1163,6 +1264,22 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
   ];
 }
 
+const DEFAULT_REPORT_COLUMN_KEYS = [
+  'stt',
+  'ma_kh_chuan',
+  'ten_kh',
+  'loai_khach_hang',
+  'ma_cn',
+  'ma_pgd',
+  'can_bo',
+  'so_du_tien_vay',
+  'so_du_tien_gui_ckh',
+  'so_du_tgtt_binh_quan',
+  'loai_vay',
+  'ghi_chu',
+  'cross_sell',
+];
+
 
 // ─── Component chính ───────────────────────────────────────────────────────────
 function CustomerReport() {
@@ -1180,9 +1297,14 @@ function CustomerReport() {
     total_casa: 0,
     no_service_customers: 0,
   });
+  const [groupStats, setGroupStats] = useState({ groups: [], thresholds: {} });
+  const [comparePeriod, setComparePeriod] = useState(null);
+  const [periodComparison, setPeriodComparison] = useState(null);
   const [loading, setLoading] = useState(false);
   const [reportReady, setReportReady] = useState(false);
   const [viewMode, setViewMode] = useState('report');
+  const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
+  const [visibleColumnKeys, setVisibleColumnKeys] = useState(DEFAULT_REPORT_COLUMN_KEYS);
   const [searchText, setSearchText] = useState('');
   const [filterOfficer, setFilterOfficer] = useState(null);   // mã CB
   const [filterUnusedSvc, setFilterUnusedSvc] = useState([]); // key dịch vụ chưa dùng
@@ -1230,6 +1352,27 @@ function CustomerReport() {
     setFilterOfficer(null);
   };
 
+  const resetReportFilters = () => {
+    setFilterOfficer(null);
+    setFilterUnusedSvc([]);
+    setSearchText('');
+    const resetScope = resolveBranchScope(user, null, null);
+    setFilterCn(resetScope.filterCn);
+    setFilterPgd(resetScope.filterPgd);
+    setFilterLoanType([]);
+    setFilterMultiBranch(null);
+  };
+
+  const activeFilterCount = [
+    searchText,
+    effectiveFilterCn,
+    effectiveFilterPgd,
+    filterOfficer,
+    filterMultiBranch !== null,
+    filterLoanType.length,
+    filterUnusedSvc.length,
+  ].filter(Boolean).length;
+
   // Modal states
   const [detailCustomer, setDetailCustomer] = useState(null);
   const [detailOpen, setDetailOpen] = useState(false);
@@ -1239,13 +1382,26 @@ function CustomerReport() {
   const [noServiceRows, setNoServiceRows] = useState([]);
   const [noServiceLoading, setNoServiceLoading] = useState(false);
   const [noServicePagination, setNoServicePagination] = useState({ current: 1, pageSize: 25, total: 0 });
+  const [groupModalOpen, setGroupModalOpen] = useState(false);
+  const [selectedGroup, setSelectedGroup] = useState(null);
+  const [groupRows, setGroupRows] = useState([]);
+  const [groupLoading, setGroupLoading] = useState(false);
+  const [groupPagination, setGroupPagination] = useState({ current: 1, pageSize: 25, total: 0 });
 
   function openDetail(row) { setDetailCustomer(row); setDetailOpen(true); }
   function openUnused(row) { setUnusedCustomer(row); setUnusedOpen(true); }
 
-  const columns = useMemo(
+  const baseColumns = useMemo(
     () => buildColumns(openDetail, openUnused, filterOptions.pgd_names || {}),
     [filterOptions.pgd_names],
+  );
+  const columnOptions = useMemo(
+    () => baseColumns.map((column) => ({ label: column.title, value: column.key })),
+    [baseColumns],
+  );
+  const columns = useMemo(
+    () => baseColumns.filter((column) => visibleColumnKeys.includes(column.key)),
+    [baseColumns, visibleColumnKeys],
   );
 
   useEffect(() => {
@@ -1273,7 +1429,9 @@ function CustomerReport() {
     const processedPeriods = (data || []).filter((item) => Number(item.profile_count || 0) > 0);
     setReportPeriods(processedPeriods);
     const nextPeriod = preferredPeriod || selectedPeriod || processedPeriods[0]?.period_key || null;
+    const previousPeriod = processedPeriods.find((item) => item.period_key !== nextPeriod)?.period_key || null;
     setSelectedPeriod(nextPeriod);
+    setComparePeriod((current) => current || previousPeriod);
     return nextPeriod;
   }
 
@@ -1300,7 +1458,7 @@ function CustomerReport() {
     const pageSize = nextPagination?.pageSize || 25;
     setLoading(true);
     try {
-      const [profileResponse, summaryResponse, sourceResponse] = await Promise.all([
+      const [profileResponse, summaryResponse, sourceResponse, groupResponse] = await Promise.all([
         client.get('/customer-processing/profiles', {
           params: {
             ...getReportParams(periodKey),
@@ -1315,6 +1473,9 @@ function CustomerReport() {
         client.get('/imports/report-sources', {
           params: { period_key: periodKey },
         }),
+        client.get('/customer-processing/profile-groups', {
+          params: getReportParams(periodKey),
+        }),
       ]);
       const profilePayload = profileResponse.data;
       const profileData = Array.isArray(profilePayload) ? profilePayload : profilePayload?.items;
@@ -1326,11 +1487,32 @@ function CustomerReport() {
       setRows(normalizedRows);
       setReportPagination({ current, pageSize, total });
       setReportSummary(summaryResponse.data || {});
+      setGroupStats(groupResponse.data || { groups: [], thresholds: {} });
       setSourceRows(Array.isArray(sourceResponse.data) ? sourceResponse.data : []);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function loadPeriodComparison(current = selectedPeriod, previous = comparePeriod) {
+    if (!current || !previous || current === previous) {
+      setPeriodComparison(null);
+      return;
+    }
+    try {
+      const { data } = await client.get('/customer-processing/period-comparison', {
+        params: {
+          current_period: current,
+          previous_period: previous,
+          branch_code: effectiveFilterCn || undefined,
+          pgd_code: effectiveFilterPgd || undefined,
+        },
+      });
+      setPeriodComparison(data || null);
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
     }
   }
 
@@ -1374,6 +1556,12 @@ function CustomerReport() {
   }, [reportReady, selectedPeriod, effectiveFilterCn, effectiveFilterPgd]);
 
   useEffect(() => {
+    if (!reportReady || !selectedPeriod || !comparePeriod) return;
+    loadPeriodComparison(selectedPeriod, comparePeriod);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reportReady, selectedPeriod, comparePeriod, effectiveFilterCn, effectiveFilterPgd]);
+
+  useEffect(() => {
     if (!reportReady || !selectedPeriod) return undefined;
     const timer = window.setTimeout(() => {
       loadReport(selectedPeriod, { ...reportPagination, current: 1 });
@@ -1414,6 +1602,40 @@ function CustomerReport() {
   function openNoServiceModal() {
     setNoServiceOpen(true);
     loadNoServiceCustomers({ current: 1, pageSize: noServicePagination.pageSize, total: 0 });
+  }
+
+  async function loadGroupCustomers(group = selectedGroup, nextPagination = groupPagination) {
+    if (!selectedPeriod || !group?.key) return;
+    const current = nextPagination?.current || 1;
+    const pageSize = nextPagination?.pageSize || 25;
+    setGroupLoading(true);
+    try {
+      const { data } = await client.get('/customer-processing/profiles', {
+        params: {
+          ...getReportParams(selectedPeriod),
+          group_key: group.key,
+          include_total: true,
+          page: current,
+          page_size: pageSize,
+        },
+      });
+      setGroupRows((data?.items || []).map(normalizeProcessedProfile));
+      setGroupPagination({
+        current,
+        pageSize,
+        total: Number(data?.total || 0),
+      });
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    } finally {
+      setGroupLoading(false);
+    }
+  }
+
+  function openGroupModal(group) {
+    setSelectedGroup(group);
+    setGroupModalOpen(true);
+    loadGroupCustomers(group, { current: 1, pageSize: groupPagination.pageSize, total: 0 });
   }
 
   function loadDemoData() {
@@ -1543,11 +1765,16 @@ function CustomerReport() {
 
   const reportStatCards = useMemo(() => {
     const totalCustomers = reportSummary.total_customers || reportPagination.total;
+    const groupCount = (key) => Number((groupStats.groups || []).find((item) => item.key === key)?.count || 0);
+    const noServiceCustomers = Number(reportSummary.no_service_customers || 0);
+    const serviceCoverage = totalCustomers
+      ? Math.round(((Number(totalCustomers) - noServiceCustomers) / Number(totalCustomers)) * 100)
+      : 0;
     return [
       {
         tone: 'blue',
         icon: <UserOutlined />,
-        label: filterOfficer || filterUnusedSvc.length ? 'KH đã lọc' : 'Khách hàng',
+        label: 'Tổng khách hàng',
         value: money(totalCustomers),
         unit: 'toàn bộ',
       },
@@ -1576,16 +1803,208 @@ function CustomerReport() {
         tooltip: moneyTooltip(reportSummary.total_casa),
       },
       {
+        tone: 'blue',
+        icon: <TeamOutlined />,
+        label: 'KH nhiều chi nhánh',
+        value: money(groupCount('multi_branch')),
+        unit: 'KH',
+        tooltip: 'Khách hàng phát sinh tại hơn 1 chi nhánh',
+        onClick: () => {
+          const group = (groupStats.groups || []).find((item) => item.key === 'multi_branch');
+          if (group) openGroupModal(group);
+        },
+      },
+      {
         tone: 'gold',
         icon: <WarningOutlined />,
-        label: 'Chưa dùng DV nào',
-        value: `${money(reportSummary.no_service_customers)} / ${money(totalCustomers)}`,
+        label: 'KH chưa dùng dịch vụ',
+        value: money(noServiceCustomers),
         unit: 'KH',
-        tooltip: 'KH chưa sử dụng dịch vụ nào từ dữ liệu CN05',
+        tooltip: `Trên tổng ${money(totalCustomers)} khách hàng`,
         onClick: openNoServiceModal,
       },
+      {
+        tone: 'green',
+        icon: <AimOutlined />,
+        label: 'Tiềm năng bán chéo',
+        value: money(groupCount('cross_sell')),
+        unit: 'KH',
+        tooltip: 'Có ít nhất một cảnh báo bán chéo từ dữ liệu hiện có',
+        onClick: () => {
+          const group = (groupStats.groups || []).find((item) => item.key === 'cross_sell');
+          if (group) openGroupModal(group);
+        },
+      },
+      {
+        tone: 'cyan',
+        icon: <CheckCircleFilled />,
+        label: 'Tỷ lệ phủ dịch vụ',
+        value: `${serviceCoverage}%`,
+        unit: `${money(Number(totalCustomers) - noServiceCustomers)} KH có dịch vụ`,
+        tooltip: 'Tỷ lệ khách hàng có ít nhất 1 dịch vụ đã ghi nhận',
+      },
     ];
-  }, [filterOfficer, filterUnusedSvc.length, reportPagination.total, reportSummary]);
+  }, [groupStats.groups, reportPagination.total, reportSummary]);
+
+  const groupCards = useMemo(() => {
+    const toneByKey = {
+      large_deposit: 'green',
+      large_loan: 'red',
+      high_casa: 'cyan',
+      multi_branch: 'blue',
+      cross_sell: 'gold',
+    };
+    const iconByKey = {
+      large_deposit: <BankOutlined />,
+      large_loan: <WalletOutlined />,
+      high_casa: <RiseOutlined />,
+      multi_branch: <TeamOutlined />,
+      cross_sell: <AimOutlined />,
+    };
+    return (groupStats.groups || []).map((item) => ({
+      key: item.key,
+      tone: toneByKey[item.key] || 'blue',
+      icon: iconByKey[item.key] || <UserOutlined />,
+      label: item.label,
+      value: money(item.count || 0),
+      unit: 'KH',
+      tooltip: item.description,
+      onClick: () => openGroupModal(item),
+    }));
+  }, [groupStats, selectedPeriod, effectiveFilterCn, effectiveFilterPgd]);
+
+  const comparisonItems = useMemo(() => {
+    if (!periodComparison?.summary) return [];
+    return [
+      {
+        key: 'customers',
+        label: 'Khách hàng',
+        current: periodComparison.summary.customers?.current,
+        previous: periodComparison.summary.customers?.previous,
+        delta: periodComparison.summary.customers?.delta,
+        isMoney: false,
+      },
+      {
+        key: 'deposit',
+        label: 'Tiền gửi CKH',
+        current: periodComparison.summary.deposit?.current,
+        previous: periodComparison.summary.deposit?.previous,
+        delta: periodComparison.summary.deposit?.delta,
+        isMoney: true,
+      },
+      {
+        key: 'loan',
+        label: 'Dư nợ',
+        current: periodComparison.summary.loan?.current,
+        previous: periodComparison.summary.loan?.previous,
+        delta: periodComparison.summary.loan?.delta,
+        isMoney: true,
+      },
+      {
+        key: 'casa',
+        label: 'TGTT bình quân',
+        current: periodComparison.summary.casa?.current,
+        previous: periodComparison.summary.casa?.previous,
+        delta: periodComparison.summary.casa?.delta,
+        isMoney: true,
+      },
+    ];
+  }, [periodComparison]);
+
+  const crossSellCards = useMemo(() => {
+    const crossSellGroup = (groupStats.groups || []).find((item) => item.key === 'cross_sell');
+    return [
+      {
+        tone: 'green',
+        icon: <AimOutlined />,
+        label: 'Tổng cơ hội bán chéo',
+        value: money(crossSellGroup?.count || 0),
+        unit: 'KH',
+        tooltip: crossSellGroup?.description,
+        onClick: () => crossSellGroup && openGroupModal(crossSellGroup),
+      },
+      {
+        tone: 'cyan',
+        icon: <BankOutlined />,
+        label: 'TG lớn thiếu Agribank Plus',
+        value: 'Quy tắc',
+        unit: '>= 1 tỷ',
+        tooltip: 'Có tiền gửi CKH + TGTT bình quân lớn nhưng chưa dùng Agribank Plus',
+      },
+      {
+        tone: 'red',
+        icon: <WalletOutlined />,
+        label: 'Có dư nợ thiếu SMS vay',
+        value: 'Quy tắc',
+        unit: 'Dư nợ > 0',
+        tooltip: 'Có dư nợ nhưng chưa có SMS nhắc nợ vay',
+      },
+      {
+        tone: 'blue',
+        icon: <TeamOutlined />,
+        label: 'Nhiều CN cần phân công',
+        value: money((groupStats.groups || []).find((item) => item.key === 'multi_branch')?.count || 0),
+        unit: 'KH',
+        tooltip: 'Khách hàng phát sinh nhiều chi nhánh cần xác định đầu mối quản lý chính',
+      },
+    ];
+  }, [groupStats.groups]);
+
+  const serviceGroupCards = useMemo(() => SERVICE_GROUPS_ORDER.map((group) => {
+    const services = SERVICE_BY_GROUP[group] || [];
+    const activeKeys = services.map((item) => item.key);
+    const usedCount = rows.reduce((count, row) => (
+      count + (activeKeys.some((key) => Number(row[key] || 0) > 0) ? 1 : 0)
+    ), 0);
+    return {
+      tone: group === 'Digital' ? 'cyan' : group === 'Thẻ' ? 'gold' : group === 'Bảo lãnh/TTQT' ? 'red' : 'blue',
+      icon: <CheckCircleFilled />,
+      label: group,
+      value: money(usedCount),
+      unit: `KH trên trang · ${services.length} DV`,
+      tooltip: services.map((item) => item.label).join(', '),
+    };
+  }), [rows]);
+
+  const dataQualityWarnings = useMemo(() => {
+    const warnings = [];
+    const missingSources = sourceRows.filter((item) => item.status === 'missing' || item.status === 'error');
+    missingSources.forEach((item) => {
+      warnings.push({
+        key: `source-${item.source_code}`,
+        color: item.status === 'error' ? 'red' : 'orange',
+        title: `Nguồn ${item.source_code} ${item.status === 'error' ? 'bị lỗi' : 'chưa đủ dữ liệu'}`,
+        description: item.message || item.source_name || 'Cần kiểm tra lại file nguồn của kỳ dữ liệu',
+      });
+    });
+    warnings.push(
+      {
+        key: 'missing-name',
+        color: 'gold',
+        title: 'KH có mã nhưng thiếu tên',
+        description: 'Nên bổ sung endpoint kiểm tra DP01 có MA_KH nhưng TEN_KH trống.',
+      },
+      {
+        key: 'multi-branch-owner',
+        color: 'blue',
+        title: 'KH nhiều chi nhánh chưa rõ cán bộ chính',
+        description: 'Cần cảnh báo riêng khi branch_count > 1 nhưng ma_cb hoặc ten_can_bo trống.',
+      },
+      {
+        key: 'oab-unmatched',
+        color: 'purple',
+        title: 'Dữ liệu OAB không khớp DP01',
+        description: 'Nên thêm chỉ tiêu số dòng OAB không tìm thấy SO_TAI_KHOAN trong DP01.',
+      },
+      {
+        key: 'optional-not-processed',
+        color: 'cyan',
+        title: 'File bổ sung chưa đưa vào xử lý',
+        description: 'Cần cảnh báo file bổ sung đã upload nhưng kỳ chưa chạy lại xử lý khách hàng.',
+      },
+    );
+    return warnings;
+  }, [sourceRows]);
 
   // ── Lọc kết hợp: text search + cán bộ + dịch vụ chưa dùng + CN + PGD ─────────
   const filteredRows = useMemo(() => {
@@ -1725,23 +2144,13 @@ function CustomerReport() {
         <Tag color="red" className="report-header-badge">C360</Tag>
       </div>
 
-      {/* Bộ lọc */}
-      <Card
-        className="report-filter-card"
-        title={
-          <Space>
-            <FilterOutlined />
-            <span>Bộ lọc báo cáo</span>
-          </Space>
-        }
-      >
+      <div className="report-sticky-toolbar">
         <Form form={form} layout="vertical">
-          {/* Hàng 1: Tham số chính & Tác vụ */}
-          <Row gutter={[16, 12]} align="bottom">
-            <Col xs={24} sm={12} md={5}>
-              <Form.Item label="Kỳ dữ liệu đã xử lý" style={{ marginBottom: 0 }}>
+          <Row gutter={[10, 8]} align="bottom">
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="Kỳ dữ liệu" style={{ marginBottom: 0 }}>
                 <Select
-                  placeholder="Chọn kỳ dữ liệu"
+                  placeholder="Chọn kỳ"
                   value={selectedPeriod}
                   options={reportPeriods.map((item) => ({
                     value: item.period_key,
@@ -1749,6 +2158,9 @@ function CustomerReport() {
                   }))}
                   onChange={async (value) => {
                     setSelectedPeriod(value);
+                    if (comparePeriod === value) {
+                      setComparePeriod(reportPeriods.find((item) => item.period_key !== value)?.period_key || null);
+                    }
                     await loadReport(value, { current: 1, pageSize: reportPagination.pageSize, total: 0 });
                   }}
                   notFoundContent={<Empty description="Chưa có kỳ đã xử lý" imageStyle={{ height: 34 }} />}
@@ -1757,180 +2169,180 @@ function CustomerReport() {
                 />
               </Form.Item>
             </Col>
-            <Col xs={24} sm={12} md={5}>
-              <Form.Item label="Chế độ xem" style={{ marginBottom: 0 }}>
-                <Segmented
-                  block
-                  value={viewMode}
-                  onChange={setViewMode}
-                  options={[
-                    { label: 'Báo cáo', value: 'report' },
-                    { label: 'Nguồn DL', value: 'sources' },
-                  ]}
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="So sánh với kỳ" style={{ marginBottom: 0 }}>
+                <Select
+                  allowClear
+                  placeholder="Chọn kỳ"
+                  value={comparePeriod}
+                  options={reportPeriods
+                    .filter((item) => item.period_key !== selectedPeriod)
+                    .map((item) => ({
+                      value: item.period_key,
+                      label: `${item.period_key} · ${money(item.profile_count)} KH`,
+                    }))}
+                  onChange={setComparePeriod}
+                  notFoundContent={<Empty description="Chưa có kỳ khác" imageStyle={{ height: 34 }} />}
+                  showSearch
+                  style={{ width: '100%' }}
                 />
               </Form.Item>
             </Col>
-            <Col xs={24} md={14}>
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder="Tất cả chi nhánh"
+                  value={filterCn}
+                  onChange={handleCnChange}
+                  allowClear
+                  options={cnOptions}
+                  showSearch
+                  disabled={!branchScope.canChangeBranch}
+                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="PGD/phòng ban" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder={effectiveFilterCn ? 'Tất cả PGD thuộc chi nhánh' : 'Tất cả PGD'}
+                  value={filterPgd}
+                  onChange={handlePgdChange}
+                  allowClear
+                  options={pgdOptions}
+                  showSearch
+                  disabled={!branchScope.canChangePgd}
+                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="Cán bộ phụ trách" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder={effectiveFilterCn ? 'Cán bộ thuộc chi nhánh' : 'Tất cả cán bộ'}
+                  value={filterOfficer}
+                  onChange={setFilterOfficer}
+                  allowClear
+                  options={officerOptions}
+                  showSearch
+                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  notFoundContent={<Empty description="Không có cán bộ" imageStyle={{ height: 30 }} />}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
               <Form.Item label=" " style={{ marginBottom: 0 }}>
-                <Space wrap style={{ width: '100%', justifyContent: 'flex-start' }}>
+                <Space.Compact block>
+                  <Button
+                    icon={<FilterOutlined />}
+                    onClick={() => setAdvancedFilterOpen(true)}
+                  >
+                    Bộ lọc nâng cao
+                    {activeFilterCount > 0 && <Badge count={activeFilterCount} size="small" offset={[6, -2]} />}
+                  </Button>
                   <Button
                     type="primary"
                     icon={<SearchOutlined />}
                     loading={loading}
                     onClick={() => loadReport(selectedPeriod, { ...reportPagination, current: 1 })}
-                  >
-                    Tải báo cáo
-                  </Button>
-                  <Button icon={<DownloadOutlined />} disabled style={{ opacity: 0.65 }}>
-                    Xuất Excel
-                  </Button>
-                  {(filterOfficer || filterUnusedSvc.length || searchText || effectiveFilterCn || effectiveFilterPgd || filterLoanType.length || filterMultiBranch !== null) && (
-                    <Button
-                      danger
-                      onClick={() => {
-                        setFilterOfficer(null);
-                        setFilterUnusedSvc([]);
-                        setSearchText('');
-                        const resetScope = resolveBranchScope(user, null, null);
-                        setFilterCn(resetScope.filterCn);
-                        setFilterPgd(resetScope.filterPgd);
-                        setFilterLoanType([]);
-                        setFilterMultiBranch(null);
-                      }}
-                    >
-                      Xóa bộ lọc
-                    </Button>
-                  )}
-                </Space>
+                  />
+                </Space.Compact>
               </Form.Item>
             </Col>
           </Row>
-
-          <Collapse
-            className="report-filter-collapse"
-            variant="borderless"
-            defaultActiveKey={[]}
-            items={[
-              {
-                key: 'advanced',
-                label: 'Điều kiện lọc chi tiết',
-                extra: (
-                  <Text type="secondary">
-                    {(filterOfficer || filterUnusedSvc.length || searchText || effectiveFilterCn || effectiveFilterPgd || filterLoanType.length || filterMultiBranch !== null)
-                      ? 'Đang có bộ lọc'
-                      : 'Bấm để mở'}
-                  </Text>
-                ),
-                children: (
-                  <Row gutter={[12, 12]}>
-                    <Col xs={24} sm={12} md={4}>
-                      <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
-                        <Select
-                          placeholder="Tất cả chi nhánh"
-                          value={filterCn}
-                          onChange={handleCnChange}
-                          allowClear
-                          options={cnOptions}
-                          showSearch
-                          disabled={!branchScope.canChangeBranch}
-                          filterOption={(input, opt) =>
-                            (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                          }
-                          style={{ width: '100%' }}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} sm={12} md={5}>
-                      <Form.Item label="Phòng giao dịch" style={{ marginBottom: 0 }}>
-                        <Select
-                          placeholder={effectiveFilterCn ? 'Tất cả phòng GD thuộc chi nhánh' : 'Tất cả phòng GD'}
-                          value={filterPgd}
-                          onChange={handlePgdChange}
-                          allowClear
-                          options={pgdOptions}
-                          showSearch
-                          disabled={!branchScope.canChangePgd}
-                          filterOption={(input, opt) =>
-                            (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                          }
-                          style={{ width: '100%' }}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} sm={12} md={4}>
-                      <Form.Item label="Loại vay" style={{ marginBottom: 0 }}>
-                        <CheckboxPopoverFilter
-                          title="Chọn loại vay"
-                          placeholder="Tất cả loại vay"
-                          options={loanTypeOptions}
-                          value={filterLoanType}
-                          onChange={setFilterLoanType}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} sm={12} md={5}>
-                      <Form.Item label="Cán bộ phụ trách" style={{ marginBottom: 0 }}>
-                        <Select
-                          placeholder={effectiveFilterCn ? 'Tất cả cán bộ thuộc chi nhánh' : 'Tất cả cán bộ'}
-                          value={filterOfficer}
-                          onChange={setFilterOfficer}
-                          allowClear
-                          options={officerOptions}
-                          showSearch
-                          filterOption={(input, opt) =>
-                            (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())
-                          }
-                          notFoundContent={<Empty description="Không có cán bộ" imageStyle={{ height: 30 }} />}
-                          style={{ width: '100%' }}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} sm={12} md={4}>
-                      <Form.Item label="Phạm vi KH" style={{ marginBottom: 0 }}>
-                        <Select
-                          placeholder="Tất cả"
-                          value={filterMultiBranch}
-                          onChange={setFilterMultiBranch}
-                          allowClear
-                          options={[
-                            { value: true, label: 'Nhiều chi nhánh' },
-                            { value: false, label: 'Một chi nhánh' },
-                          ]}
-                          style={{ width: '100%' }}
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} sm={12} md={5}>
-                      <Form.Item label="KH chưa dùng dịch vụ" style={{ marginBottom: 0 }}>
-                        <CheckboxPopoverFilter
-                          title="Chọn dịch vụ khách hàng chưa dùng"
-                          placeholder="Tất cả dịch vụ"
-                          options={ACTIVE_SERVICES.map((item) => ({ value: item.key, label: item.label }))}
-                          value={filterUnusedSvc}
-                          onChange={setFilterUnusedSvc}
-                          className="report-checkbox-filter--services"
-                        />
-                      </Form.Item>
-                    </Col>
-                    <Col xs={24} sm={24} md={5}>
-                      <Form.Item label="Tìm kiếm nhanh" style={{ marginBottom: 0 }}>
-                        <Input
-                          placeholder="Tên KH / CIF / Mã CB"
-                          value={searchText}
-                          onChange={(e) => setSearchText(e.target.value)}
-                          allowClear
-                          prefix={<SearchOutlined style={{ color: '#cbd5e1' }} />}
-                          style={{ width: '100%' }}
-                        />
-                      </Form.Item>
-                    </Col>
-                  </Row>
-                ),
-              },
-            ]}
-          />
         </Form>
-      </Card>
+      </div>
+
+      <Drawer
+        title={
+          <Space>
+            <FilterOutlined />
+            <span>Bộ lọc nâng cao</span>
+            {activeFilterCount > 0 && <Tag color="red">{activeFilterCount} điều kiện</Tag>}
+          </Space>
+        }
+        open={advancedFilterOpen}
+        onClose={() => setAdvancedFilterOpen(false)}
+        width={520}
+        className="report-filter-drawer"
+        extra={
+          <Space>
+            <Button onClick={resetReportFilters} danger disabled={activeFilterCount === 0}>
+              Xóa lọc
+            </Button>
+            <Button
+              type="primary"
+              loading={loading}
+              onClick={() => {
+                setAdvancedFilterOpen(false);
+                loadReport(selectedPeriod, { ...reportPagination, current: 1 });
+              }}
+            >
+              Áp dụng
+            </Button>
+          </Space>
+        }
+      >
+        <Form layout="vertical">
+          <Form.Item label="Tìm kiếm nhanh">
+            <Input
+              placeholder="Tên KH / CIF / Mã CB / SĐT"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              allowClear
+              prefix={<SearchOutlined style={{ color: '#cbd5e1' }} />}
+            />
+          </Form.Item>
+          <Form.Item label="Loại vay">
+            <CheckboxPopoverFilter
+              title="Chọn loại vay"
+              placeholder="Tất cả loại vay"
+              options={loanTypeOptions}
+              value={filterLoanType}
+              onChange={setFilterLoanType}
+            />
+          </Form.Item>
+          <Form.Item label="Phạm vi khách hàng">
+            <Select
+              placeholder="Tất cả"
+              value={filterMultiBranch}
+              onChange={setFilterMultiBranch}
+              allowClear
+              options={[
+                { value: true, label: 'Nhiều chi nhánh' },
+                { value: false, label: 'Một chi nhánh' },
+              ]}
+            />
+          </Form.Item>
+          <Form.Item label="Khách hàng chưa dùng dịch vụ">
+            <CheckboxPopoverFilter
+              title="Chọn dịch vụ khách hàng chưa dùng"
+              placeholder="Tất cả dịch vụ"
+              options={ACTIVE_SERVICES.map((item) => ({ value: item.key, label: item.label }))}
+              value={filterUnusedSvc}
+              onChange={setFilterUnusedSvc}
+              className="report-checkbox-filter--services"
+            />
+          </Form.Item>
+          <Form.Item label="Chế độ xem">
+            <Segmented
+              block
+              value={viewMode}
+              onChange={setViewMode}
+              options={[
+                { label: 'Báo cáo', value: 'report' },
+                { label: 'Nguồn dữ liệu', value: 'sources' },
+              ]}
+            />
+          </Form.Item>
+          <Button icon={<DownloadOutlined />} disabled block style={{ opacity: 0.65 }}>
+            Xuất Excel
+          </Button>
+        </Form>
+      </Drawer>
 
 
       <div className="report-stat-grid">
@@ -1939,12 +2351,135 @@ function CustomerReport() {
         ))}
       </div>
 
+      <Collapse
+        className="report-insight-collapse"
+        bordered={false}
+        defaultActiveKey={[]}
+        items={[
+          {
+            key: 'insights',
+            label: (
+              <Space>
+                <TrophyOutlined />
+                <span>Phân tích trọng tâm</span>
+                <Tag color="blue">Theo kỳ {selectedPeriod || '—'}</Tag>
+              </Space>
+            ),
+            children: (
+              <Tabs
+                size="small"
+                items={[
+                  {
+                    key: 'groups',
+                    label: 'Phân nhóm KH',
+                    children: (
+                      <div className="report-mini-stat-grid">
+                        {groupCards.map((item) => (
+                          <ReportStatCard key={item.label} {...item} />
+                        ))}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'cross-sell',
+                    label: 'Cơ hội bán chéo',
+                    children: (
+                      <div className="report-mini-stat-grid">
+                        {crossSellCards.map((item) => (
+                          <ReportStatCard key={item.label} {...item} />
+                        ))}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'comparison',
+                    label: 'So sánh 2 kỳ',
+                    children: periodComparison ? (
+                      <Space orientation="vertical" size={10} style={{ width: '100%' }}>
+                        <Space size={[6, 6]} wrap>
+                          <Tag color="blue" icon={<SwapOutlined />}>{comparePeriod} → {selectedPeriod}</Tag>
+                          <Tag color="green">KH mới: {money(periodComparison.new_customers || 0)}</Tag>
+                          <Tag color="red">KH không còn phát sinh: {money(periodComparison.lost_customers || 0)}</Tag>
+                        </Space>
+                        <Row gutter={[8, 8]}>
+                          {comparisonItems.map((item) => (
+                            <Col xs={24} sm={12} xl={6} key={item.key}>
+                              <div className="comparison-tile">
+                                <Text type="secondary">{item.label}</Text>
+                                <div className="comparison-values">
+                                  <Tooltip title={`Kỳ hiện tại: ${item.isMoney ? moneyTooltip(item.current) : money(item.current)}`}>
+                                    <Text strong>{item.isMoney ? compactMoney(item.current) : money(item.current)}</Text>
+                                  </Tooltip>
+                                  {trendTag(item.delta, item.isMoney)}
+                                </div>
+                              </div>
+                            </Col>
+                          ))}
+                        </Row>
+                        <Space size={[6, 6]} wrap>
+                          {Object.entries(periodComparison.new_services || {}).slice(0, 6).map(([key, count]) => (
+                            <Tag key={`new-${key}`} color="green">
+                              Mới dùng {SERVICE_LABEL_BY_KEY[key] || key}: {money(count)}
+                            </Tag>
+                          ))}
+                          {Object.entries(periodComparison.lost_services || {}).slice(0, 6).map(([key, count]) => (
+                            <Tag key={`lost-${key}`} color="red">
+                              Mất {SERVICE_LABEL_BY_KEY[key] || key}: {money(count)}
+                            </Tag>
+                          ))}
+                        </Space>
+                      </Space>
+                    ) : (
+                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chọn kỳ so sánh để xem tăng/giảm" />
+                    ),
+                  },
+                  {
+                    key: 'services',
+                    label: 'Dịch vụ',
+                    children: (
+                      <div className="report-mini-stat-grid">
+                        {serviceGroupCards.map((item) => (
+                          <ReportStatCard key={item.label} {...item} />
+                        ))}
+                      </div>
+                    ),
+                  },
+                  {
+                    key: 'warnings',
+                    label: 'Cảnh báo dữ liệu',
+                    children: (
+                      <div className="report-warning-list">
+                        {dataQualityWarnings.map((item) => (
+                          <div className="report-warning-item" key={item.key}>
+                            <Tag color={item.color} icon={<WarningOutlined />}>{item.title}</Tag>
+                            <Text type="secondary">{item.description}</Text>
+                          </div>
+                        ))}
+                      </div>
+                    ),
+                  },
+                ]}
+              />
+            ),
+          },
+        ]}
+      />
+
       {/* Thanh trạng thái bộ lọc đang active */}
-      {(filterOfficer || filterUnusedSvc.length || effectiveFilterCn || effectiveFilterPgd || filterLoanType.length || filterMultiBranch !== null) && (
+      {activeFilterCount > 0 && (
         <div className="active-filter-bar">
           <Space size={8} wrap>
             <RiseOutlined style={{ color: '#7c3aed' }} />
             <Text strong style={{ fontSize: 13 }}>Đang lọc:</Text>
+            {searchText && (
+              <Tag
+                color="default"
+                closable
+                onClose={() => setSearchText('')}
+              >
+                Từ khóa: {searchText}
+              </Tag>
+            )}
             {effectiveFilterCn && (
               <Tag
                 color="blue"
@@ -2004,7 +2539,7 @@ function CustomerReport() {
               </Tag>
             ))}
             <Text type="secondary" style={{ fontSize: 12 }}>
-              → {filteredRows.length} khách hàng phù hợp
+              → {money(reportPagination.total)} khách hàng phù hợp
             </Text>
           </Space>
         </div>
@@ -2057,6 +2592,30 @@ function CustomerReport() {
           }
           extra={
             <Space size={12}>
+              <Popover
+                trigger="click"
+                placement="bottomRight"
+                title="Chọn cột hiển thị"
+                content={
+                  <div className="report-column-chooser">
+                    <Checkbox.Group
+                      value={visibleColumnKeys}
+                      onChange={(values) => setVisibleColumnKeys(values)}
+                      options={columnOptions}
+                    />
+                    <Space style={{ marginTop: 10 }}>
+                      <Button size="small" onClick={() => setVisibleColumnKeys(DEFAULT_REPORT_COLUMN_KEYS)}>
+                        Mặc định
+                      </Button>
+                      <Button size="small" onClick={() => setVisibleColumnKeys(columnOptions.map((item) => item.value))}>
+                        Tất cả
+                      </Button>
+                    </Space>
+                  </div>
+                }
+              >
+                <Button size="small" icon={<FilterOutlined />}>Chọn cột</Button>
+              </Popover>
               {filterUnusedSvc.length > 0 && (
                 <Tag color="orange" icon={<AimOutlined />}>
                   Chưa dùng: {filterUnusedSvc.length} dịch vụ
@@ -2173,6 +2732,50 @@ function CustomerReport() {
             { title: 'SĐT', dataIndex: 'telephone', width: 130, render: (value) => value || '—' },
           ]}
           locale={{ emptyText: <Empty description="Không có khách hàng phù hợp" /> }}
+        />
+      </Modal>
+      <Modal
+        open={groupModalOpen}
+        onCancel={() => setGroupModalOpen(false)}
+        footer={<Button onClick={() => setGroupModalOpen(false)}>Đóng</Button>}
+        width="96vw"
+        style={{ top: 24 }}
+        title={
+          <Space>
+            <TrophyOutlined style={{ color: '#8f1438' }} />
+            <span>{selectedGroup?.label || 'Danh sách khách hàng theo nhóm'}</span>
+            <Tag color="blue">{money(groupPagination.total)} KH</Tag>
+          </Space>
+        }
+      >
+        <Paragraph type="secondary" style={{ marginTop: -4 }}>
+          {selectedGroup?.description || 'Danh sách khách hàng thuộc nhóm đã chọn, có áp dụng phạm vi lọc hiện tại.'}
+        </Paragraph>
+        <Table
+          className="report-table"
+          bordered
+          size="small"
+          rowKey="ma_kh_chuan"
+          columns={columns}
+          dataSource={groupRows}
+          loading={groupLoading}
+          scroll={{ x: 'max-content', y: 520 }}
+          pagination={{
+            current: groupPagination.current,
+            pageSize: groupPagination.pageSize,
+            total: groupPagination.total,
+            showSizeChanger: true,
+            pageSizeOptions: [25, 50, 100],
+            showTotal: (total, range) => `${range[0]}-${range[1]} / ${money(total)} khách hàng`,
+          }}
+          onChange={(pagination) => {
+            loadGroupCustomers(selectedGroup, {
+              current: pagination.current,
+              pageSize: pagination.pageSize,
+              total: groupPagination.total,
+            });
+          }}
+          locale={{ emptyText: <Empty description="Không có khách hàng thuộc nhóm này" /> }}
         />
       </Modal>
       <CustomerDetailModal customer={detailCustomer} open={detailOpen} onClose={() => setDetailOpen(false)} />

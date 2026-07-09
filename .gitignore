@@ -4,13 +4,16 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-
+qlkh_db_server.dump
 # Backend local runtime
 backend/.venv/
 backend/.env
 backend/uploads/*
 backend/exports/*
 backend/logs/*
+backend/qlkh_db.sql
+backend/qlkh_db_server.dump
+backend/offline_packages/
 !backend/uploads/.gitkeep
 !backend/exports/.gitkeep
 !backend/logs/.gitkeep

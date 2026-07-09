@@ -2,13 +2,13 @@
 import {
   Button,
   Card,
+  Checkbox,
   Col,
   DatePicker,
   Empty,
   Form,
   Input,
   Modal,
-  Popconfirm,
   Progress,
   Row,
   Select,
@@ -28,6 +28,7 @@ import {
   CloudUploadOutlined,
   DatabaseOutlined,
   DeleteOutlined,
+  ExclamationCircleOutlined,
   FileDoneOutlined,
   FileExcelOutlined,
   FileTextOutlined,
@@ -237,7 +238,13 @@ function ImportData() {
   const [importJobs, setImportJobsState] = useState(warehouseSession.importJobs);
   const [resultOpen, setResultOpenState] = useState(warehouseSession.resultOpen);
   const [summarizing, setSummarizing] = useState(false);
+  const [recoveringJobs, setRecoveringJobs] = useState(false);
   const [deletingIds, setDeletingIds] = useState([]);
+  const [deletingPeriods, setDeletingPeriods] = useState([]);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [deleteReason, setDeleteReason] = useState('');
+  const [backupBeforeDelete, setBackupBeforeDelete] = useState(false);
+  const [backupDir, setBackupDir] = useState('');
 
   const selectedPeriod = Form.useWatch('period_key', form);
   const filterValues = Form.useWatch([], form);
@@ -330,6 +337,7 @@ function ImportData() {
     const uploadKey = item.meta ? `${item.meta.branchCode}_${item.meta.fileType}_${item.meta.periodKey}` : '';
     return { ...item, uploadKey, duplicatedInBatch: Boolean(uploadKey && uploadKeyCounts[uploadKey] > 1) };
   });
+  const selectedUploadSize = uploadPreview.reduce((sum, item) => sum + Number(item.size || 0), 0);
 
   const batchPeriods = new Set(uploadPreview.filter((item) => item.meta).map((item) => item.meta.periodKey));
   const detectedPeriod = batchPeriods.size === 1 ? [...batchPeriods][0] : '';
@@ -364,6 +372,20 @@ function ImportData() {
   const successJobs = importJobs.filter((job) => job.status === 'success').length;
   const errorJobs = importJobs.filter((job) => job.status === 'error').length;
   const errorDetails = importJobs.filter((job) => job.status === 'error');
+  const successDurationMs = importJobs
+    .filter((job) => job.status === 'success')
+    .reduce((sum, job) => sum + Number(job.durationMs || 0), 0);
+
+  function findPeriod(periodKey) {
+    return periods.find((period) => period.period_key === periodKey);
+  }
+
+  function openDeleteModal(type, record) {
+    setDeleteTarget({ type, record });
+    setDeleteReason('');
+    setBackupBeforeDelete(false);
+    setBackupDir('');
+  }
 
   async function loadFiles() {
     setLoadingFiles(true);
@@ -461,8 +483,10 @@ function ImportData() {
           percent: data.status === 'queued' ? 96 : isBackgroundJob ? 98 : 100,
           durationMs: Date.now() - startedAt,
           message: isBackgroundJob
-            ? 'File đã tải lên máy chủ và đang chờ backend xử lý. Theo dõi trạng thái trong bảng Kho dữ liệu.'
-            : `${data.success_rows || 0} dòng hợp lệ. Hãy tổng hợp kỳ sau khi import đủ file.`,
+            ? 'File đã tải lên máy chủ và được đưa vào hàng chờ import tuần tự. Có thể chuyển trang khác, backend vẫn xử lý tiếp.'
+            : data.needs_reprocess
+              ? `${data.success_rows || 0} dòng hợp lệ. Kỳ này cần chạy lại xử lý.`
+              : `${data.success_rows || 0} dòng hợp lệ. Hãy tổng hợp kỳ sau khi import đủ file.`,
         });
       } catch (error) {
         updateJob(item.uid, {
@@ -483,16 +507,48 @@ function ImportData() {
     await refreshAll();
   }
 
-  async function deleteFile(fileId) {
-    setDeletingIds((ids) => [...ids, fileId]);
+  async function confirmDeleteData() {
+    if (!deleteTarget) {
+      return;
+    }
+    const reason = deleteReason.trim();
+    if (reason.length < 5) {
+      message.warning('Nhập lý do xóa dữ liệu tối thiểu 5 ký tự');
+      return;
+    }
+
+    const isPeriod = deleteTarget.type === 'period';
+    const targetId = isPeriod ? deleteTarget.record.period_key : deleteTarget.record.id;
+    if (isPeriod) {
+      setDeletingPeriods((items) => [...items, targetId]);
+    } else {
+      setDeletingIds((ids) => [...ids, targetId]);
+    }
     try {
-      await client.delete(`/imports/files/${fileId}`, { params: { background: true }, timeout: 30 * 60 * 1000 });
-      message.success('Đã đưa file vào hàng chờ xóa. Hãy theo dõi trạng thái trong bảng kho dữ liệu.');
+      const payload = {
+        reason,
+        backup_before_delete: isPeriod ? backupBeforeDelete : false,
+        backup_dir: isPeriod && backupDir.trim() ? backupDir.trim() : null,
+      };
+      const endpoint = isPeriod ? `/imports/periods/${targetId}` : `/imports/files/${targetId}`;
+      const { data } = await client.delete(endpoint, { data: payload, timeout: 60 * 60 * 1000 });
+      if (data.backup_path) {
+        message.success(`Đã backup và xóa kỳ dữ liệu. File backup: ${data.backup_path}`);
+      } else if (data.needs_reprocess) {
+        message.warning('Đã xóa dữ liệu. Kỳ này cần chạy lại xử lý để báo cáo khớp nguồn mới.');
+      } else {
+        message.success(isPeriod ? 'Đã xóa kỳ dữ liệu khỏi DB' : 'Đã xóa file và dữ liệu chi tiết khỏi DB');
+      }
+      setDeleteTarget(null);
       await refreshAll();
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
-      setDeletingIds((ids) => ids.filter((id) => id !== fileId));
+      if (isPeriod) {
+        setDeletingPeriods((items) => items.filter((id) => id !== targetId));
+      } else {
+        setDeletingIds((ids) => ids.filter((id) => id !== targetId));
+      }
     }
   }
 
@@ -510,6 +566,23 @@ function ImportData() {
       message.error(error.response?.data?.detail || error.message);
     } finally {
       setSummarizing(false);
+    }
+  }
+
+  async function recoverStalledJobs() {
+    setRecoveringJobs(true);
+    try {
+      const periodKey = form.getFieldValue('period_key');
+      const { data } = await client.post('/imports/jobs/recover', null, {
+        params: periodKey ? { period_key: periodKey } : {},
+        timeout: 60 * 1000,
+      });
+      message.success(`Đã đưa ${data.queued_count || 0} job import về hàng chờ xử lý lại`);
+      await refreshAll();
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    } finally {
+      setRecoveringJobs(false);
     }
   }
 
@@ -579,13 +652,14 @@ function ImportData() {
       dataIndex: 'uploaded_at',
       key: 'uploaded_at',
       width: 170,
-      render: (value) => {
+      render: (value, row) => {
         if (!value) return '';
         const uploadedAt = new Date(value);
         return (
           <div className="warehouse-time-cell">
             <Text>{uploadedAt.toLocaleDateString('vi-VN')}</Text>
             <Text type="secondary">{uploadedAt.toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}</Text>
+            {row.duration_seconds ? <Tag color="blue">{formatSeconds(row.duration_seconds * 1000)}</Tag> : null}
           </div>
         );
       },
@@ -597,20 +671,20 @@ function ImportData() {
       align: 'center',
       fixed: 'right',
       render: (_, row) =>
-        ['deleted', 'replaced', 'deleting'].includes(row.status) ? (
-          <Tag>{row.status === 'deleting' ? 'Đang xóa' : 'Đã lưu lịch sử'}</Tag>
+        ['queued', 'processing'].includes(row.status) ? (
+          <Tag color="processing">Đang chạy</Tag>
+        ) : ['deleted', 'replaced', 'deleting'].includes(row.status) ? (
+          <Tag>{row.status === 'deleting' ? 'Đang xóa' : 'Bản cũ'}</Tag>
         ) : (
-          <Popconfirm
-            title="Xóa file khỏi kỳ dữ liệu?"
-            description="Dữ liệu chi tiết của file sẽ được gỡ khỏi báo cáo, lịch sử import vẫn còn."
-            okText="Xóa"
-            cancelText="Hủy"
-            onConfirm={() => deleteFile(row.id)}
+          <Button
+            danger
+            size="small"
+            icon={<DeleteOutlined />}
+            loading={deletingIds.includes(row.id)}
+            onClick={() => openDeleteModal('file', row)}
           >
-            <Button danger size="small" icon={<DeleteOutlined />} loading={deletingIds.includes(row.id)}>
-              Xóa
-            </Button>
-          </Popconfirm>
+            Xóa
+          </Button>
         ),
     },
   ];
@@ -706,7 +780,12 @@ function ImportData() {
               ...job,
               status: file.status,
               percent: file.status === 'queued' ? 96 : file.status === 'processing' ? 98 : 100,
-              durationMs: finished && !job.durationMs && job.startedAt ? Date.now() - job.startedAt : job.durationMs,
+              durationMs:
+                finished && file.duration_seconds
+                  ? file.duration_seconds * 1000
+                  : finished && !job.durationMs && job.startedAt
+                    ? Date.now() - job.startedAt
+                    : job.durationMs,
               message:
                 file.status === 'success'
                   ? `${file.success_rows || 0} dòng hợp lệ. Hãy tổng hợp kỳ sau khi import đủ file.`
@@ -782,6 +861,12 @@ function ImportData() {
               <Space wrap>
                 <Tag color={detectedPeriod ? 'gold' : 'error'}>
                   {detectedPeriod ? `${detectedPeriod} · ${periodLabel(detectedPeriod)}` : 'Chưa xác định được một kỳ duy nhất'}
+                </Tag>
+                <Tag color="blue">
+                  {uploadPreview.length} file · {formatBytes(selectedUploadSize)}
+                </Tag>
+                <Tag color="geekblue">
+                  Backend xử lý theo hàng chờ tuần tự để tránh treo máy
                 </Tag>
                 {constraintItems.map((item) => (
                   <Tag key={item.key} color={item.warning ? 'warning' : item.ok ? 'success' : 'error'}>
@@ -908,6 +993,9 @@ function ImportData() {
               >
                 Tải lại kho
               </Button>
+              <Button size="large" loading={recoveringJobs} icon={<ReloadOutlined />} onClick={recoverStalledJobs}>
+                Khôi phục job kẹt
+              </Button>
             </Space>
             <Button
               size="large"
@@ -927,16 +1015,45 @@ function ImportData() {
           {periods.length ? (
             periods.map((period) => (
               <Col xs={24} md={12} xl={6} key={period.period_key}>
-                <button
-                  type="button"
+                <div
+                  role="button"
+                  tabIndex={0}
                   className="period-tile"
                   onClick={() => {
                     form.setFieldsValue({ period_key: period.period_key, file_type: '' });
                     setTimeout(loadFiles, 0);
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') {
+                      form.setFieldsValue({ period_key: period.period_key, file_type: '' });
+                      setTimeout(loadFiles, 0);
+                    }
+                  }}
                 >
-                  <Text strong>{periodLabel(period.period_key)}</Text>
-                  <Text type="secondary">{period.period_key}</Text>
+                  <div className="period-tile-header">
+                    <Space orientation="vertical" size={0}>
+                      <Text strong>{periodLabel(period.period_key)}</Text>
+                      <Text type="secondary">{period.period_key}</Text>
+                    </Space>
+                    <Button
+                      danger
+                      size="small"
+                      icon={<DeleteOutlined />}
+                      disabled={period.running_job}
+                      loading={deletingPeriods.includes(period.period_key)}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openDeleteModal('period', period);
+                      }}
+                    >
+                      Xóa kỳ
+                    </Button>
+                  </div>
+                  <Space wrap size={4}>
+                    {period.processed ? <Tag color="green">Đã xử lý {Number(period.processed_customer_count || 0).toLocaleString('vi-VN')} KH</Tag> : <Tag>Chưa xử lý</Tag>}
+                    {period.needs_reprocess ? <Tag color="warning">Cần chạy lại xử lý</Tag> : null}
+                    {period.running_job ? <Tag color="processing">Đang có job chạy</Tag> : null}
+                  </Space>
                   <Space wrap size={4}>
                     {(period.file_types || []).map((type) => (
                       <Tag color={typeColors[type]} key={type}>
@@ -952,7 +1069,7 @@ function ImportData() {
                   <Text type="secondary">
                     {period.file_count || 0} file đang dùng · {formatBytes(period.total_size)} · {period.history_count || 0} lịch sử
                   </Text>
-                </button>
+                </div>
               </Col>
             ))
           ) : (
@@ -999,19 +1116,24 @@ function ImportData() {
       >
         <Space orientation="vertical" size={16} className="full-width">
           <Row gutter={[12, 12]}>
-            <Col xs={24} md={8}>
+            <Col xs={24} md={6}>
               <Card size="small">
                 <Statistic title="Tổng file" value={importJobs.length} />
               </Card>
             </Col>
-            <Col xs={24} md={8}>
+            <Col xs={24} md={6}>
               <Card size="small">
                 <Statistic title="Thành công" value={successJobs} valueStyle={{ color: '#218653' }} />
               </Card>
             </Col>
-            <Col xs={24} md={8}>
+            <Col xs={24} md={6}>
               <Card size="small">
                 <Statistic title="Không thành công" value={errorJobs} valueStyle={{ color: '#c62828' }} />
+              </Card>
+            </Col>
+            <Col xs={24} md={6}>
+              <Card size="small">
+                <Statistic title="Tổng thời gian import thành công" value={successDurationMs ? formatSeconds(successDurationMs) : '0 giây'} />
               </Card>
             </Col>
           </Row>
@@ -1036,6 +1158,88 @@ function ImportData() {
             />
           </Card>
         </Space>
+      </Modal>
+
+      <Modal
+        title={
+          <Space>
+            <ExclamationCircleOutlined style={{ color: '#b42318' }} />
+            <span>{deleteTarget?.type === 'period' ? 'Xóa kỳ dữ liệu' : 'Xóa file dữ liệu'}</span>
+          </Space>
+        }
+        open={Boolean(deleteTarget)}
+        okText="Xác nhận xóa"
+        cancelText="Hủy"
+        okButtonProps={{ danger: true, disabled: deleteReason.trim().length < 5 }}
+        confirmLoading={
+          deleteTarget?.type === 'period'
+            ? deletingPeriods.includes(deleteTarget.record.period_key)
+            : deletingIds.includes(deleteTarget?.record?.id)
+        }
+        onOk={confirmDeleteData}
+        onCancel={() => setDeleteTarget(null)}
+        width={720}
+      >
+        {deleteTarget ? (
+          <Space orientation="vertical" size={14} className="full-width">
+            <Card size="small" className="delete-warning-card">
+              {deleteTarget.type === 'period' ? (
+                <Space orientation="vertical" size={8}>
+                  <Text strong>Kỳ dữ liệu: {deleteTarget.record.period_key} · {periodLabel(deleteTarget.record.period_key)}</Text>
+                  <Text>
+                    Hành động này sẽ xóa toàn bộ file nguồn, dữ liệu chi tiết DP/LN/CN/PF, file bổ sung, trạng thái nguồn và kết quả xử lý của kỳ.
+                  </Text>
+                  {deleteTarget.record.processed ? (
+                    <Tag color="warning">
+                      Kỳ đã xử lý {Number(deleteTarget.record.processed_customer_count || 0).toLocaleString('vi-VN')} hồ sơ khách hàng
+                    </Tag>
+                  ) : null}
+                  {deleteTarget.record.comparison_periods?.length ? (
+                    <Tag color="orange">Có thể đang được dùng để so sánh với: {deleteTarget.record.comparison_periods.join(', ')}</Tag>
+                  ) : null}
+                  {deleteTarget.record.running_job ? <Tag color="processing">Kỳ đang có job chạy, backend sẽ không cho xóa</Tag> : null}
+                </Space>
+              ) : (
+                <Space orientation="vertical" size={8}>
+                  <Text strong>{deleteTarget.record.original_filename}</Text>
+                  <Text>
+                    File sẽ bị xóa khỏi DB cùng toàn bộ dòng dữ liệu chi tiết đã import từ file này. Lịch sử thao tác được ghi ở Nhật ký thao tác.
+                  </Text>
+                  {findPeriod(deleteTarget.record.period_key)?.processed ? (
+                    <Tag color="warning">Kỳ này đã xử lý. Sau khi xóa file sẽ cần chạy lại xử lý.</Tag>
+                  ) : null}
+                </Space>
+              )}
+            </Card>
+
+            <Input.TextArea
+              rows={3}
+              value={deleteReason}
+              onChange={(event) => setDeleteReason(event.target.value)}
+              placeholder="Nhập lý do xóa dữ liệu, ví dụ: Import nhầm file kỳ 20260630 cần thay bằng file đúng"
+              showCount
+              maxLength={500}
+            />
+
+            {deleteTarget.type === 'period' ? (
+              <Space orientation="vertical" size={10} className="full-width">
+                <Checkbox checked={backupBeforeDelete} onChange={(event) => setBackupBeforeDelete(event.target.checked)}>
+                  Backup toàn bộ database trước khi xóa kỳ
+                </Checkbox>
+                {backupBeforeDelete ? (
+                  <Input
+                    value={backupDir}
+                    onChange={(event) => setBackupDir(event.target.value)}
+                    placeholder="Thư mục lưu backup, để trống sẽ dùng backend/exports/backups"
+                  />
+                ) : null}
+                <Text type="secondary">
+                  Backup dùng `pg_dump`. Nếu máy chạy backend chưa có PostgreSQL client trên PATH, hệ thống sẽ báo lỗi và không xóa kỳ.
+                </Text>
+              </Space>
+            ) : null}
+          </Space>
+        ) : null}
       </Modal>
     </Space>
   );

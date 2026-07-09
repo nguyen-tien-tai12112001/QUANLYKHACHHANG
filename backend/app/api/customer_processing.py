@@ -76,11 +76,77 @@ PROFILE_SERVICE_FIELDS = {
     "the_ghi_no_noi_dia",
     "the_td_quoc_te",
     "the_td_loc_viet",
+    "bao_lanh",
+    "loa_bien_dong_so_du",
+    "phat_hanh_lc",
 }
+
+GROUP_DEPOSIT_THRESHOLD = 1_000_000_000
+GROUP_LOAN_THRESHOLD = 1_000_000_000
+GROUP_CASA_THRESHOLD = 500_000_000
 
 
 def no_service_condition():
     return and_(*(getattr(CustomerPeriodProfile, field) == 0 for field in PROFILE_SERVICE_FIELDS))
+
+
+def cross_sell_condition():
+    return or_(
+        and_(
+            (func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0))
+            >= GROUP_DEPOSIT_THRESHOLD,
+            CustomerPeriodProfile.agribank_plus == 0,
+        ),
+        and_(func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) > 0, CustomerPeriodProfile.sms_nhac_no_vay == 0),
+        and_(
+            func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD,
+            CustomerPeriodProfile.the_ghi_no_noi_dia == 0,
+            CustomerPeriodProfile.the_td_quoc_te == 0,
+            CustomerPeriodProfile.the_td_loc_viet == 0,
+        ),
+        CustomerPeriodProfile.branch_count > 1,
+    )
+
+
+def group_condition(group_key: str):
+    if group_key == "large_deposit":
+        return (
+            (func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0))
+            >= GROUP_DEPOSIT_THRESHOLD
+        )
+    if group_key == "large_loan":
+        return func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) >= GROUP_LOAN_THRESHOLD
+    if group_key == "high_casa":
+        return func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD
+    if group_key == "multi_branch":
+        return CustomerPeriodProfile.branch_count > 1
+    if group_key == "cross_sell":
+        return cross_sell_condition()
+    return None
+
+
+def profile_brief_fields() -> list[str]:
+    return [
+        "id",
+        "period_key",
+        "period_date",
+        "ma_kh",
+        "ten_kh",
+        "loai_khach_hang",
+        "branch_codes",
+        "pgd_codes",
+        "branch_count",
+        "pgd_count",
+        "so_du_tien_gui",
+        "doanh_so_chuyen_tien_ve_tk",
+        "so_du_tien_vay",
+        "loai_vay",
+        "so_du_tgtt_binh_quan",
+        "ma_cb",
+        "ten_can_bo",
+        "telephone",
+        *sorted(PROFILE_SERVICE_FIELDS),
+    ]
 
 
 def split_filter_values(value: str | None) -> list[str]:
@@ -98,6 +164,7 @@ def apply_profile_filters(
     loan_type: str | None = None,
     officer_code: str | None = None,
     unused_service: str | None = None,
+    group_key: str | None = None,
     multi_branch: bool | None = None,
     no_service: bool = False,
 ):
@@ -127,6 +194,10 @@ def apply_profile_filters(
     unused_services = [item for item in split_filter_values(unused_service) if item in PROFILE_SERVICE_FIELDS]
     for service in unused_services:
         query = query.filter(getattr(CustomerPeriodProfile, service) == 0)
+    if group_key:
+        condition = group_condition(group_key)
+        if condition is not None:
+            query = query.filter(condition)
     if no_service:
         query = query.filter(no_service_condition())
     return query
@@ -269,6 +340,7 @@ def list_profiles(
     loan_type: str | None = None,
     officer_code: str | None = None,
     unused_service: str | None = None,
+    group_key: str | None = None,
     no_service: bool = False,
     multi_branch: bool | None = None,
     page: int = Query(default=1, ge=1),
@@ -286,6 +358,7 @@ def list_profiles(
         loan_type=loan_type,
         officer_code=officer_code,
         unused_service=unused_service,
+        group_key=group_key,
         multi_branch=multi_branch,
         no_service=no_service,
     )
@@ -318,6 +391,9 @@ def list_profiles(
         "the_td_noi_dia",
         "the_td_quoc_te",
         "the_td_loc_viet",
+        "bao_lanh",
+        "loa_bien_dong_so_du",
+        "phat_hanh_lc",
         "ma_cb",
         "ten_can_bo",
         "telephone",
@@ -347,6 +423,7 @@ def get_profile_summary(
     loan_type: str | None = None,
     officer_code: str | None = None,
     unused_service: str | None = None,
+    group_key: str | None = None,
     multi_branch: bool | None = None,
     db: Session = Depends(get_db),
 ):
@@ -359,6 +436,7 @@ def get_profile_summary(
         loan_type=loan_type,
         officer_code=officer_code,
         unused_service=unused_service,
+        group_key=group_key,
         multi_branch=multi_branch,
     )
     summary = query.with_entities(
@@ -374,6 +452,174 @@ def get_profile_summary(
         "total_deposit": serialize_value(summary[2]),
         "total_casa": serialize_value(summary[3]),
         "no_service_customers": no_service_count,
+    }
+
+
+@router.get("/profile-groups")
+def get_profile_groups(
+    period_key: str = Query(...),
+    keyword: str | None = None,
+    branch_code: str | None = None,
+    pgd_code: str | None = None,
+    loan_type: str | None = None,
+    officer_code: str | None = None,
+    unused_service: str | None = None,
+    multi_branch: bool | None = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
+    query = apply_profile_filters(
+        query,
+        keyword=keyword,
+        branch_code=branch_code,
+        pgd_code=pgd_code,
+        loan_type=loan_type,
+        officer_code=officer_code,
+        unused_service=unused_service,
+        multi_branch=multi_branch,
+    )
+    groups = [
+        {
+            "key": "large_deposit",
+            "label": "Nhóm tiền gửi lớn",
+            "description": f"Tiền gửi CKH + TGTT bình quân từ {GROUP_DEPOSIT_THRESHOLD:,} đồng",
+            "count": query.filter(
+                (func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0))
+                >= GROUP_DEPOSIT_THRESHOLD
+            ).count(),
+        },
+        {
+            "key": "large_loan",
+            "label": "Nhóm dư nợ lớn",
+            "description": f"Dư nợ từ {GROUP_LOAN_THRESHOLD:,} đồng",
+            "count": query.filter(func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) >= GROUP_LOAN_THRESHOLD).count(),
+        },
+        {
+            "key": "high_casa",
+            "label": "Nhóm CASA cao",
+            "description": f"TGTT bình quân từ {GROUP_CASA_THRESHOLD:,} đồng",
+            "count": query.filter(func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD).count(),
+        },
+        {
+            "key": "multi_branch",
+            "label": "Nhóm khách hàng nhiều chi nhánh",
+            "description": "Khách hàng phát sinh tại hơn 1 chi nhánh",
+            "count": query.filter(CustomerPeriodProfile.branch_count > 1).count(),
+        },
+        {
+            "key": "cross_sell",
+            "label": "Nhóm tiềm năng bán chéo",
+            "description": "Có ít nhất một cảnh báo bán chéo từ dữ liệu hiện có",
+            "count": query.filter(cross_sell_condition()).count(),
+        },
+    ]
+    return {
+        "period_key": period_key,
+        "thresholds": {
+            "large_deposit": GROUP_DEPOSIT_THRESHOLD,
+            "large_loan": GROUP_LOAN_THRESHOLD,
+            "high_casa": GROUP_CASA_THRESHOLD,
+        },
+        "groups": groups,
+    }
+
+
+@router.get("/profile-history")
+def get_profile_history(ma_kh: str = Query(...), db: Session = Depends(get_db)):
+    rows = (
+        db.query(CustomerPeriodProfile)
+        .filter(CustomerPeriodProfile.ma_kh == ma_kh)
+        .order_by(CustomerPeriodProfile.period_key)
+        .all()
+    )
+    return [serialize_model(item, profile_brief_fields()) for item in rows]
+
+
+@router.get("/period-comparison")
+def compare_periods(
+    current_period: str = Query(...),
+    previous_period: str = Query(...),
+    branch_code: str | None = None,
+    pgd_code: str | None = None,
+    db: Session = Depends(get_db),
+):
+    current_query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == current_period)
+    previous_query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == previous_period)
+    current_query = apply_profile_filters(current_query, branch_code=branch_code, pgd_code=pgd_code)
+    previous_query = apply_profile_filters(previous_query, branch_code=branch_code, pgd_code=pgd_code)
+
+    def aggregate(query):
+        return query.with_entities(
+            func.count(CustomerPeriodProfile.id),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_gui), 0),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
+        ).one()
+
+    current_summary = aggregate(current_query)
+    previous_summary = aggregate(previous_query)
+
+    current_rows = current_query.with_entities(
+        CustomerPeriodProfile.ma_kh,
+        *[getattr(CustomerPeriodProfile, field) for field in sorted(PROFILE_SERVICE_FIELDS)],
+    ).all()
+    previous_rows = previous_query.with_entities(
+        CustomerPeriodProfile.ma_kh,
+        *[getattr(CustomerPeriodProfile, field) for field in sorted(PROFILE_SERVICE_FIELDS)],
+    ).all()
+
+    service_fields = sorted(PROFILE_SERVICE_FIELDS)
+    current_map = {
+        row[0]: {field for index, field in enumerate(service_fields, start=1) if int(row[index] or 0) > 0}
+        for row in current_rows
+    }
+    previous_map = {
+        row[0]: {field for index, field in enumerate(service_fields, start=1) if int(row[index] or 0) > 0}
+        for row in previous_rows
+    }
+    current_customers = set(current_map)
+    previous_customers = set(previous_map)
+
+    new_services: dict[str, int] = {field: 0 for field in service_fields}
+    lost_services: dict[str, int] = {field: 0 for field in service_fields}
+    for ma_kh in current_customers & previous_customers:
+        for field in current_map[ma_kh] - previous_map[ma_kh]:
+            new_services[field] += 1
+        for field in previous_map[ma_kh] - current_map[ma_kh]:
+            lost_services[field] += 1
+
+    def number(value):
+        return serialize_value(value) or 0
+
+    return {
+        "current_period": current_period,
+        "previous_period": previous_period,
+        "summary": {
+            "customers": {
+                "current": number(current_summary[0]),
+                "previous": number(previous_summary[0]),
+                "delta": number(current_summary[0]) - number(previous_summary[0]),
+            },
+            "deposit": {
+                "current": number(current_summary[1]),
+                "previous": number(previous_summary[1]),
+                "delta": number(current_summary[1]) - number(previous_summary[1]),
+            },
+            "loan": {
+                "current": number(current_summary[2]),
+                "previous": number(previous_summary[2]),
+                "delta": number(current_summary[2]) - number(previous_summary[2]),
+            },
+            "casa": {
+                "current": number(current_summary[3]),
+                "previous": number(previous_summary[3]),
+                "delta": number(current_summary[3]) - number(previous_summary[3]),
+            },
+        },
+        "new_customers": len(current_customers - previous_customers),
+        "lost_customers": len(previous_customers - current_customers),
+        "new_services": {key: value for key, value in new_services.items() if value > 0},
+        "lost_services": {key: value for key, value in lost_services.items() if value > 0},
     }
 
 
@@ -530,6 +776,9 @@ def list_branch_details(period_key: str = Query(...), ma_kh: str = Query(...), d
         "the_td_noi_dia",
         "the_td_quoc_te",
         "the_td_loc_viet",
+        "bao_lanh",
+        "loa_bien_dong_so_du",
+        "phat_hanh_lc",
         "ma_cb",
         "ten_can_bo",
     ]

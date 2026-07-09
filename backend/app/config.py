@@ -7,6 +7,9 @@ class Settings(BaseSettings):
     APP_NAME: str = "QUANLYKHACHHANG"
     DATABASE_URL: str
     CORS_ORIGINS: str = "http://localhost:3000"
+    IMPORT_WORKER_COUNT: int = 1
+    IMPORT_CHUNK_SIZE: int = 20000
+    DELETE_UPLOAD_AFTER_SUCCESS: bool = True
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -21,4 +24,3 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
-

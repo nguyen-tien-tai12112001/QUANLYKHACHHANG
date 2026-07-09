@@ -1,0 +1,38 @@
+Xử lý trên máy offline
+Bước 1: Trên máy có internet, tải thư viện
+
+Vào thư mục project:
+
+cd D:\QUANLYKHACHHANG\backend
+
+Tạo thư mục chứa package:
+
+mkdir offline_packages
+
+Tải toàn bộ thư viện theo requirements.txt:
+
+pip download -r requirements.txt -d offline_packages
+
+Copy cả thư mục này sang máy offline:
+
+backend\offline_packages
+Bước 2: Trên máy offline, cài vào .venv
+cd D:\QUANLYKHACHHANG\backend
+.venv\Scripts\activate
+
+Cài offline:
+
+python -m pip install --no-index --find-links=offline_packages -r requirements.txt
+
+Nếu chưa có requirements.txt, thử:
+
+python -m pip install --no-index --find-links=offline_packages fastapi uvicorn psycopg sqlalchemy python-dotenv
+Bước 3: Chạy backend
+
+Không chạy uvicorn trực tiếp nữa, chạy bằng Python:
+
+python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+
+Nếu máy chủ chạy thật thì nên bỏ --reload:
+
+python -m uvicorn app.main:app --host 0.0.0.0 --port 8000
