@@ -8,6 +8,7 @@ from sqlalchemy import delete, func, text
 from sqlalchemy.orm import Session
 from openpyxl import load_workbook
 
+from app.config import settings
 from app.database import SessionLocal
 from app.models import (
     CustomerPeriodBranchDetail,
@@ -288,6 +289,85 @@ PROFILE_SQL = text(
         FROM customer_period_branch_details
         WHERE period_key = :period_key
     ),
+    detail_scored AS (
+        SELECT
+            details.*,
+            (
+                COALESCE(thau_chi, 0) +
+                COALESCE(tk_so_dep, 0) +
+                COALESCE(agribank_plus, 0) +
+                COALESCE(tin_nhan_ott, 0) +
+                COALESCE(e_banking, 0) +
+                COALESCE(sms_nhac_no_vay, 0) +
+                COALESCE(sms_tien_gui, 0) +
+                COALESCE(the_ghi_no_noi_dia, 0) +
+                COALESCE(the_td_noi_dia, 0) +
+                COALESCE(the_td_quoc_te, 0) +
+                COALESCE(the_td_loc_viet, 0) +
+                COALESCE(bao_lanh, 0) +
+                COALESCE(loa_bien_dong_so_du, 0) +
+                COALESCE(phat_hanh_lc, 0)
+            ) AS service_count,
+            (
+                COALESCE(so_du_tien_vay, 0) +
+                COALESCE(so_du_tien_gui, 0) +
+                COALESCE(so_du_tgtt_binh_quan, 0)
+            ) AS financial_value,
+            ROUND(
+                (
+                    (
+                        COALESCE(so_du_tien_vay, 0) +
+                        COALESCE(so_du_tien_gui, 0) +
+                        COALESCE(so_du_tgtt_binh_quan, 0)
+                    ) / 1000000.0 * 0.40
+                )
+                + (COALESCE(doanh_so_cramt, 0) / 1000000.0 * 0.20)
+                + (
+                    (
+                        COALESCE(thau_chi, 0) +
+                        COALESCE(tk_so_dep, 0) +
+                        COALESCE(agribank_plus, 0) +
+                        COALESCE(tin_nhan_ott, 0) +
+                        COALESCE(e_banking, 0) +
+                        COALESCE(sms_nhac_no_vay, 0) +
+                        COALESCE(sms_tien_gui, 0) +
+                        COALESCE(the_ghi_no_noi_dia, 0) +
+                        COALESCE(the_td_noi_dia, 0) +
+                        COALESCE(the_td_quoc_te, 0) +
+                        COALESCE(the_td_loc_viet, 0) +
+                        COALESCE(bao_lanh, 0) +
+                        COALESCE(loa_bien_dong_so_du, 0) +
+                        COALESCE(phat_hanh_lc, 0)
+                    ) * 10 * 0.30
+                )
+                + (COALESCE(dp_record_count, 0) * 2 * 0.10),
+                2
+            ) AS engagement_score,
+            CONCAT_WS(
+                '; ',
+                CASE WHEN COALESCE(so_du_tien_vay, 0) > 0 THEN 'Có dư nợ' END,
+                CASE WHEN COALESCE(so_du_tien_gui, 0) > 0 THEN 'Có tiền gửi CKH' END,
+                CASE WHEN COALESCE(so_du_tgtt_binh_quan, 0) > 0 THEN 'Có TGTT bình quân' END,
+                CASE WHEN COALESCE(doanh_so_cramt, 0) > 0 THEN 'Có doanh số chuyển tiền về TK' END,
+                CASE WHEN (
+                    COALESCE(thau_chi, 0) +
+                    COALESCE(tk_so_dep, 0) +
+                    COALESCE(agribank_plus, 0) +
+                    COALESCE(tin_nhan_ott, 0) +
+                    COALESCE(e_banking, 0) +
+                    COALESCE(sms_nhac_no_vay, 0) +
+                    COALESCE(sms_tien_gui, 0) +
+                    COALESCE(the_ghi_no_noi_dia, 0) +
+                    COALESCE(the_td_noi_dia, 0) +
+                    COALESCE(the_td_quoc_te, 0) +
+                    COALESCE(the_td_loc_viet, 0) +
+                    COALESCE(bao_lanh, 0) +
+                    COALESCE(loa_bien_dong_so_du, 0) +
+                    COALESCE(phat_hanh_lc, 0)
+                ) > 0 THEN 'Có dịch vụ đang dùng' END
+            ) AS engagement_reason
+        FROM details
+    ),
     detail_agg AS (
         SELECT
             ma_kh,
@@ -329,6 +409,10 @@ PROFILE_SQL = text(
                     'branch_code', branch_code,
                     'ma_pgd', ma_pgd,
                     'ten_pgd', ten_pgd,
+                    'service_count', service_count,
+                    'financial_value', financial_value,
+                    'engagement_score', engagement_score,
+                    'engagement_reason', engagement_reason,
                     'so_du_tien_gui', so_du_tien_gui,
                     'doanh_so_cramt', doanh_so_cramt,
                     'so_du_tien_vay', so_du_tien_vay,
@@ -349,10 +433,28 @@ PROFILE_SQL = text(
                     'ma_cb', ma_cb,
                     'ten_can_bo', ten_can_bo
                 )
-                ORDER BY branch_code, ma_pgd
+                ORDER BY engagement_score DESC, financial_value DESC, service_count DESC, branch_code, ma_pgd
             ) AS branch_details
-        FROM details
+        FROM detail_scored
         GROUP BY ma_kh
+    ),
+    primary_location AS (
+        SELECT DISTINCT ON (ma_kh)
+            ma_kh,
+            branch_code AS primary_branch_code,
+            ma_pgd AS primary_pgd_code,
+            ten_pgd AS primary_pgd_name,
+            engagement_score AS primary_location_score,
+            engagement_reason AS primary_location_reason
+        FROM detail_scored
+        ORDER BY
+            ma_kh,
+            engagement_score DESC,
+            financial_value DESC,
+            service_count DESC,
+            dp_record_count DESC,
+            branch_code,
+            ma_pgd
     ),
     staff AS (
         SELECT
@@ -420,6 +522,11 @@ PROFILE_SQL = text(
         ma_cb,
         ten_can_bo,
         telephone,
+        primary_branch_code,
+        primary_pgd_code,
+        primary_pgd_name,
+        primary_location_score,
+        primary_location_reason,
         branch_details,
         processing_job_id
     )
@@ -456,12 +563,18 @@ PROFILE_SQL = text(
         COALESCE(loan_staff.ln_ma_cb, staff.dp_ma_cb),
         COALESCE(loan_staff.ln_ten_can_bo, staff.dp_ten_can_bo),
         phones.telephone,
+        primary_location.primary_branch_code,
+        primary_location.primary_pgd_code,
+        primary_location.primary_pgd_name,
+        primary_location.primary_location_score,
+        primary_location.primary_location_reason,
         detail_agg.branch_details,
         :job_id
     FROM detail_agg
     LEFT JOIN staff ON staff.ma_kh = detail_agg.ma_kh
     LEFT JOIN loan_staff ON loan_staff.ma_kh = detail_agg.ma_kh
     LEFT JOIN phones ON phones.ma_kh = detail_agg.ma_kh
+    LEFT JOIN primary_location ON primary_location.ma_kh = detail_agg.ma_kh
     """
 )
 
@@ -790,6 +903,8 @@ def process_customer_period(job_id: int) -> None:
         job = db.query(CustomerProcessingJob).filter(CustomerProcessingJob.id == job_id).first()
         if not job:
             return
+        db.execute(text(f"SET work_mem = '{settings.PROCESSING_WORK_MEM}'"))
+        db.execute(text("SET temp_buffers = '64MB'"))
 
         update_job(db, job, "processing", "Kiểm tra dữ liệu nguồn theo kỳ", 8)
         summary = get_period_file_summary(db, job.period_key)

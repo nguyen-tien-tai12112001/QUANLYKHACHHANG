@@ -102,16 +102,21 @@ function CustomerProcessing() {
   const [exchangeRates, setExchangeRates] = useState([]);
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
+  const [recovering, setRecovering] = useState(false);
   const [fileList, setFileList] = useState([]);
+
+  function selectPeriod(periodKey, periodList = periods) {
+    setSelectedPeriod(periodKey);
+    const period = periodList.find((item) => item.period_key === periodKey);
+    setCurrentJob(period?.last_job || null);
+  }
 
   async function loadPeriods(nextSelectedPeriod) {
     const { data } = await client.get('/customer-processing/periods');
     setPeriods(data || []);
     const target = nextSelectedPeriod || selectedPeriod || data?.[0]?.period_key || null;
     if (target) {
-      setSelectedPeriod(target);
-      const period = data.find((item) => item.period_key === target);
-      setCurrentJob(period?.last_job || null);
+      selectPeriod(target, data || []);
     }
   }
 
@@ -177,6 +182,12 @@ function CustomerProcessing() {
     [periods, selectedPeriod],
   );
 
+  const isCurrentJobRunning = currentJob && ['queued', 'processing'].includes(currentJob.status);
+  const isCurrentJobPossiblyStalled = useMemo(() => {
+    if (!isCurrentJobRunning || !currentJob?.updated_at) return false;
+    return Date.now() - new Date(currentJob.updated_at).getTime() > 15 * 60 * 1000;
+  }, [currentJob?.status, currentJob?.updated_at, isCurrentJobRunning]);
+
   async function startProcessing() {
     if (!selectedPeriod) {
       message.warning('Vui lòng chọn kỳ dữ liệu');
@@ -194,6 +205,28 @@ function CustomerProcessing() {
       message.error(error.response?.data?.detail || error.message);
     } finally {
       setProcessing(false);
+    }
+  }
+
+  async function recoverProcessing() {
+    if (!selectedPeriod) {
+      message.warning('Vui lòng chọn kỳ dữ liệu');
+      return;
+    }
+    setRecovering(true);
+    try {
+      const { data } = await client.post(`/customer-processing/jobs/${selectedPeriod}/recover`, null, {
+        timeout: 60 * 1000,
+      });
+      setCurrentJob(data);
+      localStorage.setItem('c360_processing_job_id', String(data.id));
+      localStorage.setItem('c360_processing_period_key', selectedPeriod);
+      message.success(`Đã tạo job mới để chạy lại kỳ ${selectedPeriod}`);
+      await loadPeriods(selectedPeriod);
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    } finally {
+      setRecovering(false);
     }
   }
 
@@ -231,7 +264,7 @@ function CustomerProcessing() {
       key: 'period_key',
       width: 120,
       render: (value, row) => (
-        <Button type="link" onClick={() => setSelectedPeriod(value)} style={{ padding: 0, fontWeight: 700 }}>
+        <Button type="link" onClick={() => selectPeriod(value)} style={{ padding: 0, fontWeight: 700 }}>
           {value}
           {selectedPeriod === value && <Tag color="blue" style={{ marginLeft: 8 }}>Đang xem</Tag>}
         </Button>
@@ -320,7 +353,7 @@ function CustomerProcessing() {
               placeholder="Chọn kỳ dữ liệu"
               style={{ width: 170 }}
               options={periods.map((item) => ({ value: item.period_key, label: item.period_key }))}
-              onChange={setSelectedPeriod}
+              onChange={selectPeriod}
             />
             <Button icon={<ReloadOutlined />} onClick={() => refreshAll()} loading={loading}>Tải lại</Button>
           </Space>
@@ -334,6 +367,9 @@ function CustomerProcessing() {
           pagination={{ pageSize: 5 }}
           loading={loading}
           rowClassName={(row) => (row.period_key === selectedPeriod ? 'row-selected-soft' : '')}
+          onRow={(row) => ({
+            onClick: () => selectPeriod(row.period_key),
+          })}
           locale={{ emptyText: <Empty description="Chưa có kỳ dữ liệu trong kho" /> }}
         />
       </Card>
@@ -382,17 +418,35 @@ function CustomerProcessing() {
 
         <Col xs={24} lg={14}>
           <Card
-            title="Chạy xử lý dữ liệu"
+            title={
+              <Space wrap>
+                <span>Chạy xử lý dữ liệu</span>
+                {selectedPeriod ? <Tag color="blue">Đang xem kỳ {selectedPeriod}</Tag> : null}
+                {isCurrentJobPossiblyStalled ? <Tag color="warning">Job có thể bị kẹt</Tag> : null}
+              </Space>
+            }
             extra={
-              <Button
-                type="primary"
-                icon={<PlayCircleOutlined />}
-                disabled={!selectedPeriodInfo?.success_by_type?.DP01}
-                loading={processing}
-                onClick={startProcessing}
-              >
-                Chạy dữ liệu
-              </Button>
+              <Space wrap>
+                {isCurrentJobRunning ? (
+                  <Button
+                    danger
+                    icon={<ReloadOutlined />}
+                    loading={recovering}
+                    onClick={recoverProcessing}
+                  >
+                    Chạy lại job kẹt
+                  </Button>
+                ) : null}
+                <Button
+                  type="primary"
+                  icon={<PlayCircleOutlined />}
+                  disabled={!selectedPeriodInfo?.success_by_type?.DP01 || isCurrentJobRunning}
+                  loading={processing}
+                  onClick={startProcessing}
+                >
+                  Chạy dữ liệu
+                </Button>
+              </Space>
             }
           >
             {selectedPeriodInfo ? (

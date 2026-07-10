@@ -1,8 +1,8 @@
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import and_, desc, func, or_
+from sqlalchemy import and_, desc, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.customer_processing import (
@@ -120,6 +120,8 @@ def group_condition(group_key: str):
         return func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD
     if group_key == "multi_branch":
         return CustomerPeriodProfile.branch_count > 1
+    if group_key == "primary_location_attention":
+        return and_(CustomerPeriodProfile.branch_count > 1, CustomerPeriodProfile.primary_branch_code.isnot(None))
     if group_key == "cross_sell":
         return cross_sell_condition()
     return None
@@ -145,6 +147,11 @@ def profile_brief_fields() -> list[str]:
         "ma_cb",
         "ten_can_bo",
         "telephone",
+        "primary_branch_code",
+        "primary_pgd_code",
+        "primary_pgd_name",
+        "primary_location_score",
+        "primary_location_reason",
         *sorted(PROFILE_SERVICE_FIELDS),
     ]
 
@@ -314,6 +321,59 @@ def start_processing_job(
     return serialize_job(job)
 
 
+@router.post("/jobs/{period_key}/recover")
+def recover_processing_job(
+    period_key: str,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    active_processing_query = db.execute(
+        text(
+            """
+            SELECT count(*)
+            FROM pg_stat_activity
+            WHERE datname = current_database()
+              AND pid <> pg_backend_pid()
+              AND state = 'active'
+              AND (
+                query LIKE '%customer_period_branch_details%'
+                OR query LIKE '%customer_period_profiles%'
+              )
+            """
+        )
+    ).scalar() or 0
+    if active_processing_query > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="PostgreSQL vẫn đang có query xử lý dữ liệu chạy thật. Không tạo job mới để tránh chạy trùng và khóa dữ liệu.",
+        )
+
+    running_jobs = (
+        db.query(CustomerProcessingJob)
+        .filter(
+            CustomerProcessingJob.period_key == period_key,
+            CustomerProcessingJob.status.in_(["queued", "processing"]),
+        )
+        .order_by(desc(CustomerProcessingJob.created_at))
+        .all()
+    )
+    for running in running_jobs:
+        running.status = "error"
+        running.stage = "Job xử lý bị kẹt, đã tạo job mới để chạy lại"
+        running.error_message = "Job cũ không còn tiến trình xử lý thực tế hoặc backend đã reload giữa chừng."
+        running.finished_at = datetime.now(timezone.utc)
+    if running_jobs:
+        db.commit()
+
+    try:
+        job = create_processing_job(db, period_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    background_tasks.add_task(process_customer_period, job.id)
+    return serialize_job(job)
+
+
 @router.get("/jobs")
 def list_jobs(period_key: str | None = None, db: Session = Depends(get_db)):
     query = db.query(CustomerProcessingJob)
@@ -397,6 +457,11 @@ def list_profiles(
         "ma_cb",
         "ten_can_bo",
         "telephone",
+        "primary_branch_code",
+        "primary_pgd_code",
+        "primary_pgd_name",
+        "primary_location_score",
+        "primary_location_reason",
         "branch_details",
         "processing_job_id",
     ]
@@ -511,6 +576,12 @@ def get_profile_groups(
             "label": "Nhóm tiềm năng bán chéo",
             "description": "Có ít nhất một cảnh báo bán chéo từ dữ liệu hiện có",
             "count": query.filter(cross_sell_condition()).count(),
+        },
+        {
+            "key": "primary_location_attention",
+            "label": "KH cần phân công nơi chăm sóc chính",
+            "description": "Khách hàng nhiều chi nhánh đã xác định điểm giao dịch nổi trội",
+            "count": query.filter(and_(CustomerPeriodProfile.branch_count > 1, CustomerPeriodProfile.primary_branch_code.isnot(None))).count(),
         },
     ]
     return {
@@ -742,6 +813,11 @@ def get_profile_filter_options(
 
 @router.get("/branch-details")
 def list_branch_details(period_key: str = Query(...), ma_kh: str = Query(...), db: Session = Depends(get_db)):
+    profile = (
+        db.query(CustomerPeriodProfile)
+        .filter(CustomerPeriodProfile.period_key == period_key, CustomerPeriodProfile.ma_kh == ma_kh)
+        .first()
+    )
     rows = (
         db.query(CustomerPeriodBranchDetail)
         .filter(CustomerPeriodBranchDetail.period_key == period_key, CustomerPeriodBranchDetail.ma_kh == ma_kh)
@@ -782,4 +858,54 @@ def list_branch_details(period_key: str = Query(...), ma_kh: str = Query(...), d
         "ma_cb",
         "ten_can_bo",
     ]
-    return [serialize_model(item, fields) for item in rows]
+    result = []
+    for item in rows:
+        payload = serialize_model(item, fields)
+        service_count = sum(int(payload.get(field) or 0) for field in PROFILE_SERVICE_FIELDS)
+        financial_value = (
+            float(payload.get("so_du_tien_vay") or 0)
+            + float(payload.get("so_du_tien_gui") or 0)
+            + float(payload.get("so_du_tgtt_binh_quan") or 0)
+        )
+        engagement_score = round(
+            financial_value / 1_000_000 * 0.40
+            + float(payload.get("doanh_so_cramt") or 0) / 1_000_000 * 0.20
+            + service_count * 10 * 0.30
+            + int(payload.get("dp_record_count") or 0) * 2 * 0.10,
+            2,
+        )
+        reasons = []
+        if float(payload.get("so_du_tien_vay") or 0) > 0:
+            reasons.append("Có dư nợ")
+        if float(payload.get("so_du_tien_gui") or 0) > 0:
+            reasons.append("Có tiền gửi CKH")
+        if float(payload.get("so_du_tgtt_binh_quan") or 0) > 0:
+            reasons.append("Có TGTT bình quân")
+        if float(payload.get("doanh_so_cramt") or 0) > 0:
+            reasons.append("Có doanh số chuyển tiền về TK")
+        if service_count > 0:
+            reasons.append("Có dịch vụ đang dùng")
+        payload.update(
+            {
+                "service_count": service_count,
+                "financial_value": financial_value,
+                "engagement_score": engagement_score,
+                "engagement_reason": "; ".join(reasons),
+                "has_primary_location": bool(profile and profile.primary_branch_code),
+                "is_primary_location": bool(
+                    profile
+                    and profile.primary_branch_code == payload.get("branch_code")
+                    and (profile.primary_pgd_code or "") == (payload.get("ma_pgd") or "")
+                ),
+            }
+        )
+        result.append(payload)
+    return sorted(
+        result,
+        key=lambda row: (
+            0 if row.get("is_primary_location") else 1,
+            -float(row.get("engagement_score") or 0),
+            str(row.get("branch_code") or ""),
+            str(row.get("ma_pgd") or ""),
+        ),
+    )

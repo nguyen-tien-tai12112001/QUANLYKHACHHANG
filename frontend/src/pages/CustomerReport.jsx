@@ -17,6 +17,7 @@ import {
   Select,
   Segmented,
   Space,
+  Spin,
   Statistic,
   Table,
   Tag,
@@ -179,6 +180,28 @@ function formatPgdLabel(value, pgdNameMap = {}) {
     return pgdNameMap[pgd] || PGD_NAMES[text]?.name || PGD_NAMES[pgd]?.name || text;
   }
   return pgdNameMap[text] || PGD_NAMES[text]?.name || text;
+}
+
+function getBranchRole(row, branchCode) {
+  if (!row?.primary_branch_code || !branchCode) return null;
+  return String(row.primary_branch_code).trim() === String(branchCode).trim() ? 'Chính' : 'Phụ';
+}
+
+function parsePgdBranchPair(value) {
+  const text = String(value || '').trim();
+  if (!text) return { branchCode: '', pgdCode: '' };
+  if (!text.includes(':')) return { branchCode: '', pgdCode: text };
+  const [branchCode, pgdCode] = text.split(':').map((part) => part.trim());
+  return { branchCode, pgdCode };
+}
+
+function getPgdRole(row, item) {
+  if (!row?.primary_branch_code) return null;
+  const { branchCode, pgdCode } = parsePgdBranchPair(item);
+  const sameBranch = branchCode && String(row.primary_branch_code).trim() === branchCode;
+  const primaryPgd = String(row.primary_pgd_code || '').trim();
+  const samePgd = primaryPgd ? primaryPgd === String(pgdCode || '').trim() : !pgdCode;
+  return sameBranch && samePgd ? 'Chính' : 'Phụ';
 }
 
 function CheckboxPopoverFilter({ title, placeholder, options, value, onChange, className = '' }) {
@@ -688,7 +711,14 @@ function BranchDetailSection({ customer }) {
       width: 230,
       render: (_, row) => (
         <Space orientation="vertical" size={2}>
-          <Tag color="blue">{row.branch_code || 'Chưa có chi nhánh'}</Tag>
+          <Space size={4} wrap>
+            <Tag color="blue">{row.branch_code || 'Chưa có chi nhánh'}</Tag>
+            {row.has_primary_location && (
+              <Tag color={row.is_primary_location ? 'green' : 'default'}>
+                {row.is_primary_location ? 'Chính' : 'Phụ'}
+              </Tag>
+            )}
+          </Space>
           <Text strong>{row.ten_pgd || formatPgdLabel(row.ma_pgd) || 'Chưa có PGD'}</Text>
           {row.ma_pgd && <Text type="secondary">Mã PGD: {row.ma_pgd}</Text>}
         </Space>
@@ -796,6 +826,7 @@ function BranchDetailSection({ customer }) {
         pagination={false}
         scroll={{ x: 1250, y: 320 }}
         locale={{ emptyText: <Empty description="Chưa có dữ liệu chi tiết theo chi nhánh" /> }}
+        rowClassName={(row) => (row.is_primary_location ? 'branch-primary-row' : '')}
       />
     </Card>
   );
@@ -1067,7 +1098,23 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       width: 120,
       align: 'center',
       sorter: (a, b) => (a.ma_cn || '').localeCompare(b.ma_cn || ''),
-      render: (v) => <Text style={{ fontSize: 12 }}>{v || '—'}</Text>,
+      render: (value, row) => {
+        const branches = splitList(value);
+        if (!branches.length) return <Text type="secondary">—</Text>;
+        return (
+          <Space size={[4, 4]} wrap>
+            {branches.map((code) => {
+              const role = getBranchRole(row, code);
+              return (
+                <Tag key={code} color={role === 'Chính' ? 'green' : 'default'} className="report-role-tag">
+                  {code}
+                  {role && <span className="report-role-tag-label">{role}</span>}
+                </Tag>
+              );
+            })}
+          </Space>
+        );
+      },
     },
     {
       title: 'Tên CN',
@@ -1096,16 +1143,22 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       width: 180,
       align: 'center',
       sorter: (a, b) => (a.ma_pgd || '').localeCompare(b.ma_pgd || ''),
-      render: (value) => {
+      render: (value, row) => {
         const items = normalizePgdCodes(value);
         if (!items.length) return <Text type="secondary">—</Text>;
         return (
           <Space size={[4, 4]} wrap>
-            {items.slice(0, 3).map((item) => (
-              <Tooltip key={item} title={item}>
-                <Tag>{formatPgdLabel(item, pgdNameMap)}</Tag>
-              </Tooltip>
-            ))}
+            {items.slice(0, 3).map((item) => {
+              const role = getPgdRole(row, item);
+              return (
+                <Tooltip key={item} title={item}>
+                  <Tag color={role === 'Chính' ? 'green' : 'default'} className="report-role-tag">
+                    {formatPgdLabel(item, pgdNameMap)}
+                    {role && <span className="report-role-tag-label">{role}</span>}
+                  </Tag>
+                </Tooltip>
+              );
+            })}
             {items.length > 3 && (
               <Tooltip title={items.map((item) => formatPgdLabel(item, pgdNameMap)).join(', ')}>
                 <Tag>+{items.length - 3}</Tag>
@@ -1301,6 +1354,10 @@ function CustomerReport() {
   const [comparePeriod, setComparePeriod] = useState(null);
   const [periodComparison, setPeriodComparison] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [periodsLoading, setPeriodsLoading] = useState(false);
+  const [filterOptionsLoading, setFilterOptionsLoading] = useState(false);
+  const [comparisonLoading, setComparisonLoading] = useState(false);
+  const [periodLoadingLabel, setPeriodLoadingLabel] = useState('');
   const [reportReady, setReportReady] = useState(false);
   const [viewMode, setViewMode] = useState('report');
   const [advancedFilterOpen, setAdvancedFilterOpen] = useState(false);
@@ -1425,14 +1482,19 @@ function CustomerReport() {
   }
 
   async function loadReportPeriods(preferredPeriod) {
-    const { data } = await client.get('/customer-processing/periods');
-    const processedPeriods = (data || []).filter((item) => Number(item.profile_count || 0) > 0);
-    setReportPeriods(processedPeriods);
-    const nextPeriod = preferredPeriod || selectedPeriod || processedPeriods[0]?.period_key || null;
-    const previousPeriod = processedPeriods.find((item) => item.period_key !== nextPeriod)?.period_key || null;
-    setSelectedPeriod(nextPeriod);
-    setComparePeriod((current) => current || previousPeriod);
-    return nextPeriod;
+    setPeriodsLoading(true);
+    try {
+      const { data } = await client.get('/customer-processing/periods');
+      const processedPeriods = (data || []).filter((item) => Number(item.profile_count || 0) > 0);
+      setReportPeriods(processedPeriods);
+      const nextPeriod = preferredPeriod || selectedPeriod || processedPeriods[0]?.period_key || null;
+      const previousPeriod = processedPeriods.find((item) => item.period_key !== nextPeriod)?.period_key || null;
+      setSelectedPeriod(nextPeriod);
+      setComparePeriod((current) => current || previousPeriod);
+      return nextPeriod;
+    } finally {
+      setPeriodsLoading(false);
+    }
   }
 
   function getReportParams(periodKey) {
@@ -1498,9 +1560,11 @@ function CustomerReport() {
 
   async function loadPeriodComparison(current = selectedPeriod, previous = comparePeriod) {
     if (!current || !previous || current === previous) {
+      setComparisonLoading(false);
       setPeriodComparison(null);
       return;
     }
+    setComparisonLoading(true);
     try {
       const { data } = await client.get('/customer-processing/period-comparison', {
         params: {
@@ -1513,11 +1577,14 @@ function CustomerReport() {
       setPeriodComparison(data || null);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
+    } finally {
+      setComparisonLoading(false);
     }
   }
 
   async function loadFilterOptions(period = selectedPeriod) {
     if (!period) return;
+    setFilterOptionsLoading(true);
     try {
       const { data } = await client.get('/customer-processing/profile-filter-options', {
         params: {
@@ -1529,6 +1596,8 @@ function CustomerReport() {
       setFilterOptions(data || { branches: [], pgds: [], pgd_options: [], pgd_names: {}, loan_types: [], officers: [] });
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
+    } finally {
+      setFilterOptionsLoading(false);
     }
   }
 
@@ -1853,6 +1922,7 @@ function CustomerReport() {
       high_casa: 'cyan',
       multi_branch: 'blue',
       cross_sell: 'gold',
+      primary_location_attention: 'purple',
     };
     const iconByKey = {
       large_deposit: <BankOutlined />,
@@ -1860,6 +1930,7 @@ function CustomerReport() {
       high_casa: <RiseOutlined />,
       multi_branch: <TeamOutlined />,
       cross_sell: <AimOutlined />,
+      primary_location_attention: <TrophyOutlined />,
     };
     return (groupStats.groups || []).map((item) => ({
       key: item.key,
@@ -2049,6 +2120,13 @@ function CustomerReport() {
     return result;
   }, [rows, searchText, filterOfficer, filterUnusedSvc, effectiveFilterCn, effectiveFilterPgd, filterLoanType, filterMultiBranch]);
 
+  const reportLoadingTip = periodLoadingLabel
+    ? `Đang cập nhật dữ liệu kỳ ${periodLoadingLabel}...`
+    : 'Đang tải dữ liệu báo cáo...';
+  const comparisonLoadingTip = comparePeriod && selectedPeriod
+    ? `Đang so sánh kỳ ${comparePeriod} với ${selectedPeriod}...`
+    : 'Đang tải dữ liệu so sánh...';
+
   const sourceColumns = useMemo(() => [
     {
       title: 'Nguồn',
@@ -2152,18 +2230,26 @@ function CustomerReport() {
                 <Select
                   placeholder="Chọn kỳ"
                   value={selectedPeriod}
+                  loading={periodsLoading || loading}
+                  disabled={periodsLoading}
                   options={reportPeriods.map((item) => ({
                     value: item.period_key,
                     label: `${item.period_key} · ${money(item.profile_count)} KH`,
                   }))}
                   onChange={async (value) => {
                     setSelectedPeriod(value);
+                    setPeriodComparison(null);
+                    setPeriodLoadingLabel(value);
                     if (comparePeriod === value) {
                       setComparePeriod(reportPeriods.find((item) => item.period_key !== value)?.period_key || null);
                     }
-                    await loadReport(value, { current: 1, pageSize: reportPagination.pageSize, total: 0 });
+                    try {
+                      await loadReport(value, { current: 1, pageSize: reportPagination.pageSize, total: 0 });
+                    } finally {
+                      setPeriodLoadingLabel('');
+                    }
                   }}
-                  notFoundContent={<Empty description="Chưa có kỳ đã xử lý" imageStyle={{ height: 34 }} />}
+                  notFoundContent={periodsLoading ? <Spin size="small" /> : <Empty description="Chưa có kỳ đã xử lý" imageStyle={{ height: 34 }} />}
                   showSearch
                   style={{ width: '100%' }}
                 />
@@ -2175,14 +2261,18 @@ function CustomerReport() {
                   allowClear
                   placeholder="Chọn kỳ"
                   value={comparePeriod}
+                  loading={periodsLoading || comparisonLoading}
                   options={reportPeriods
                     .filter((item) => item.period_key !== selectedPeriod)
                     .map((item) => ({
                       value: item.period_key,
                       label: `${item.period_key} · ${money(item.profile_count)} KH`,
                     }))}
-                  onChange={setComparePeriod}
-                  notFoundContent={<Empty description="Chưa có kỳ khác" imageStyle={{ height: 34 }} />}
+                  onChange={(value) => {
+                    setPeriodComparison(null);
+                    setComparePeriod(value);
+                  }}
+                  notFoundContent={periodsLoading ? <Spin size="small" /> : <Empty description="Chưa có kỳ khác" imageStyle={{ height: 34 }} />}
                   showSearch
                   style={{ width: '100%' }}
                 />
@@ -2197,7 +2287,8 @@ function CustomerReport() {
                   allowClear
                   options={cnOptions}
                   showSearch
-                  disabled={!branchScope.canChangeBranch}
+                  disabled={!branchScope.canChangeBranch || filterOptionsLoading}
+                  loading={filterOptionsLoading}
                   filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
                   style={{ width: '100%' }}
                 />
@@ -2212,7 +2303,8 @@ function CustomerReport() {
                   allowClear
                   options={pgdOptions}
                   showSearch
-                  disabled={!branchScope.canChangePgd}
+                  disabled={!branchScope.canChangePgd || filterOptionsLoading}
+                  loading={filterOptionsLoading}
                   filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
                   style={{ width: '100%' }}
                 />
@@ -2227,6 +2319,7 @@ function CustomerReport() {
                   allowClear
                   options={officerOptions}
                   showSearch
+                  loading={filterOptionsLoading}
                   filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
                   notFoundContent={<Empty description="Không có cán bộ" imageStyle={{ height: 30 }} />}
                   style={{ width: '100%' }}
@@ -2344,209 +2437,218 @@ function CustomerReport() {
         </Form>
       </Drawer>
 
-
-      <div className="report-stat-grid">
-        {reportStatCards.map((item) => (
-          <ReportStatCard key={item.label} {...item} />
-        ))}
-      </div>
-
-      <Collapse
-        className="report-insight-collapse"
-        bordered={false}
-        defaultActiveKey={[]}
-        items={[
-          {
-            key: 'insights',
-            label: (
-              <Space>
-                <TrophyOutlined />
-                <span>Phân tích trọng tâm</span>
-                <Tag color="blue">Theo kỳ {selectedPeriod || '—'}</Tag>
-              </Space>
-            ),
-            children: (
-              <Tabs
-                size="small"
-                items={[
-                  {
-                    key: 'groups',
-                    label: 'Phân nhóm KH',
-                    children: (
-                      <div className="report-mini-stat-grid">
-                        {groupCards.map((item) => (
-                          <ReportStatCard key={item.label} {...item} />
-                        ))}
-                      </div>
-                    ),
-                  },
-                  {
-                    key: 'cross-sell',
-                    label: 'Cơ hội bán chéo',
-                    children: (
-                      <div className="report-mini-stat-grid">
-                        {crossSellCards.map((item) => (
-                          <ReportStatCard key={item.label} {...item} />
-                        ))}
-                      </div>
-                    ),
-                  },
-                  {
-                    key: 'comparison',
-                    label: 'So sánh 2 kỳ',
-                    children: periodComparison ? (
-                      <Space orientation="vertical" size={10} style={{ width: '100%' }}>
-                        <Space size={[6, 6]} wrap>
-                          <Tag color="blue" icon={<SwapOutlined />}>{comparePeriod} → {selectedPeriod}</Tag>
-                          <Tag color="green">KH mới: {money(periodComparison.new_customers || 0)}</Tag>
-                          <Tag color="red">KH không còn phát sinh: {money(periodComparison.lost_customers || 0)}</Tag>
-                        </Space>
-                        <Row gutter={[8, 8]}>
-                          {comparisonItems.map((item) => (
-                            <Col xs={24} sm={12} xl={6} key={item.key}>
-                              <div className="comparison-tile">
-                                <Text type="secondary">{item.label}</Text>
-                                <div className="comparison-values">
-                                  <Tooltip title={`Kỳ hiện tại: ${item.isMoney ? moneyTooltip(item.current) : money(item.current)}`}>
-                                    <Text strong>{item.isMoney ? compactMoney(item.current) : money(item.current)}</Text>
-                                  </Tooltip>
-                                  {trendTag(item.delta, item.isMoney)}
-                                </div>
-                              </div>
-                            </Col>
-                          ))}
-                        </Row>
-                        <Space size={[6, 6]} wrap>
-                          {Object.entries(periodComparison.new_services || {}).slice(0, 6).map(([key, count]) => (
-                            <Tag key={`new-${key}`} color="green">
-                              Mới dùng {SERVICE_LABEL_BY_KEY[key] || key}: {money(count)}
-                            </Tag>
-                          ))}
-                          {Object.entries(periodComparison.lost_services || {}).slice(0, 6).map(([key, count]) => (
-                            <Tag key={`lost-${key}`} color="red">
-                              Mất {SERVICE_LABEL_BY_KEY[key] || key}: {money(count)}
-                            </Tag>
-                          ))}
-                        </Space>
-                      </Space>
-                    ) : (
-                      <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chọn kỳ so sánh để xem tăng/giảm" />
-                    ),
-                  },
-                  {
-                    key: 'services',
-                    label: 'Dịch vụ',
-                    children: (
-                      <div className="report-mini-stat-grid">
-                        {serviceGroupCards.map((item) => (
-                          <ReportStatCard key={item.label} {...item} />
-                        ))}
-                      </div>
-                    ),
-                  },
-                  {
-                    key: 'warnings',
-                    label: 'Cảnh báo dữ liệu',
-                    children: (
-                      <div className="report-warning-list">
-                        {dataQualityWarnings.map((item) => (
-                          <div className="report-warning-item" key={item.key}>
-                            <Tag color={item.color} icon={<WarningOutlined />}>{item.title}</Tag>
-                            <Text type="secondary">{item.description}</Text>
-                          </div>
-                        ))}
-                      </div>
-                    ),
-                  },
-                ]}
-              />
-            ),
-          },
-        ]}
-      />
-
-      {/* Thanh trạng thái bộ lọc đang active */}
-      {activeFilterCount > 0 && (
-        <div className="active-filter-bar">
-          <Space size={8} wrap>
-            <RiseOutlined style={{ color: '#7c3aed' }} />
-            <Text strong style={{ fontSize: 13 }}>Đang lọc:</Text>
-            {searchText && (
-              <Tag
-                color="default"
-                closable
-                onClose={() => setSearchText('')}
-              >
-                Từ khóa: {searchText}
-              </Tag>
-            )}
-            {effectiveFilterCn && (
-              <Tag
-                color="blue"
-                closable
-                onClose={() => handleCnChange(null)}
-              >
-                CN: {CN_NAMES[effectiveFilterCn] || effectiveFilterCn}
-              </Tag>
-            )}
-            {effectiveFilterPgd && (
-              <Tag
-                color="cyan"
-                closable
-                onClose={() => handlePgdChange(null)}
-              >
-                PGD: {formatPgdLabel(effectiveFilterPgd, filterOptions.pgd_names || {})}
-              </Tag>
-            )}
-            {filterOfficer && (
-              <Tag
-                color="purple"
-                closable
-                onClose={() => setFilterOfficer(null)}
-                icon={<TeamOutlined />}
-              >
-                CB: {officerOptions.find((o) => o.value === filterOfficer)?.label || filterOfficer}
-              </Tag>
-            )}
-            {filterLoanType.map((item) => (
-              <Tag
-                key={item}
-                color="volcano"
-                closable
-                onClose={() => setFilterLoanType((values) => values.filter((value) => value !== item))}
-              >
-                Loại vay: {item}
-              </Tag>
-            ))}
-            {filterMultiBranch !== null && (
-              <Tag
-                color="geekblue"
-                closable
-                onClose={() => setFilterMultiBranch(null)}
-              >
-                {filterMultiBranch ? 'KH nhiều chi nhánh' : 'KH một chi nhánh'}
-              </Tag>
-            )}
-            {filterUnusedSvc.map((serviceKey) => (
-              <Tag
-                key={serviceKey}
-                color="red"
-                closable
-                onClose={() => setFilterUnusedSvc((values) => values.filter((value) => value !== serviceKey))}
-                icon={<AimOutlined />}
-              >
-                Chưa dùng: {SERVICE_DEFS.find((s) => s.key === serviceKey)?.label}
-              </Tag>
-            ))}
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              → {money(reportPagination.total)} khách hàng phù hợp
-            </Text>
-          </Space>
+      <Spin spinning={loading} tip={reportLoadingTip} wrapperClassName="report-loading-wrapper">
+        <div className={loading ? 'report-refresh-note is-visible' : 'report-refresh-note'}>
+          <ClockCircleOutlined />
+          <span>{reportLoadingTip}</span>
         </div>
-      )}
 
-      {/* Nội dung chính */}
-      {viewMode === 'sources' ? (
+        <div className="report-stat-grid">
+          {reportStatCards.map((item) => (
+            <ReportStatCard key={item.label} {...item} />
+          ))}
+        </div>
+
+        <Collapse
+          className="report-insight-collapse"
+          bordered={false}
+          defaultActiveKey={[]}
+          items={[
+            {
+              key: 'insights',
+              label: (
+                <Space>
+                  <TrophyOutlined />
+                  <span>Phân tích trọng tâm</span>
+                  <Tag color="blue">Theo kỳ {selectedPeriod || '—'}</Tag>
+                </Space>
+              ),
+              children: (
+                <Tabs
+                  size="small"
+                  items={[
+                    {
+                      key: 'groups',
+                      label: 'Phân nhóm KH',
+                      children: (
+                        <div className="report-mini-stat-grid">
+                          {groupCards.map((item) => (
+                            <ReportStatCard key={item.label} {...item} />
+                          ))}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'cross-sell',
+                      label: 'Cơ hội bán chéo',
+                      children: (
+                        <div className="report-mini-stat-grid">
+                          {crossSellCards.map((item) => (
+                            <ReportStatCard key={item.label} {...item} />
+                          ))}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'comparison',
+                      label: 'So sánh 2 kỳ',
+                      children: (
+                        <Spin spinning={comparisonLoading} tip={comparisonLoadingTip}>
+                          {periodComparison ? (
+                            <Space orientation="vertical" size={10} style={{ width: '100%' }}>
+                              <Space size={[6, 6]} wrap>
+                                <Tag color="blue" icon={<SwapOutlined />}>{comparePeriod} → {selectedPeriod}</Tag>
+                                <Tag color="green">KH mới: {money(periodComparison.new_customers || 0)}</Tag>
+                                <Tag color="red">KH không còn phát sinh: {money(periodComparison.lost_customers || 0)}</Tag>
+                              </Space>
+                              <Row gutter={[8, 8]}>
+                                {comparisonItems.map((item) => (
+                                  <Col xs={24} sm={12} xl={6} key={item.key}>
+                                    <div className="comparison-tile">
+                                      <Text type="secondary">{item.label}</Text>
+                                      <div className="comparison-values">
+                                        <Tooltip title={`Kỳ hiện tại: ${item.isMoney ? moneyTooltip(item.current) : money(item.current)}`}>
+                                          <Text strong>{item.isMoney ? compactMoney(item.current) : money(item.current)}</Text>
+                                        </Tooltip>
+                                        {trendTag(item.delta, item.isMoney)}
+                                      </div>
+                                    </div>
+                                  </Col>
+                                ))}
+                              </Row>
+                              <Space size={[6, 6]} wrap>
+                                {Object.entries(periodComparison.new_services || {}).slice(0, 6).map(([key, count]) => (
+                                  <Tag key={`new-${key}`} color="green">
+                                    Mới dùng {SERVICE_LABEL_BY_KEY[key] || key}: {money(count)}
+                                  </Tag>
+                                ))}
+                                {Object.entries(periodComparison.lost_services || {}).slice(0, 6).map(([key, count]) => (
+                                  <Tag key={`lost-${key}`} color="red">
+                                    Mất {SERVICE_LABEL_BY_KEY[key] || key}: {money(count)}
+                                  </Tag>
+                                ))}
+                              </Space>
+                            </Space>
+                          ) : (
+                            <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={comparisonLoading ? 'Đang tải dữ liệu so sánh' : 'Chọn kỳ so sánh để xem tăng/giảm'} />
+                          )}
+                        </Spin>
+                      ),
+                    },
+                    {
+                      key: 'services',
+                      label: 'Dịch vụ',
+                      children: (
+                        <div className="report-mini-stat-grid">
+                          {serviceGroupCards.map((item) => (
+                            <ReportStatCard key={item.label} {...item} />
+                          ))}
+                        </div>
+                      ),
+                    },
+                    {
+                      key: 'warnings',
+                      label: 'Cảnh báo dữ liệu',
+                      children: (
+                        <div className="report-warning-list">
+                          {dataQualityWarnings.map((item) => (
+                            <div className="report-warning-item" key={item.key}>
+                              <Tag color={item.color} icon={<WarningOutlined />}>{item.title}</Tag>
+                              <Text type="secondary">{item.description}</Text>
+                            </div>
+                          ))}
+                        </div>
+                      ),
+                    },
+                  ]}
+                />
+              ),
+            },
+          ]}
+        />
+
+        {/* Thanh trạng thái bộ lọc đang active */}
+        {activeFilterCount > 0 && (
+          <div className="active-filter-bar">
+            <Space size={8} wrap>
+              <RiseOutlined style={{ color: '#7c3aed' }} />
+              <Text strong style={{ fontSize: 13 }}>Đang lọc:</Text>
+              {searchText && (
+                <Tag
+                  color="default"
+                  closable
+                  onClose={() => setSearchText('')}
+                >
+                  Từ khóa: {searchText}
+                </Tag>
+              )}
+              {effectiveFilterCn && (
+                <Tag
+                  color="blue"
+                  closable
+                  onClose={() => handleCnChange(null)}
+                >
+                  CN: {CN_NAMES[effectiveFilterCn] || effectiveFilterCn}
+                </Tag>
+              )}
+              {effectiveFilterPgd && (
+                <Tag
+                  color="cyan"
+                  closable
+                  onClose={() => handlePgdChange(null)}
+                >
+                  PGD: {formatPgdLabel(effectiveFilterPgd, filterOptions.pgd_names || {})}
+                </Tag>
+              )}
+              {filterOfficer && (
+                <Tag
+                  color="purple"
+                  closable
+                  onClose={() => setFilterOfficer(null)}
+                  icon={<TeamOutlined />}
+                >
+                  CB: {officerOptions.find((o) => o.value === filterOfficer)?.label || filterOfficer}
+                </Tag>
+              )}
+              {filterLoanType.map((item) => (
+                <Tag
+                  key={item}
+                  color="volcano"
+                  closable
+                  onClose={() => setFilterLoanType((values) => values.filter((value) => value !== item))}
+                >
+                  Loại vay: {item}
+                </Tag>
+              ))}
+              {filterMultiBranch !== null && (
+                <Tag
+                  color="geekblue"
+                  closable
+                  onClose={() => setFilterMultiBranch(null)}
+                >
+                  {filterMultiBranch ? 'KH nhiều chi nhánh' : 'KH một chi nhánh'}
+                </Tag>
+              )}
+              {filterUnusedSvc.map((serviceKey) => (
+                <Tag
+                  key={serviceKey}
+                  color="red"
+                  closable
+                  onClose={() => setFilterUnusedSvc((values) => values.filter((value) => value !== serviceKey))}
+                  icon={<AimOutlined />}
+                >
+                  Chưa dùng: {SERVICE_DEFS.find((s) => s.key === serviceKey)?.label}
+                </Tag>
+              ))}
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                → {money(reportPagination.total)} khách hàng phù hợp
+              </Text>
+            </Space>
+          </div>
+        )}
+
+        {/* Nội dung chính */}
+        {viewMode === 'sources' ? (
         <Card
           className="report-data-card"
           title="Theo dõi nguồn dữ liệu"
@@ -2560,6 +2662,7 @@ function CustomerReport() {
               rowKey="source_code"
               columns={sourceColumns}
               dataSource={sourceRows}
+              loading={{ spinning: loading, tip: reportLoadingTip }}
               pagination={false}
               scroll={{ x: 980 }}
               locale={{ emptyText: <Empty description="Chưa có trạng thái nguồn dữ liệu" /> }}
@@ -2639,7 +2742,7 @@ function CustomerReport() {
             rowKey="ma_kh_chuan"
             columns={columns}
             dataSource={filteredRows}
-            loading={loading}
+            loading={{ spinning: loading, tip: reportLoadingTip }}
             scroll={{ x: 'max-content', y: 560 }}
             pagination={{
               current: reportPagination.current,
@@ -2660,7 +2763,8 @@ function CustomerReport() {
             rowClassName={(_, index) => (index % 2 === 0 ? 'row-even' : 'row-odd')}
           />
         </Card>
-      )}
+        )}
+      </Spin>
 
       {/* Modals */}
       <Modal
