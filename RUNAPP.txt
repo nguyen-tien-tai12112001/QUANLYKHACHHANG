@@ -1,61 +1,8 @@
-Đã dựng xong khung fullstack QUANLYKHACHHANG theo yêu cầu. Mình giữ nguyên app Vite cũ đang có ở root, và tạo khung mới trong backend/, frontend/, database/.
-Đang chạy và đã kiểm tra thành công:
-Frontend: http://localhost:3000
-Backend: http://localhost:8000
-Backend docs: http://localhost:8000/docs
-Health API: http://localhost:8000/api/health
-PostgreSQL Docker: quanlykhachhang_postgres, port 5432
-Health API đã trả về:
-{"status":"ok","app":"QUANLYKHACHHANG","database":"connected"}
-Cây thư mục chính
-backend/
-  app/
-    api/
-      __init__.py
-      health.py
-    __init__.py
-    config.py
-    database.py
-    main.py
-  uploads/
-  exports/
-  logs/
-  .env
-  .env.example
-  requirements.txt
-  README.md
-
-frontend/
-  src/
-    api/client.js
-    components/MainLayout.jsx
-    pages/Dashboard.jsx
-    App.jsx
-    main.jsx
-    styles.css
-  .env
-  .env.example
-  index.html
-  package.json
-  package-lock.json
-  vite.config.js
-
-database/
-  init.sql
-
-docker-compose.yml
-.env.example
-start-dev.bat
-README.md
-Lệnh chạy lần đầu
-docker compose up -d
+Chạy backend
 cd backend
-python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+Chạy frontend
 cd frontend
 npm install
 copy .env.example .env
