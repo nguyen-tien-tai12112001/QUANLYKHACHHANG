@@ -10,7 +10,7 @@ import {
   WalletOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
-import { Alert, Button, Card, Col, Modal, Row, Select, Skeleton, Space, Spin, Tag, Typography, message } from 'antd';
+import { Alert, Button, Card, Col, Modal, Row, Select, Skeleton, Space, Spin, Tag, Tooltip, Typography, message } from 'antd';
 
 import CampaignList from '../components/dashboard/CampaignList';
 import VisualDashboard from '../components/dashboard/VisualDashboard';
@@ -26,6 +26,15 @@ import { formatPeriodKey } from '../utils/periodUtils';
 import { useCustomerSummary } from '../hooks/useCustomerSummary';
 
 const { Paragraph, Text, Title } = Typography;
+
+function compactMoney(value) {
+  const amount = Math.abs(Number(value || 0));
+  const sign = Number(value || 0) < 0 ? '-' : '';
+  if (amount >= 1_000_000_000_000) return `${sign}${(amount / 1_000_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} nghìn tỷ`;
+  if (amount >= 1_000_000_000) return `${sign}${(amount / 1_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} tỷ`;
+  if (amount >= 1_000_000) return `${sign}${(amount / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} triệu`;
+  return `${sign}${amount.toLocaleString('vi-VN')}`;
+}
 
 function StatusIndicator({ title, status, icon }) {
   const isOk = status === 'connected' || status === 'ok';
@@ -43,19 +52,26 @@ function StatusIndicator({ title, status, icon }) {
 }
 
 function KpiCard({ loading, label, value, icon, borderColor, bgGradient, valueColor }) {
+  const content = (
+    <>
+      {loading ? (
+        <Skeleton.Input active size="small" style={{ width: '80%', height: 28 }} />
+      ) : (
+        <span className="dashboard-kpi-value" style={{ color: valueColor }}>{value}</span>
+      )}
+    </>
+  );
+
   return (
     <div
+      className="dashboard-kpi-card"
       style={{
         background: bgGradient,
         border: '1px solid #e2e8f0',
         borderLeft: `4px solid ${borderColor}`,
         borderRadius: '8px',
-        padding: '12px 16px',
+        padding: '12px 14px',
         boxShadow: `0 2px 8px ${borderColor}14`,
-        display: 'flex',
-        flexDirection: 'column',
-        justifyContent: 'space-between',
-        minHeight: '92px',
       }}
     >
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
@@ -77,11 +93,7 @@ function KpiCard({ loading, label, value, icon, borderColor, bgGradient, valueCo
           {icon}
         </div>
       </div>
-      {loading ? (
-        <Skeleton.Input active size="small" style={{ width: '80%', height: 28 }} />
-      ) : (
-        <span style={{ fontSize: 'clamp(14px, 3.5vw, 20px)', fontWeight: 800, color: valueColor, lineHeight: 1 }}>{value}</span>
-      )}
+      {content}
     </div>
   );
 }
@@ -283,6 +295,7 @@ function Dashboard() {
               value={periodKey}
               onChange={handlePeriodChange}
               options={periodOptions}
+              loading={dataLoading}
               allowClear={false}
               disabled={isDemo && !periodOptions.length}
             />
@@ -320,9 +333,9 @@ function Dashboard() {
         />
       )}
 
-      <Spin spinning={dataLoading}>
-        <Row gutter={[12, 12]}>
-          <Col xs={12} md={8} xl={4}>
+      <Spin spinning={dataLoading} tip="Đang tải dữ liệu Dashboard...">
+        <Row gutter={[12, 12]} className="dashboard-kpi-grid">
+          <Col xs={24} sm={12} lg={8} xl={5}>
             <KpiCard
               loading={dataLoading}
               label="Tổng số khách hàng"
@@ -338,14 +351,14 @@ function Dashboard() {
               valueColor="#1e3a8a"
             />
           </Col>
-          <Col xs={12} md={8} xl={5}>
+          <Col xs={24} sm={12} lg={8} xl={5}>
             <KpiCard
               loading={dataLoading}
               label="Tổng dư nợ cho vay"
               value={
-                <>
-                  {money(metrics.loan)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
-                </>
+                <Tooltip title={`${money(metrics.loan)} đ`}>
+                  <span>{compactMoney(metrics.loan)} <span className="dashboard-kpi-unit">đ</span></span>
+                </Tooltip>
               }
               icon={<WalletOutlined style={{ fontSize: 14 }} />}
               borderColor="#f43f5e"
@@ -353,14 +366,14 @@ function Dashboard() {
               valueColor="#9f1239"
             />
           </Col>
-          <Col xs={12} md={8} xl={5}>
+          <Col xs={24} sm={12} lg={8} xl={5}>
             <KpiCard
               loading={dataLoading}
               label="Tổng tiền gửi CKH"
               value={
-                <>
-                  {money(metrics.deposit)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
-                </>
+                <Tooltip title={`${money(metrics.deposit)} đ`}>
+                  <span>{compactMoney(metrics.deposit)} <span className="dashboard-kpi-unit">đ</span></span>
+                </Tooltip>
               }
               icon={<BankOutlined style={{ fontSize: 14 }} />}
               borderColor="#10b981"
@@ -368,14 +381,14 @@ function Dashboard() {
               valueColor="#064e3b"
             />
           </Col>
-          <Col xs={12} md={8} xl={5}>
+          <Col xs={24} sm={12} lg={8} xl={5}>
             <KpiCard
               loading={dataLoading}
               label="Tổng CASA (TGTT bình quan)"
               value={
-                <>
-                  {money(metrics.casa)} <span style={{ fontSize: 12, fontWeight: 600 }}>đ</span>
-                </>
+                <Tooltip title={`${money(metrics.casa)} đ`}>
+                  <span>{compactMoney(metrics.casa)} <span className="dashboard-kpi-unit">đ</span></span>
+                </Tooltip>
               }
               icon={<RiseOutlined style={{ fontSize: 14 }} />}
               borderColor="#06b6d4"
@@ -383,7 +396,7 @@ function Dashboard() {
               valueColor="#164e63"
             />
           </Col>
-          <Col xs={12} md={8} xl={5}>
+          <Col xs={24} sm={12} lg={8} xl={4}>
             <KpiCard
               loading={dataLoading}
               label="Chưa dùng dịch vụ nào"
@@ -416,8 +429,6 @@ function Dashboard() {
         candidates={campaignCandidates}
         contactedIds={contactedIds}
         loading={dataLoading}
-        onContact={handleContactClick}
-        onMarkContacted={handleMarkContacted}
       />
 
       <Modal

@@ -14,6 +14,28 @@ import {
 
 const { Text } = Typography;
 
+function getBranchRole(row, branchCode) {
+  if (!row?.primary_branch_code || !branchCode) return null;
+  return String(row.primary_branch_code).trim() === String(branchCode).trim() ? 'Chính' : 'Phụ';
+}
+
+function parsePgdBranchPair(value) {
+  const text = String(value || '').trim();
+  if (!text) return { branchCode: '', pgdCode: '' };
+  if (!text.includes(':')) return { branchCode: '', pgdCode: text };
+  const [branchCode, pgdCode] = text.split(':').map((part) => part.trim());
+  return { branchCode, pgdCode };
+}
+
+function getPgdRole(row, item) {
+  if (!row?.primary_branch_code) return null;
+  const { branchCode, pgdCode } = parsePgdBranchPair(item);
+  const sameBranch = branchCode && String(row.primary_branch_code).trim() === branchCode;
+  const primaryPgd = String(row.primary_pgd_code || '').trim();
+  const samePgd = primaryPgd ? primaryPgd === String(pgdCode || '').trim() : !pgdCode;
+  return sameBranch && samePgd ? 'Chính' : 'Phụ';
+}
+
 export function buildReportColumns({ onDetailClick, pgdNameMap = {} }) {
   return [
     {
@@ -28,7 +50,26 @@ export function buildReportColumns({ onDetailClick, pgdNameMap = {} }) {
       dataIndex: 'ma_cn',
       key: 'ma_cn',
       width: 120,
-      render: (v) => <Text style={{ fontSize: 12 }}>{v || '—'}</Text>,
+      render: (value, row) => {
+        const branches = String(value || '')
+          .split(',')
+          .map((item) => item.trim())
+          .filter(Boolean);
+        if (!branches.length) return <Text type="secondary">—</Text>;
+        return (
+          <Space size={[4, 4]} wrap>
+            {branches.map((code) => {
+              const role = getBranchRole(row, code);
+              return (
+                <Tag key={code} color={role === 'Chính' ? 'green' : 'default'} className="report-role-tag">
+                  {code}
+                  {role && <span className="report-role-tag-label">{role}</span>}
+                </Tag>
+              );
+            })}
+          </Space>
+        );
+      },
     },
     {
       title: 'Tên CN',
@@ -50,17 +91,27 @@ export function buildReportColumns({ onDetailClick, pgdNameMap = {} }) {
       dataIndex: 'ma_pgd',
       key: 'ma_pgd',
       width: 180,
-      render: (value) => {
+      render: (value, row) => {
         const items = normalizePgdCodes(value);
         if (!items.length) return <Text type="secondary">—</Text>;
         return (
           <Space size={[4, 4]} wrap>
-            {items.slice(0, 3).map((item) => (
-              <Tooltip key={item} title={item}>
-                <Tag>{formatPgdLabel(item, pgdNameMap)}</Tag>
+            {items.slice(0, 3).map((item) => {
+              const role = getPgdRole(row, item);
+              return (
+                <Tooltip key={item} title={item}>
+                  <Tag color={role === 'Chính' ? 'green' : 'default'} className="report-role-tag">
+                    {formatPgdLabel(item, pgdNameMap)}
+                    {role && <span className="report-role-tag-label">{role}</span>}
+                  </Tag>
+                </Tooltip>
+              );
+            })}
+            {items.length > 3 && (
+              <Tooltip title={items.map((item) => formatPgdLabel(item, pgdNameMap)).join(', ')}>
+                <Tag>+{items.length - 3}</Tag>
               </Tooltip>
-            ))}
-            {items.length > 3 && <Tag>+{items.length - 3}</Tag>}
+            )}
           </Space>
         );
       },

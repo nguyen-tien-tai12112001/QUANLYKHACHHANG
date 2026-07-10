@@ -386,3 +386,266 @@ Khi nhận dự án:
 - Không commit mật khẩu DB thật.
 - Nếu chia sẻ qua Drive, nên giới hạn quyền truy cập.
 - Nếu dùng máy cá nhân làm DB chung, chỉ mở port trong mạng nội bộ tin cậy.
+
+## 12. Export DB từ Docker để import vào máy chủ PostgreSQL cài trực tiếp
+
+Phần này dùng khi bạn đang có dữ liệu trong Docker container:
+
+```text
+Container: quanlykhachhang_postgres
+Database: qlkh_db
+User Docker: qlkh_user
+```
+
+Và muốn đưa dữ liệu sang một máy chủ đã cài PostgreSQL trực tiếp, ví dụ:
+
+```text
+Host server: 192.168.1.10
+Port: 5432
+Database đích: quanlykhachhang
+User server: postgres
+```
+
+### 12.1. Cách khuyến nghị: export dạng custom dump `.dump`
+
+Trên máy đang chạy Docker DB, mở PowerShell tại thư mục dự án:
+
+```powershell
+cd D:\Code\QUANLYKHACHHANG
+```
+
+Chạy export:
+
+```powershell
+docker exec -t quanlykhachhang_postgres pg_dump -U qlkh_user -d qlkh_db -Fc > qlkh_db_server.dump
+```
+
+File được tạo ở máy Windows hiện tại:
+
+```text
+D:\Code\QUANLYKHACHHANG\qlkh_db_server.dump
+```
+
+Kiểm tra file:
+
+```powershell
+dir qlkh_db_server.dump
+```
+
+### 12.2. Chuyển file dump sang máy chủ PostgreSQL
+
+Có thể chuyển bằng:
+
+- USB.
+- Remote Desktop copy file.
+- Share folder nội bộ.
+- OneDrive/Google Drive nội bộ.
+- `scp` nếu server là Linux.
+
+Ví dụ nếu server Linux có SSH:
+
+```powershell
+scp .\qlkh_db_server.dump postgres@192.168.1.10:/tmp/qlkh_db_server.dump
+```
+
+### 12.3. Chuẩn bị database đích trên máy chủ PostgreSQL
+
+Trên máy chủ PostgreSQL, tạo database đích nếu chưa có.
+
+Nếu server là Windows, mở SQL Shell hoặc PowerShell chạy:
+
+```powershell
+psql -U postgres -h localhost -p 5432 -c "CREATE DATABASE quanlykhachhang;"
+```
+
+Nếu database đã tồn tại và muốn restore đè dữ liệu, có thể giữ nguyên database rồi dùng `pg_restore --clean --if-exists` ở bước sau.
+
+Nếu muốn xóa sạch database cũ và tạo lại:
+
+```powershell
+psql -U postgres -h localhost -p 5432 -c "DROP DATABASE IF EXISTS quanlykhachhang;"
+psql -U postgres -h localhost -p 5432 -c "CREATE DATABASE quanlykhachhang;"
+```
+
+Lưu ý: trước khi drop database, cần tắt backend/DBeaver hoặc các kết nối đang dùng DB đó.
+
+### 12.4. Restore `.dump` vào PostgreSQL server
+
+Trên máy chủ PostgreSQL, chạy:
+
+```powershell
+pg_restore -U postgres -h localhost -p 5432 -d quanlykhachhang --clean --if-exists qlkh_db_server.dump
+```
+
+Nếu file dump nằm ở thư mục khác, ghi rõ đường dẫn:
+
+```powershell
+pg_restore -U postgres -h localhost -p 5432 -d quanlykhachhang --clean --if-exists D:\Backup\qlkh_db_server.dump
+```
+
+Nếu server là Linux:
+
+```bash
+pg_restore -U postgres -h localhost -p 5432 -d quanlykhachhang --clean --if-exists /tmp/qlkh_db_server.dump
+```
+
+### 12.5. Nếu user đích không phải `postgres`
+
+Ví dụ bạn muốn dùng user riêng:
+
+```text
+Database: quanlykhachhang
+User: qlkh_user
+Password: qlkh_password
+```
+
+Tạo user và database:
+
+```powershell
+psql -U postgres -h localhost -p 5432 -c "CREATE USER qlkh_user WITH PASSWORD 'qlkh_password';"
+psql -U postgres -h localhost -p 5432 -c "CREATE DATABASE quanlykhachhang OWNER qlkh_user;"
+```
+
+Restore bằng user `postgres` vẫn được:
+
+```powershell
+pg_restore -U postgres -h localhost -p 5432 -d quanlykhachhang --clean --if-exists qlkh_db_server.dump
+```
+
+Sau restore, cấp quyền lại cho user ứng dụng:
+
+```powershell
+psql -U postgres -h localhost -p 5432 -d quanlykhachhang -c "GRANT ALL PRIVILEGES ON DATABASE quanlykhachhang TO qlkh_user;"
+psql -U postgres -h localhost -p 5432 -d quanlykhachhang -c "GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO qlkh_user;"
+psql -U postgres -h localhost -p 5432 -d quanlykhachhang -c "GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO qlkh_user;"
+```
+
+### 12.6. Cập nhật backend để dùng PostgreSQL server
+
+Trên máy chạy backend, sửa file:
+
+```text
+backend/.env
+```
+
+Ví dụ server PostgreSQL là `192.168.1.10`:
+
+```env
+DATABASE_URL=postgresql+psycopg://postgres:123456@192.168.1.10:5432/quanlykhachhang
+```
+
+Hoặc nếu dùng user riêng:
+
+```env
+DATABASE_URL=postgresql+psycopg://qlkh_user:qlkh_password@192.168.1.10:5432/quanlykhachhang
+```
+
+Sau đó restart backend:
+
+```powershell
+cd backend
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
+
+Kiểm tra:
+
+```powershell
+Invoke-RestMethod http://localhost:8000/api/health
+```
+
+Kết quả đúng:
+
+```json
+{
+  "status": "ok",
+  "app": "QUANLYKHACHHANG",
+  "database": "connected"
+}
+```
+
+### 12.7. Kiểm tra dữ liệu sau restore
+
+Trên máy chủ PostgreSQL:
+
+```powershell
+psql -U postgres -h localhost -p 5432 -d quanlykhachhang
+```
+
+Trong `psql`:
+
+```sql
+\dt
+SELECT COUNT(*) FROM system_users;
+SELECT COUNT(*) FROM import_files;
+SELECT COUNT(*) FROM customer_period_profiles;
+```
+
+Thoát:
+
+```sql
+\q
+```
+
+### 12.8. Cách khác: export dạng SQL text `.sql`
+
+Nếu muốn file dễ đọc bằng text editor, có thể export `.sql`:
+
+```powershell
+docker exec -t quanlykhachhang_postgres pg_dump -U qlkh_user -d qlkh_db --clean --if-exists > qlkh_db_server.sql
+```
+
+Restore `.sql` vào server:
+
+```powershell
+psql -U postgres -h localhost -p 5432 -d quanlykhachhang -f qlkh_db_server.sql
+```
+
+Khuyến nghị:
+
+- Dùng `.dump` với `pg_restore` cho dữ liệu lớn.
+- Dùng `.sql` khi cần đọc/sửa script thủ công.
+
+### 12.9. Lỗi thường gặp
+
+#### Lỗi: database đang có kết nối
+
+Tắt backend, DBeaver, hoặc các app đang kết nối DB.
+
+Có thể ngắt kết nối bằng SQL:
+
+```sql
+SELECT pg_terminate_backend(pid)
+FROM pg_stat_activity
+WHERE datname = 'quanlykhachhang'
+  AND pid <> pg_backend_pid();
+```
+
+#### Lỗi: permission denied
+
+Chạy restore bằng user `postgres`, sau đó cấp quyền lại cho user ứng dụng.
+
+#### Lỗi: role `qlkh_user` does not exist
+
+Tạo user trước:
+
+```powershell
+psql -U postgres -h localhost -p 5432 -c "CREATE USER qlkh_user WITH PASSWORD 'qlkh_password';"
+```
+
+Hoặc restore bằng tùy chọn không giữ owner:
+
+```powershell
+pg_restore -U postgres -h localhost -p 5432 -d quanlykhachhang --clean --if-exists --no-owner --no-privileges qlkh_db_server.dump
+```
+
+#### Lỗi: version mismatch
+
+Nên dùng `pg_restore` cùng phiên bản hoặc mới hơn phiên bản `pg_dump`.
+
+Docker đang dùng:
+
+```text
+postgres:16
+```
+
+Vì vậy PostgreSQL server đích nên dùng PostgreSQL 16 hoặc mới hơn để an toàn nhất.

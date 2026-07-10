@@ -1,13 +1,21 @@
 ﻿import { memo, useMemo } from 'react';
-import { CheckOutlined, PhoneOutlined } from '@ant-design/icons';
-import { Button, Card, Empty, Space, Table, Tag, Typography } from 'antd';
+import { Card, Empty, Space, Table, Tag, Tooltip, Typography } from 'antd';
 
 import { ACTIVE_SERVICE_COUNT } from '../../constants/services';
 import { money } from '../../utils/customerMetrics';
 
 const { Text } = Typography;
 
-function CampaignList({ candidates = [], contactedIds, loading = false, onContact, onMarkContacted }) {
+function compactMoney(value) {
+  const amount = Math.abs(Number(value || 0));
+  const sign = Number(value || 0) < 0 ? '-' : '';
+  if (amount >= 1_000_000_000_000) return `${sign}${(amount / 1_000_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} nghìn tỷ`;
+  if (amount >= 1_000_000_000) return `${sign}${(amount / 1_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} tỷ`;
+  if (amount >= 1_000_000) return `${sign}${(amount / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} triệu`;
+  return `${sign}${amount.toLocaleString('vi-VN')}`;
+}
+
+function CampaignList({ candidates = [], contactedIds, loading = false }) {
   const campaignCandidates = useMemo(
     () => candidates.filter((item) => !contactedIds?.has(item.ma_kh_chuan)),
     [candidates, contactedIds],
@@ -90,24 +98,22 @@ function CampaignList({ candidates = [], contactedIds, loading = false, onContac
       ),
     },
     {
-      title: 'Hành động',
-      key: 'action',
-      align: 'center',
+      title: 'Quy mô ưu tiên',
+      key: 'priority',
+      width: 150,
       render: (_, r) => (
-        <Space>
-          <Button
-            type="primary"
-            size="small"
-            icon={<PhoneOutlined />}
-            style={{ background: '#10b981', borderColor: '#10b981', borderRadius: '4px' }}
-            onClick={() => onContact(r)}
-          >
-            Tiếp cận
-          </Button>
-          <Button size="small" icon={<CheckOutlined />} onClick={() => onMarkContacted(r)}>
-            Đã gọi
-          </Button>
-        </Space>
+        <div>
+          <Tooltip title={`${money(r.totalAssets)} đ`}>
+            <Tag color="green" style={{ marginBottom: 4 }}>
+              {compactMoney(r.totalAssets)} đ
+            </Tag>
+          </Tooltip>
+          <div>
+            <Text type="secondary" style={{ fontSize: 11 }}>
+              Thiếu {(r.unused || []).length} DV · Đang dùng {r.usedCount}/{ACTIVE_SERVICE_COUNT}
+            </Text>
+          </div>
+        </div>
       ),
     },
   ];

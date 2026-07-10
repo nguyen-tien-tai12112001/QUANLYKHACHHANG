@@ -9,6 +9,7 @@ from app.api.health import router as health_router
 from app.api.imports import router as imports_router
 from app.config import settings
 from app.database import init_db
+from app.imports.importer import enqueue_pending_import_files, start_import_workers
 from app.seed_data import seed_initial_data
 
 
@@ -34,6 +35,8 @@ app.include_router(dashboard_router)
 def on_startup():
     init_db()
     seed_initial_data()
+    start_import_workers()
+    enqueue_pending_import_files()
 
 
 @app.get("/")

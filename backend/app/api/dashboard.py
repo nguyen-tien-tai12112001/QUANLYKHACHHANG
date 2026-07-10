@@ -23,6 +23,9 @@ ACTIVE_SERVICE_KEYS = [
     "the_ghi_no_noi_dia",
     "the_td_quoc_te",
     "the_td_loc_viet",
+    "bao_lanh",
+    "loa_bien_dong_so_du",
+    "phat_hanh_lc",
 ]
 
 SERVICE_LABELS = {
@@ -35,6 +38,9 @@ SERVICE_LABELS = {
     "the_ghi_no_noi_dia": "Thẻ ghi nợ nội địa",
     "the_td_quoc_te": "Thẻ TD quốc tế",
     "the_td_loc_viet": "Thẻ TD Lộc Việt",
+    "bao_lanh": "Bảo lãnh",
+    "loa_bien_dong_so_du": "Loa biến động số dư",
+    "phat_hanh_lc": "Phát hành LC",
 }
 
 SERVICE_GROUPS = {
@@ -47,6 +53,9 @@ SERVICE_GROUPS = {
     "the_ghi_no_noi_dia": "Thẻ",
     "the_td_quoc_te": "Thẻ",
     "the_td_loc_viet": "Thẻ",
+    "bao_lanh": "Bảo lãnh/TTQT",
+    "loa_bien_dong_so_du": "Khác",
+    "phat_hanh_lc": "Bảo lãnh/TTQT",
 }
 
 CAMPAIGN_GROUP_PRIORITY = {
