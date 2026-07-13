@@ -87,20 +87,34 @@ BRANCH_DETAIL_SQL = text(
         WHERE period_key = :period_key AND ma_kh IS NOT NULL
         GROUP BY period_key, ma_kh, ma_cn
     ),
+    valid_users AS (
+        SELECT DISTINCT ON (UPPER(TRIM(ipcas_username)))
+            UPPER(TRIM(ipcas_username)) AS normalized_ipcas_username,
+            TRIM(ipcas_username) AS ma_cb,
+            full_name AS ten_can_bo,
+            employee_code AS officer_employee_code
+        FROM system_users
+        WHERE ipcas_username IS NOT NULL
+            AND TRIM(ipcas_username) <> ''
+        ORDER BY UPPER(TRIM(ipcas_username)), is_active DESC, full_name
+    ),
     ln_base AS (
         SELECT
-            custseq AS ma_kh,
-            brcd AS branch_code,
-            COALESCE(du_no, 0) AS du_no,
-            loan_type,
-            COALESCE(officer_ipcas, officer_id) AS ma_cb,
-            officer_name AS ten_can_bo,
+            loans.custseq AS ma_kh,
+            loans.brcd AS branch_code,
+            COALESCE(loans.du_no, 0) AS du_no,
+            loans.loan_type,
+            valid_users.ma_cb,
+            valid_users.ten_can_bo,
+            valid_users.officer_employee_code,
             CASE WHEN loan_type = 'Thấu chi trên TK khách hàng' THEN 1 ELSE 0 END AS is_thau_chi,
             CASE WHEN loan_type = 'Vay ngắn hạn (TK 211)' THEN 1 ELSE 0 END AS is_ngan,
             CASE WHEN loan_type = 'Vay trung hạn (TK 212)' THEN 1 ELSE 0 END AS is_trung,
             CASE WHEN loan_type = 'Vay dài hạn (TK 213)' THEN 1 ELSE 0 END AS is_dai
-        FROM ln01_loans
-        WHERE period_key = :period_key AND custseq IS NOT NULL
+        FROM ln01_loans loans
+        LEFT JOIN valid_users
+            ON valid_users.normalized_ipcas_username = UPPER(TRIM(COALESCE(loans.officer_ipcas, '')))
+        WHERE loans.period_key = :period_key AND loans.custseq IS NOT NULL
     ),
     ln_agg AS (
         SELECT
@@ -119,19 +133,20 @@ BRANCH_DETAIL_SQL = text(
         GROUP BY ma_kh, branch_code
     ),
     ln_top_officer AS (
-        SELECT ma_kh, branch_code, ma_cb, ten_can_bo
+        SELECT ma_kh, branch_code, ma_cb, ten_can_bo, officer_employee_code
         FROM (
             SELECT
                 ma_kh,
                 branch_code,
                 ma_cb,
                 ten_can_bo,
+                officer_employee_code,
                 ROW_NUMBER() OVER (
                     PARTITION BY ma_kh, branch_code
                     ORDER BY du_no DESC, ma_cb NULLS LAST, ten_can_bo NULLS LAST
                 ) AS row_number
             FROM ln_base
-            WHERE ma_cb IS NOT NULL OR ten_can_bo IS NOT NULL
+            WHERE ma_cb IS NOT NULL
         ) ranked
         WHERE row_number = 1
     ),
@@ -143,7 +158,8 @@ BRANCH_DETAIL_SQL = text(
             ln_agg.loai_vay,
             ln_agg.thau_chi,
             ln_top_officer.ma_cb,
-            ln_top_officer.ten_can_bo
+            ln_top_officer.ten_can_bo,
+            ln_top_officer.officer_employee_code
         FROM ln_agg
         LEFT JOIN ln_top_officer
             ON ln_top_officer.ma_kh = ln_agg.ma_kh
@@ -240,6 +256,7 @@ BRANCH_DETAIL_SQL = text(
         the_td_loc_viet,
         ma_cb,
         ten_can_bo,
+        officer_employee_code,
         processing_job_id
     )
     SELECT
@@ -271,6 +288,7 @@ BRANCH_DETAIL_SQL = text(
         COALESCE(cn.the_td_loc_viet, 0),
         ln.ma_cb,
         ln.ten_can_bo,
+        ln.officer_employee_code,
         :job_id
     FROM keys
     LEFT JOIN dp ON dp.ma_kh = keys.ma_kh AND dp.branch_code = keys.branch_code
@@ -431,7 +449,8 @@ PROFILE_SQL = text(
                     'loa_bien_dong_so_du', loa_bien_dong_so_du,
                     'phat_hanh_lc', phat_hanh_lc,
                     'ma_cb', ma_cb,
-                    'ten_can_bo', ten_can_bo
+                    'ten_can_bo', ten_can_bo,
+                    'officer_employee_code', officer_employee_code
                 )
                 ORDER BY engagement_score DESC, financial_value DESC, service_count DESC, branch_code, ma_pgd
             ) AS branch_details
@@ -466,20 +485,19 @@ PROFILE_SQL = text(
         GROUP BY ma_kh
     ),
     loan_staff AS (
-        SELECT ma_kh, ma_cb AS ln_ma_cb, ten_can_bo AS ln_ten_can_bo
+        SELECT ma_kh, ma_cb AS ln_ma_cb, ten_can_bo AS ln_ten_can_bo, officer_employee_code AS ln_officer_employee_code
         FROM (
             SELECT
-                custseq AS ma_kh,
-                COALESCE(officer_ipcas, officer_id) AS ma_cb,
-                officer_name AS ten_can_bo,
+                ma_kh,
+                ma_cb,
+                ten_can_bo,
+                officer_employee_code,
                 ROW_NUMBER() OVER (
-                    PARTITION BY custseq
-                    ORDER BY COALESCE(du_no, 0) DESC, COALESCE(officer_ipcas, officer_id) NULLS LAST, officer_name NULLS LAST
+                    PARTITION BY ma_kh
+                    ORDER BY COALESCE(so_du_tien_vay, 0) DESC, ma_cb NULLS LAST, ten_can_bo NULLS LAST
                 ) AS row_number
-            FROM ln01_loans
-            WHERE period_key = :period_key
-                AND custseq IS NOT NULL
-                AND (officer_ipcas IS NOT NULL OR officer_id IS NOT NULL OR officer_name IS NOT NULL)
+            FROM details
+            WHERE ma_cb IS NOT NULL
         ) ranked
         WHERE row_number = 1
     ),
@@ -521,6 +539,7 @@ PROFILE_SQL = text(
         phat_hanh_lc,
         ma_cb,
         ten_can_bo,
+        officer_employee_code,
         telephone,
         primary_branch_code,
         primary_pgd_code,
@@ -560,8 +579,9 @@ PROFILE_SQL = text(
         detail_agg.bao_lanh,
         detail_agg.loa_bien_dong_so_du,
         detail_agg.phat_hanh_lc,
-        COALESCE(loan_staff.ln_ma_cb, staff.dp_ma_cb),
-        COALESCE(loan_staff.ln_ten_can_bo, staff.dp_ten_can_bo),
+        loan_staff.ln_ma_cb,
+        loan_staff.ln_ten_can_bo,
+        loan_staff.ln_officer_employee_code,
         phones.telephone,
         primary_location.primary_branch_code,
         primary_location.primary_pgd_code,
@@ -571,7 +591,6 @@ PROFILE_SQL = text(
         detail_agg.branch_details,
         :job_id
     FROM detail_agg
-    LEFT JOIN staff ON staff.ma_kh = detail_agg.ma_kh
     LEFT JOIN loan_staff ON loan_staff.ma_kh = detail_agg.ma_kh
     LEFT JOIN phones ON phones.ma_kh = detail_agg.ma_kh
     LEFT JOIN primary_location ON primary_location.ma_kh = detail_agg.ma_kh

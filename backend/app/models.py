@@ -358,6 +358,7 @@ class CustomerPeriodProfile(Base):
     phat_hanh_lc: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ma_cb: Mapped[str | None] = mapped_column(String(50))
     ten_can_bo: Mapped[str | None] = mapped_column(String(255))
+    officer_employee_code: Mapped[str | None] = mapped_column(String(50))
     telephone: Mapped[str | None] = mapped_column(String(50))
     primary_branch_code: Mapped[str | None] = mapped_column(String(10))
     primary_pgd_code: Mapped[str | None] = mapped_column(String(20))
@@ -409,6 +410,7 @@ class CustomerPeriodBranchDetail(Base):
     phat_hanh_lc: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ma_cb: Mapped[str | None] = mapped_column(String(50))
     ten_can_bo: Mapped[str | None] = mapped_column(String(255))
+    officer_employee_code: Mapped[str | None] = mapped_column(String(50))
     processing_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"), index=True)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

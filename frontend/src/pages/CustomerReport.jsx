@@ -204,6 +204,14 @@ function getPgdRole(row, item) {
   return sameBranch && samePgd ? 'Chính' : 'Phụ';
 }
 
+function formatOfficerLabel(row) {
+  if (!row?.ma_cb && !row?.ten_can_bo) return '—';
+  const name = row.ten_can_bo || row.ma_cb;
+  const employeeCode = row.officer_employee_code || '-';
+  const ipcas = row.ma_cb || '-';
+  return `${name} (${employeeCode} - ${ipcas})`;
+}
+
 function CheckboxPopoverFilter({ title, placeholder, options, value, onChange, className = '' }) {
   const selected = Array.isArray(value) ? value : [];
   const allValues = options.map((item) => item.value);
@@ -633,7 +641,7 @@ function CustomerDetailModal({ customer, open, onClose }) {
           <Descriptions.Item label="Loại vay">{customer.loai_vay || '—'}</Descriptions.Item>
           <Descriptions.Item label="Số điện thoại">{customer.telephone || '—'}</Descriptions.Item>
           <Descriptions.Item label="Cán bộ phụ trách">
-            {customer.ten_can_bo || '—'} {customer.ma_cb ? `(${customer.ma_cb})` : ''}
+            {formatOfficerLabel(customer)}
           </Descriptions.Item>
           <Descriptions.Item label="Doanh số chuyển tiền về TK" span={2}>
             {money(customer.doanh_so_chuyen_tien_ve_tai_khoan)} đ
@@ -880,7 +888,7 @@ function CustomerHistorySection({ customer }) {
           width: 160,
           render: (_, row) => <Tag color="green">{countUsed(row)}/{ACTIVE_SERVICES.length} dịch vụ</Tag>,
         },
-        { title: 'Cán bộ', key: 'officer', width: 180, ellipsis: true, render: (_, row) => row.ten_can_bo || row.ma_cb || '—' },
+        { title: 'Cán bộ', key: 'officer', width: 220, ellipsis: true, render: (_, row) => formatOfficerLabel(row) },
       ]}
       locale={{ emptyText: <Empty description="Chưa có lịch sử khách hàng qua các kỳ" /> }}
     />
@@ -1266,7 +1274,11 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
           <div style={{ fontSize: 12, fontWeight: 500 }}>
             {row.ten_can_bo || <Text type="secondary" style={{ fontSize: 11 }}>—</Text>}
           </div>
-          {row.ma_cb && <Text type="secondary" style={{ fontSize: 10 }}>{row.ma_cb}</Text>}
+          {row.ma_cb && (
+            <Text type="secondary" style={{ fontSize: 10 }}>
+              {row.officer_employee_code || '-'} - {row.ma_cb}
+            </Text>
+          )}
         </div>
       ),
     },
@@ -1821,11 +1833,11 @@ function CustomerReport() {
     if (filterOptions.officers?.length) return filterOptions.officers;
     const map = new Map();
     rows.forEach((r) => {
-      if (r.ma_cb) map.set(r.ma_cb, r.ten_can_bo || r.ma_cb);
+      if (r.ma_cb) map.set(r.ma_cb, formatOfficerLabel(r));
     });
     return [...map.entries()].map(([code, name]) => ({
       value: code,
-      label: `${name} (${code})`,
+      label: name,
     }));
   }, [filterOptions.officers, rows]);
 
@@ -2871,7 +2883,7 @@ function CustomerReport() {
                   : '—';
               },
             },
-            { title: 'Cán bộ', key: 'officer', width: 170, ellipsis: true, render: (_, row) => row.ten_can_bo || row.ma_cb || '—' },
+            { title: 'Cán bộ', key: 'officer', width: 220, ellipsis: true, render: (_, row) => formatOfficerLabel(row) },
             { title: 'Dư nợ', dataIndex: 'so_du_tien_vay', width: 130, align: 'right', render: money },
             { title: 'CKH', dataIndex: 'so_du_tien_gui_ckh', width: 130, align: 'right', render: money },
             { title: 'TGTT BQ', dataIndex: 'so_du_tgtt_binh_quan', width: 130, align: 'right', render: money },

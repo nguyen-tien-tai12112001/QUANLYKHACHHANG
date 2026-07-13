@@ -24,6 +24,8 @@ def init_db() -> None:
     Base.metadata.create_all(bind=engine)
     with engine.begin() as conn:
         conn.execute(text("ALTER TABLE IF EXISTS system_users ADD COLUMN IF NOT EXISTS data_scope VARCHAR(30) NOT NULL DEFAULT 'own'"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_system_users_credit_officer_code ON system_users (credit_officer_code)"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_system_users_ipcas_username ON system_users (ipcas_username)"))
         conn.execute(text("ALTER TABLE IF EXISTS org_departments ADD COLUMN IF NOT EXISTS department_type VARCHAR(50)"))
         conn.execute(text("ALTER TABLE IF EXISTS org_departments ADD COLUMN IF NOT EXISTS manager_user_id INTEGER"))
         conn.execute(text("ALTER TABLE IF EXISTS import_files ADD COLUMN IF NOT EXISTS started_at TIMESTAMP WITH TIME ZONE"))
@@ -77,6 +79,7 @@ def init_db() -> None:
         conn.execute(text("ALTER TABLE IF EXISTS customer_period_profiles ADD COLUMN IF NOT EXISTS primary_pgd_name VARCHAR(255)"))
         conn.execute(text("ALTER TABLE IF EXISTS customer_period_profiles ADD COLUMN IF NOT EXISTS primary_location_score NUMERIC(20, 2) DEFAULT 0"))
         conn.execute(text("ALTER TABLE IF EXISTS customer_period_profiles ADD COLUMN IF NOT EXISTS primary_location_reason TEXT"))
+        conn.execute(text("ALTER TABLE IF EXISTS customer_period_profiles ADD COLUMN IF NOT EXISTS officer_employee_code VARCHAR(50)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_customer_profiles_period_primary_branch ON customer_period_profiles (period_key, primary_branch_code)"))
         conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS loai_vay VARCHAR(100)"))
         conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS the_td_loc_viet INTEGER NOT NULL DEFAULT 0"))
@@ -85,6 +88,7 @@ def init_db() -> None:
         conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS phat_hanh_lc INTEGER NOT NULL DEFAULT 0"))
         conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS ma_cb VARCHAR(50)"))
         conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS ten_can_bo VARCHAR(255)"))
+        conn.execute(text("ALTER TABLE IF EXISTS customer_period_branch_details ADD COLUMN IF NOT EXISTS officer_employee_code VARCHAR(50)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_bao_lanh_period_customer_branch ON supplemental_bao_lanh_records (period_key, ma_kh, branch_code)"))
         conn.execute(text("CREATE INDEX IF NOT EXISTS ix_oab_period_account ON supplemental_oab_records (period_key, tk_agribank)"))
 

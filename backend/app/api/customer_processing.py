@@ -146,6 +146,7 @@ def profile_brief_fields() -> list[str]:
         "so_du_tgtt_binh_quan",
         "ma_cb",
         "ten_can_bo",
+        "officer_employee_code",
         "telephone",
         "primary_branch_code",
         "primary_pgd_code",
@@ -456,6 +457,7 @@ def list_profiles(
         "phat_hanh_lc",
         "ma_cb",
         "ten_can_bo",
+        "officer_employee_code",
         "telephone",
         "primary_branch_code",
         "primary_pgd_code",
@@ -788,17 +790,24 @@ def get_profile_filter_options(
     )
 
     officer_rows = (
-        scoped_query.with_entities(CustomerPeriodProfile.ma_cb, CustomerPeriodProfile.ten_can_bo)
+        scoped_query.with_entities(
+            CustomerPeriodProfile.ma_cb,
+            func.max(CustomerPeriodProfile.ten_can_bo),
+            func.max(CustomerPeriodProfile.officer_employee_code),
+        )
         .filter(CustomerPeriodProfile.ma_cb.isnot(None))
-        .distinct()
-        .order_by(CustomerPeriodProfile.ten_can_bo, CustomerPeriodProfile.ma_cb)
+        .group_by(CustomerPeriodProfile.ma_cb)
+        .order_by(func.max(CustomerPeriodProfile.ten_can_bo), CustomerPeriodProfile.ma_cb)
         .limit(1000)
         .all()
     )
     officers = [
-        {"value": row.ma_cb, "label": f"{row.ten_can_bo or row.ma_cb} ({row.ma_cb})"}
+        {
+            "value": row[0],
+            "label": f"{row[1] or row[0]} ({row[2] or '-'} - {row[0]})",
+        }
         for row in officer_rows
-        if row.ma_cb
+        if row[0]
     ]
 
     return {
@@ -857,6 +866,7 @@ def list_branch_details(period_key: str = Query(...), ma_kh: str = Query(...), d
         "phat_hanh_lc",
         "ma_cb",
         "ten_can_bo",
+        "officer_employee_code",
     ]
     result = []
     for item in rows:

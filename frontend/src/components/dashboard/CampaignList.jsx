@@ -15,6 +15,11 @@ function compactMoney(value) {
   return `${sign}${amount.toLocaleString('vi-VN')}`;
 }
 
+function formatOfficer(row) {
+  if (!row?.ma_cb && !row?.ten_can_bo) return 'Chưa gán';
+  return `${row.ten_can_bo || row.ma_cb} (${row.officer_employee_code || '-'} - ${row.ma_cb || '-'})`;
+}
+
 function CampaignList({ candidates = [], contactedIds, loading = false }) {
   const campaignCandidates = useMemo(
     () => candidates.filter((item) => !contactedIds?.has(item.ma_kh_chuan)),
@@ -70,12 +75,7 @@ function CampaignList({ candidates = [], contactedIds, loading = false }) {
       key: 'cb',
       render: (_, r) => (
         <div>
-          <div style={{ fontSize: 12, fontWeight: 500 }}>{r.ten_can_bo || 'Chưa gán'}</div>
-          {r.ma_cb && (
-            <Text type="secondary" style={{ fontSize: 10 }}>
-              {r.ma_cb}
-            </Text>
-          )}
+          <div style={{ fontSize: 12, fontWeight: 500 }}>{formatOfficer(r)}</div>
         </div>
       ),
     },

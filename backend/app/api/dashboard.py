@@ -181,6 +181,7 @@ def _row_to_dict(row: CustomerPeriodProfile) -> dict:
         "so_du_tgtt_binh_quan": row.so_du_tgtt_binh_quan,
         "ma_cb": row.ma_cb,
         "ten_can_bo": row.ten_can_bo,
+        "officer_employee_code": row.officer_employee_code,
         "telephone": row.telephone,
     }
     for key in ACTIVE_SERVICE_KEYS:
@@ -231,6 +232,7 @@ def dashboard_summary(
         .with_entities(
             CustomerPeriodProfile.ma_cb,
             CustomerPeriodProfile.ten_can_bo,
+            CustomerPeriodProfile.officer_employee_code,
             func.count(CustomerPeriodProfile.id),
             func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
             func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
@@ -239,16 +241,17 @@ def dashboard_summary(
                 for key in ACTIVE_SERVICE_KEYS
             ],
         )
-        .group_by(CustomerPeriodProfile.ma_cb, CustomerPeriodProfile.ten_can_bo)
+        .group_by(CustomerPeriodProfile.ma_cb, CustomerPeriodProfile.ten_can_bo, CustomerPeriodProfile.officer_employee_code)
         .all()
     )
 
     officer_leaderboard = []
     for row in officer_rows:
-        ma_cb, ten_can_bo, cust_count, total_loan_amt, total_casa = row[:5]
-        used_services_total = sum(float(value or 0) for value in row[5:])
+        ma_cb, ten_can_bo, officer_employee_code, cust_count, total_loan_amt, total_casa = row[:6]
+        used_services_total = sum(float(value or 0) for value in row[6:])
         officer_leaderboard.append({
             "code": ma_cb,
+            "employeeCode": officer_employee_code,
             "name": ten_can_bo or ma_cb,
             "custCount": cust_count,
             "totalLoan": float(total_loan_amt or 0),

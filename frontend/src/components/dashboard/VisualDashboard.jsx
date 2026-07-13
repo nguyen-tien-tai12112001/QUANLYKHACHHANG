@@ -135,7 +135,7 @@ function VisualDashboard({
                   <div>
                     <div style={{ fontSize: 13, fontWeight: 600, color: '#1e293b' }}>{o.name}</div>
                     <div style={{ fontSize: 11, color: '#64748b' }}>
-                      Mã CB: {o.code} | {o.custCount} KH
+                      Mã CB: {o.employeeCode || '-'} - {o.code} | {o.custCount} KH
                     </div>
                   </div>
                 </Space>
