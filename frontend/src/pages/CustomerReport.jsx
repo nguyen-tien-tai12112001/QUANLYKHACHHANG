@@ -1,4 +1,4 @@
-﻿import { useEffect, useMemo, useState } from 'react';
+﻿import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   Badge,
   Button,
@@ -1383,6 +1383,8 @@ function CustomerReport() {
   );
   const effectiveFilterCn = branchScope.filterCn;
   const effectiveFilterPgd = branchScope.filterPgd;
+  const workspaceRef = useRef(null);
+  const [tableScrollY, setTableScrollY] = useState(480);
 
   const handlePgdChange = (val) => {
     const resolved = resolveBranchScope(user, filterCn, val || null);
@@ -1429,6 +1431,44 @@ function CustomerReport() {
     filterLoanType.length,
     filterUnusedSvc.length,
   ].filter(Boolean).length;
+
+  useLayoutEffect(() => {
+    const workspace = workspaceRef.current;
+    if (!workspace) return undefined;
+
+    const updateScrollHeight = () => {
+      const toolbar = workspace.querySelector('.report-sticky-toolbar');
+      const filterBar = workspace.querySelector('.active-filter-bar');
+      const card = workspace.querySelector('.report-data-card');
+      const cardHead = card?.querySelector('.ant-card-head');
+
+      const workspaceHeight = workspace.clientHeight;
+      const toolbarHeight = toolbar?.offsetHeight ?? 0;
+      const filterHeight = filterBar?.offsetHeight ?? 0;
+      const cardHeadHeight = cardHead?.offsetHeight ?? 48;
+      const cardBodyPadding = 32;
+      const paginationReserve = 56;
+
+      const nextHeight = workspaceHeight
+        - toolbarHeight
+        - filterHeight
+        - cardHeadHeight
+        - cardBodyPadding
+        - paginationReserve;
+
+      setTableScrollY(Math.max(240, Math.floor(nextHeight)));
+    };
+
+    updateScrollHeight();
+    const observer = new ResizeObserver(updateScrollHeight);
+    observer.observe(workspace);
+    window.addEventListener('resize', updateScrollHeight);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', updateScrollHeight);
+    };
+  }, [activeFilterCount, viewMode, loading, reportPagination.pageSize]);
 
   // Modal states
   const [detailCustomer, setDetailCustomer] = useState(null);
@@ -2222,133 +2262,6 @@ function CustomerReport() {
         <Tag color="red" className="report-header-badge">C360</Tag>
       </div>
 
-      <div className="report-sticky-toolbar">
-        <Form form={form} layout="vertical">
-          <Row gutter={[10, 8]} align="bottom">
-            <Col xs={24} sm={12} lg={4}>
-              <Form.Item label="Kỳ dữ liệu" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="Chọn kỳ"
-                  value={selectedPeriod}
-                  loading={periodsLoading || loading}
-                  disabled={periodsLoading}
-                  options={reportPeriods.map((item) => ({
-                    value: item.period_key,
-                    label: `${item.period_key} · ${money(item.profile_count)} KH`,
-                  }))}
-                  onChange={async (value) => {
-                    setSelectedPeriod(value);
-                    setPeriodComparison(null);
-                    setPeriodLoadingLabel(value);
-                    if (comparePeriod === value) {
-                      setComparePeriod(reportPeriods.find((item) => item.period_key !== value)?.period_key || null);
-                    }
-                    try {
-                      await loadReport(value, { current: 1, pageSize: reportPagination.pageSize, total: 0 });
-                    } finally {
-                      setPeriodLoadingLabel('');
-                    }
-                  }}
-                  notFoundContent={periodsLoading ? <Spin size="small" /> : <Empty description="Chưa có kỳ đã xử lý" imageStyle={{ height: 34 }} />}
-                  showSearch
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} lg={4}>
-              <Form.Item label="So sánh với kỳ" style={{ marginBottom: 0 }}>
-                <Select
-                  allowClear
-                  placeholder="Chọn kỳ"
-                  value={comparePeriod}
-                  loading={periodsLoading || comparisonLoading}
-                  options={reportPeriods
-                    .filter((item) => item.period_key !== selectedPeriod)
-                    .map((item) => ({
-                      value: item.period_key,
-                      label: `${item.period_key} · ${money(item.profile_count)} KH`,
-                    }))}
-                  onChange={(value) => {
-                    setPeriodComparison(null);
-                    setComparePeriod(value);
-                  }}
-                  notFoundContent={periodsLoading ? <Spin size="small" /> : <Empty description="Chưa có kỳ khác" imageStyle={{ height: 34 }} />}
-                  showSearch
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} lg={4}>
-              <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder="Tất cả chi nhánh"
-                  value={filterCn}
-                  onChange={handleCnChange}
-                  allowClear
-                  options={cnOptions}
-                  showSearch
-                  disabled={!branchScope.canChangeBranch || filterOptionsLoading}
-                  loading={filterOptionsLoading}
-                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} lg={4}>
-              <Form.Item label="PGD/phòng ban" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder={effectiveFilterCn ? 'Tất cả PGD thuộc chi nhánh' : 'Tất cả PGD'}
-                  value={filterPgd}
-                  onChange={handlePgdChange}
-                  allowClear
-                  options={pgdOptions}
-                  showSearch
-                  disabled={!branchScope.canChangePgd || filterOptionsLoading}
-                  loading={filterOptionsLoading}
-                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} lg={4}>
-              <Form.Item label="Cán bộ phụ trách" style={{ marginBottom: 0 }}>
-                <Select
-                  placeholder={effectiveFilterCn ? 'Cán bộ thuộc chi nhánh' : 'Tất cả cán bộ'}
-                  value={filterOfficer}
-                  onChange={setFilterOfficer}
-                  allowClear
-                  options={officerOptions}
-                  showSearch
-                  loading={filterOptionsLoading}
-                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
-                  notFoundContent={<Empty description="Không có cán bộ" imageStyle={{ height: 30 }} />}
-                  style={{ width: '100%' }}
-                />
-              </Form.Item>
-            </Col>
-            <Col xs={24} sm={12} lg={4}>
-              <Form.Item label=" " style={{ marginBottom: 0 }}>
-                <Space.Compact block>
-                  <Button
-                    icon={<FilterOutlined />}
-                    onClick={() => setAdvancedFilterOpen(true)}
-                  >
-                    Bộ lọc nâng cao
-                    {activeFilterCount > 0 && <Badge count={activeFilterCount} size="small" offset={[6, -2]} />}
-                  </Button>
-                  <Button
-                    type="primary"
-                    icon={<SearchOutlined />}
-                    loading={loading}
-                    onClick={() => loadReport(selectedPeriod, { ...reportPagination, current: 1 })}
-                  />
-                </Space.Compact>
-              </Form.Item>
-            </Col>
-          </Row>
-        </Form>
-      </div>
-
       <Drawer
         title={
           <Space>
@@ -2567,6 +2480,134 @@ function CustomerReport() {
           ]}
         />
 
+        <div className="report-workspace" ref={workspaceRef}>
+      <div className="report-sticky-toolbar">
+        <Form form={form} layout="vertical">
+          <Row gutter={[10, 8]} align="bottom">
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="Kỳ dữ liệu" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder="Chọn kỳ"
+                  value={selectedPeriod}
+                  loading={periodsLoading || loading}
+                  disabled={periodsLoading}
+                  options={reportPeriods.map((item) => ({
+                    value: item.period_key,
+                    label: `${item.period_key} · ${money(item.profile_count)} KH`,
+                  }))}
+                  onChange={async (value) => {
+                    setSelectedPeriod(value);
+                    setPeriodComparison(null);
+                    setPeriodLoadingLabel(value);
+                    if (comparePeriod === value) {
+                      setComparePeriod(reportPeriods.find((item) => item.period_key !== value)?.period_key || null);
+                    }
+                    try {
+                      await loadReport(value, { current: 1, pageSize: reportPagination.pageSize, total: 0 });
+                    } finally {
+                      setPeriodLoadingLabel('');
+                    }
+                  }}
+                  notFoundContent={periodsLoading ? <Spin size="small" /> : <Empty description="Chưa có kỳ đã xử lý" imageStyle={{ height: 34 }} />}
+                  showSearch
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="So sánh với kỳ" style={{ marginBottom: 0 }}>
+                <Select
+                  allowClear
+                  placeholder="Chọn kỳ"
+                  value={comparePeriod}
+                  loading={periodsLoading || comparisonLoading}
+                  options={reportPeriods
+                    .filter((item) => item.period_key !== selectedPeriod)
+                    .map((item) => ({
+                      value: item.period_key,
+                      label: `${item.period_key} · ${money(item.profile_count)} KH`,
+                    }))}
+                  onChange={(value) => {
+                    setPeriodComparison(null);
+                    setComparePeriod(value);
+                  }}
+                  notFoundContent={periodsLoading ? <Spin size="small" /> : <Empty description="Chưa có kỳ khác" imageStyle={{ height: 34 }} />}
+                  showSearch
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="Chi nhánh" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder="Tất cả chi nhánh"
+                  value={filterCn}
+                  onChange={handleCnChange}
+                  allowClear
+                  options={cnOptions}
+                  showSearch
+                  disabled={!branchScope.canChangeBranch || filterOptionsLoading}
+                  loading={filterOptionsLoading}
+                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="PGD/phòng ban" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder={effectiveFilterCn ? 'Tất cả PGD thuộc chi nhánh' : 'Tất cả PGD'}
+                  value={filterPgd}
+                  onChange={handlePgdChange}
+                  allowClear
+                  options={pgdOptions}
+                  showSearch
+                  disabled={!branchScope.canChangePgd || filterOptionsLoading}
+                  loading={filterOptionsLoading}
+                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label="Cán bộ phụ trách" style={{ marginBottom: 0 }}>
+                <Select
+                  placeholder={effectiveFilterCn ? 'Cán bộ thuộc chi nhánh' : 'Tất cả cán bộ'}
+                  value={filterOfficer}
+                  onChange={setFilterOfficer}
+                  allowClear
+                  options={officerOptions}
+                  showSearch
+                  loading={filterOptionsLoading}
+                  filterOption={(input, opt) => (opt?.label ?? '').toLowerCase().includes(input.toLowerCase())}
+                  notFoundContent={<Empty description="Không có cán bộ" imageStyle={{ height: 30 }} />}
+                  style={{ width: '100%' }}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} sm={12} lg={4}>
+              <Form.Item label=" " style={{ marginBottom: 0 }}>
+                <Space.Compact block>
+                  <Button
+                    icon={<FilterOutlined />}
+                    onClick={() => setAdvancedFilterOpen(true)}
+                  >
+                    Bộ lọc nâng cao
+                    {activeFilterCount > 0 && <Badge count={activeFilterCount} size="small" offset={[6, -2]} />}
+                  </Button>
+                  <Button
+                    type="primary"
+                    icon={<SearchOutlined />}
+                    loading={loading}
+                    onClick={() => loadReport(selectedPeriod, { ...reportPagination, current: 1 })}
+                  />
+                </Space.Compact>
+              </Form.Item>
+            </Col>
+          </Row>
+        </Form>
+      </div>
+
         {/* Thanh trạng thái bộ lọc đang active */}
         {activeFilterCount > 0 && (
           <div className="active-filter-bar">
@@ -2664,7 +2705,7 @@ function CustomerReport() {
               dataSource={sourceRows}
               loading={{ spinning: loading, tip: reportLoadingTip }}
               pagination={false}
-              scroll={{ x: 980 }}
+              scroll={{ x: 980, y: tableScrollY }}
               locale={{ emptyText: <Empty description="Chưa có trạng thái nguồn dữ liệu" /> }}
             />
           ) : (
@@ -2743,7 +2784,7 @@ function CustomerReport() {
             columns={columns}
             dataSource={filteredRows}
             loading={{ spinning: loading, tip: reportLoadingTip }}
-            scroll={{ x: 'max-content', y: 560 }}
+            scroll={{ x: 'max-content', y: tableScrollY }}
             pagination={{
               current: reportPagination.current,
               pageSize: reportPagination.pageSize,
@@ -2764,6 +2805,7 @@ function CustomerReport() {
           />
         </Card>
         )}
+        </div>
       </Spin>
 
       {/* Modals */}

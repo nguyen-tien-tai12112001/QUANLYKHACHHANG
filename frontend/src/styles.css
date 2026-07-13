@@ -1407,26 +1407,51 @@ body {
   font-weight: 600;
 }
 
-.report-sticky-toolbar {
+.report-workspace {
   position: sticky;
-  top: 76px;
-  z-index: 30;
-  isolation: isolate;
+  top: 64px;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100vh - 64px - 48px);
+  min-height: 420px;
+  overflow: hidden;
+  background: var(--page);
+}
+
+.report-sticky-toolbar {
+  flex-shrink: 0;
   padding: 10px;
   border: 1px solid rgba(143, 20, 56, 0.14);
   border-radius: 8px;
   background: #ffffff;
-  box-shadow: 0 12px 28px rgba(55, 23, 35, 0.12);
+  box-shadow: 0 4px 14px rgba(55, 23, 35, 0.08);
 }
 
-.report-sticky-toolbar::before {
-  content: "";
-  position: absolute;
-  inset: -16px -24px -10px;
-  z-index: -1;
-  background: var(--page);
-  border-bottom: 1px solid rgba(143, 20, 56, 0.1);
-  pointer-events: none;
+.report-workspace .active-filter-bar {
+  flex-shrink: 0;
+}
+
+.report-workspace .report-data-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.report-workspace .report-data-card .ant-card-body {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.report-workspace .report-data-card .report-table {
+  flex: 1;
+  min-height: 0;
 }
 
 .report-sticky-toolbar .ant-form-item-label > label,
@@ -1761,12 +1786,13 @@ body {
 
 .report-table .ant-table-thead .ant-table-cell-fix-left,
 .report-table .ant-table-thead .ant-table-cell-fix-right {
-  z-index: 2 !important;
+  z-index: 6 !important;
   background: #fff7f2 !important;
 }
 
 .report-table .ant-table-sticky-holder {
-  z-index: 3 !important;
+  z-index: 5 !important;
+  background: #fff7f2 !important;
 }
 
 .report-table .ant-table-thead > tr > th {
@@ -1967,8 +1993,9 @@ body {
     grid-template-columns: 1fr;
   }
 
-  .report-sticky-toolbar {
+  .report-workspace {
     top: 64px;
+    height: calc(100vh - 64px - 32px);
   }
 }
 

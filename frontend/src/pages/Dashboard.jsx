@@ -17,6 +17,7 @@ import VisualDashboard from '../components/dashboard/VisualDashboard';
 import { getScopeLabel, resolveBranchScope, toApiBranchParams, useAuth } from '../auth';
 import client from '../api/client';
 import {
+  compactMoney,
   generateCallScript,
   loadContactedIds,
   money,
@@ -26,15 +27,6 @@ import { formatPeriodKey } from '../utils/periodUtils';
 import { useCustomerSummary } from '../hooks/useCustomerSummary';
 
 const { Paragraph, Text, Title } = Typography;
-
-function compactMoney(value) {
-  const amount = Math.abs(Number(value || 0));
-  const sign = Number(value || 0) < 0 ? '-' : '';
-  if (amount >= 1_000_000_000_000) return `${sign}${(amount / 1_000_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} nghìn tỷ`;
-  if (amount >= 1_000_000_000) return `${sign}${(amount / 1_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} tỷ`;
-  if (amount >= 1_000_000) return `${sign}${(amount / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} triệu`;
-  return `${sign}${amount.toLocaleString('vi-VN')}`;
-}
 
 function StatusIndicator({ title, status, icon }) {
   const isOk = status === 'connected' || status === 'ok';

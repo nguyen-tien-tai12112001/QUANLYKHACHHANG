@@ -1,0 +1,25 @@
+Cách thủ công (khuyên dùng khi muốn kiểm soát từng bước)
+Bước 1: Bật database (Docker)
+cd D:\Code\QUANLYKHACHHANG
+docker compose up -d
+docker ps
+Bước 2: Khởi động Backend (terminal 1)
+cd D:\Code\QUANLYKHACHHANG\backend
+.venv\Scripts\activate
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+Lần đầu (chưa có venv):
+
+python -m venv .venv
+pip install -r requirements.txt
+copy .env.example .env
+Bước 3: Khởi động Frontend (terminal 2)
+cd D:\Code\QUANLYKHACHHANG\frontend
+npm run dev -- --host 0.0.0.0 --port 3000
+Lần đầu:
+
+npm install
+copy .env.example .env
+Bước 4: Kiểm tra & mở app
+curl http://localhost:8000/api/health
+Mở trình duyệt: http://localhost:3000
+

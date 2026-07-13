@@ -12,11 +12,34 @@ export function money(value) {
   return moneyFormatter.format(Number(value || 0));
 }
 
+export function compactMoney(value) {
+  const amount = Math.abs(Number(value || 0));
+  const sign = Number(value || 0) < 0 ? '-' : '';
+  if (amount >= 1_000_000_000_000) {
+    return `${sign}${(amount / 1_000_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} nghìn tỷ`;
+  }
+  if (amount >= 1_000_000_000) {
+    return `${sign}${(amount / 1_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} tỷ`;
+  }
+  if (amount >= 1_000_000) {
+    return `${sign}${(amount / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} triệu`;
+  }
+  return `${sign}${amount.toLocaleString('vi-VN')}`;
+}
+
 export function formatLoan(val) {
-  if (val >= 1e12) return `${(val / 1e12).toFixed(2)} Tỷ Tỷ`;
-  if (val >= 1e9) return `${(val / 1e9).toFixed(2)} Tỷ`;
-  if (val >= 1e6) return `${(val / 1e6).toFixed(0)} Tr`;
-  return `${val.toLocaleString()} đ`;
+  return compactMoney(val);
+}
+
+const LOAN_TYPE_ORDER = ['Thấu chi', 'Ngắn', 'Trung', 'Dài', 'Khác'];
+
+function normalizeLoanTypeCategory(loanType) {
+  const value = String(loanType || '').toLowerCase();
+  if (value.includes('thấu chi')) return 'Thấu chi';
+  if (value.includes('ngắn')) return 'Ngắn';
+  if (value.includes('trung')) return 'Trung';
+  if (value.includes('dài')) return 'Dài';
+  return 'Khác';
 }
 
 export function countUsed(row) {
@@ -124,7 +147,7 @@ export function computeDashboardMetrics(rows) {
       officer.custCount += 1;
     }
 
-    const loanType = row.loai_vay || 'Không xác định';
+    const loanType = normalizeLoanTypeCategory(row.loai_vay);
     loanTypeMap.set(loanType, (loanTypeMap.get(loanType) || 0) + rowLoan);
   }
 
@@ -150,7 +173,11 @@ export function computeDashboardMetrics(rows) {
         amt,
         pct: totalLoanForTypes > 0 ? Math.round((amt / totalLoanForTypes) * 100) : 0,
       }))
-      .sort((a, b) => b.amt - a.amt),
+      .sort((a, b) => {
+        const ai = LOAN_TYPE_ORDER.indexOf(a.type);
+        const bi = LOAN_TYPE_ORDER.indexOf(b.type);
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi) || b.amt - a.amt;
+      }),
   };
 }
 

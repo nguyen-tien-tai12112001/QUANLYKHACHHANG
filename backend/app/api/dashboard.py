@@ -2,13 +2,13 @@ from datetime import date, datetime
 from decimal import Decimal
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, desc, func
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, desc, func
+from sqlalchemy.orm import Query as OrmQuery, Session
 
 from app.auth.branch_scope import BranchScope
 from app.auth.dependencies import get_branch_scope
 from app.database import get_db
-from app.models import CustomerPeriodProfile
+from app.models import CustomerPeriodProfile, LN01Loan
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
@@ -62,6 +62,60 @@ CAMPAIGN_GROUP_PRIORITY = {
     "KHCN": ["Digital", "Thẻ", "Thanh toán", "Tài khoản", "Bảo hiểm", "Bảo lãnh/TTQT", "Khác"],
     "KHDN": ["Bảo lãnh/TTQT", "Digital", "Thanh toán", "Tài khoản", "Thẻ", "Bảo hiểm", "Khác"],
 }
+
+LOAN_TYPE_LABELS = ("Thấu chi", "Ngắn", "Trung", "Dài", "Khác")
+
+
+def _loan_type_category_expr():
+    return case(
+        (LN01Loan.loan_type == "Thấu chi trên TK khách hàng", "Thấu chi"),
+        (LN01Loan.loan_type == "Vay ngắn hạn (TK 211)", "Ngắn"),
+        (LN01Loan.loan_type == "Vay trung hạn (TK 212)", "Trung"),
+        (LN01Loan.loan_type == "Vay dài hạn (TK 213)", "Dài"),
+        else_="Khác",
+    )
+
+
+def _ln01_query(db: Session, period_key: str, ma_cn: str | None, ma_pgd: str | None) -> OrmQuery:
+    query = db.query(LN01Loan).filter(LN01Loan.period_key == period_key)
+    if ma_cn:
+        query = query.filter(LN01Loan.brcd.ilike(f"%{ma_cn}%"))
+    if ma_pgd:
+        profile_subq = (
+            db.query(CustomerPeriodProfile.ma_kh)
+            .filter(CustomerPeriodProfile.period_key == period_key)
+            .filter(CustomerPeriodProfile.pgd_codes.ilike(f"%{ma_pgd}%"))
+        )
+        if ma_cn:
+            profile_subq = profile_subq.filter(CustomerPeriodProfile.branch_codes.ilike(f"%{ma_cn}%"))
+        query = query.filter(LN01Loan.custseq.in_(profile_subq))
+    return query
+
+
+def _build_loan_type_breakdown(db: Session, period_key: str, ma_cn: str | None, ma_pgd: str | None) -> list[dict]:
+    category_expr = _loan_type_category_expr()
+    loan_type_rows = (
+        _ln01_query(db, period_key, ma_cn, ma_pgd)
+        .with_entities(
+            category_expr.label("loan_category"),
+            func.coalesce(func.sum(LN01Loan.du_no), 0),
+        )
+        .group_by(category_expr)
+        .all()
+    )
+    total_ln_amt = sum(float(amt or 0) for _, amt in loan_type_rows)
+    order_map = {label: index for index, label in enumerate(LOAN_TYPE_LABELS)}
+    loan_type_breakdown = [
+        {
+            "type": loan_category,
+            "amt": float(amt or 0),
+            "pct": round((float(amt or 0) / total_ln_amt) * 100) if total_ln_amt else 0,
+        }
+        for loan_category, amt in loan_type_rows
+        if float(amt or 0) > 0
+    ]
+    loan_type_breakdown.sort(key=lambda item: (order_map.get(item["type"], 99), -item["amt"]))
+    return loan_type_breakdown
 
 
 def serialize_value(value):
@@ -170,24 +224,7 @@ def dashboard_summary(
         func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0)
     ).scalar() or 0
 
-    loan_type_rows = (
-        query.with_entities(
-            func.coalesce(CustomerPeriodProfile.loai_vay, "Không xác định"),
-            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
-        )
-        .group_by(CustomerPeriodProfile.loai_vay)
-        .all()
-    )
-    total_loan = float(totals[0] or 0)
-    loan_type_breakdown = [
-        {
-            "type": loan_type or "Không xác định",
-            "amt": float(amt or 0),
-            "pct": round((float(amt or 0) / total_loan) * 100) if total_loan else 0,
-        }
-        for loan_type, amt in loan_type_rows
-    ]
-    loan_type_breakdown.sort(key=lambda item: item["amt"], reverse=True)
+    loan_type_breakdown = _build_loan_type_breakdown(db, period_key, scope.ma_cn, scope.ma_pgd)
 
     officer_rows = (
         query.filter(CustomerPeriodProfile.ma_cb.isnot(None))
