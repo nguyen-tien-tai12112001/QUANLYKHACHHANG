@@ -15,14 +15,17 @@ export function money(value) {
 export function compactMoney(value) {
   const amount = Math.abs(Number(value || 0));
   const sign = Number(value || 0) < 0 ? '-' : '';
-  if (amount >= 1_000_000_000_000) {
-    return `${sign}${(amount / 1_000_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} nghìn tỷ`;
-  }
+  // Luôn quy về đơn vị tỷ (= 10^9 đồng), làm tròn đến hàng tỷ — tránh chia 10^12 rồi vẫn ghi "tỷ"
+  // khiến 3.020 tỷ hiện thành "3,02 tỷ" và lệch so với các dòng khác trên cùng biểu đồ.
   if (amount >= 1_000_000_000) {
-    return `${sign}${(amount / 1_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} tỷ`;
+    const roundedTy = Math.round(amount / 1_000_000_000);
+    return `${sign}${roundedTy.toLocaleString('vi-VN')} tỷ`;
   }
   if (amount >= 1_000_000) {
-    return `${sign}${(amount / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} triệu`;
+    return `${sign}${(amount / 1_000_000).toLocaleString('vi-VN', {
+      maximumFractionDigits: 1,
+      minimumFractionDigits: 0,
+    })} triệu`;
   }
   return `${sign}${amount.toLocaleString('vi-VN')}`;
 }

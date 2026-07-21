@@ -1,19 +1,10 @@
-﻿import { memo, useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import { Card, Empty, Space, Table, Tag, Tooltip, Typography } from 'antd';
 
 import { ACTIVE_SERVICE_COUNT } from '../../constants/services';
-import { money } from '../../utils/customerMetrics';
+import { compactMoney, money } from '../../utils/customerMetrics';
 
 const { Text } = Typography;
-
-function compactMoney(value) {
-  const amount = Math.abs(Number(value || 0));
-  const sign = Number(value || 0) < 0 ? '-' : '';
-  if (amount >= 1_000_000_000_000) return `${sign}${(amount / 1_000_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} nghìn tỷ`;
-  if (amount >= 1_000_000_000) return `${sign}${(amount / 1_000_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} tỷ`;
-  if (amount >= 1_000_000) return `${sign}${(amount / 1_000_000).toLocaleString('vi-VN', { maximumFractionDigits: 1 })} triệu`;
-  return `${sign}${amount.toLocaleString('vi-VN')}`;
-}
 
 function formatOfficer(row) {
   if (!row?.ma_cb && !row?.ten_can_bo) return 'Chưa gán';

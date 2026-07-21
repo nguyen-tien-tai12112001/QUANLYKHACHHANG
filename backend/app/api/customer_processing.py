@@ -1,8 +1,11 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
+from io import BytesIO
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
-from sqlalchemy import and_, desc, func, or_, text
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
+from sqlalchemy import and_, asc, desc, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.customer_processing import (
@@ -85,6 +88,13 @@ GROUP_DEPOSIT_THRESHOLD = 1_000_000_000
 GROUP_LOAN_THRESHOLD = 1_000_000_000
 GROUP_CASA_THRESHOLD = 500_000_000
 
+# KH cá nhân / hộ — mới được gợi ý thẻ và Agribank Plus (không áp cho DN/tổ chức).
+RETAIL_CUSTOMER_TYPES = ("Cá nhân", "KHCN")
+
+
+def is_retail_customer_expr():
+    return CustomerPeriodProfile.loai_khach_hang.in_(RETAIL_CUSTOMER_TYPES)
+
 
 def no_service_condition():
     return and_(*(getattr(CustomerPeriodProfile, field) == 0 for field in PROFILE_SERVICE_FIELDS))
@@ -93,18 +103,19 @@ def no_service_condition():
 def cross_sell_condition():
     return or_(
         and_(
+            is_retail_customer_expr(),
             (func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0))
             >= GROUP_DEPOSIT_THRESHOLD,
             CustomerPeriodProfile.agribank_plus == 0,
         ),
         and_(func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) > 0, CustomerPeriodProfile.sms_nhac_no_vay == 0),
         and_(
+            is_retail_customer_expr(),
             func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD,
             CustomerPeriodProfile.the_ghi_no_noi_dia == 0,
             CustomerPeriodProfile.the_td_quoc_te == 0,
             CustomerPeriodProfile.the_td_loc_viet == 0,
         ),
-        CustomerPeriodProfile.branch_count > 1,
     )
 
 
@@ -124,6 +135,84 @@ def group_condition(group_key: str):
         return and_(CustomerPeriodProfile.branch_count > 1, CustomerPeriodProfile.primary_branch_code.isnot(None))
     if group_key == "cross_sell":
         return cross_sell_condition()
+    return None
+
+
+def _branch_finance_agg_subquery(db: Session, period_key: str, branch_code: str, pgd_code: str | None = None):
+    """Gom số liệu tài chính theo mã KH tại đúng chi nhánh (và PGD nếu có)."""
+    query = db.query(
+        CustomerPeriodBranchDetail.ma_kh.label("ma_kh"),
+        func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_vay), 0).label("so_du_tien_vay"),
+        func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_gui), 0).label("so_du_tien_gui"),
+        func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tgtt_binh_quan), 0).label("so_du_tgtt_binh_quan"),
+        func.max(CustomerPeriodBranchDetail.agribank_plus).label("agribank_plus"),
+        func.max(CustomerPeriodBranchDetail.sms_nhac_no_vay).label("sms_nhac_no_vay"),
+        func.max(CustomerPeriodBranchDetail.the_ghi_no_noi_dia).label("the_ghi_no_noi_dia"),
+        func.max(CustomerPeriodBranchDetail.the_td_quoc_te).label("the_td_quoc_te"),
+        func.max(CustomerPeriodBranchDetail.the_td_loc_viet).label("the_td_loc_viet"),
+        func.max(CustomerPeriodBranchDetail.loai_khach_hang).label("loai_khach_hang"),
+    ).filter(
+        CustomerPeriodBranchDetail.period_key == period_key,
+        CustomerPeriodBranchDetail.branch_code == branch_code.strip(),
+    )
+    if pgd_code:
+        query = query.filter(CustomerPeriodBranchDetail.ma_pgd == pgd_code.strip())
+    return query.group_by(CustomerPeriodBranchDetail.ma_kh).subquery()
+
+
+def _branch_cross_sell_condition(agg):
+    retail = agg.c.loai_khach_hang.in_(RETAIL_CUSTOMER_TYPES)
+    return or_(
+        and_(
+            retail,
+            (func.coalesce(agg.c.so_du_tien_gui, 0) + func.coalesce(agg.c.so_du_tgtt_binh_quan, 0)) >= GROUP_DEPOSIT_THRESHOLD,
+            func.coalesce(agg.c.agribank_plus, 0) == 0,
+        ),
+        and_(func.coalesce(agg.c.so_du_tien_vay, 0) > 0, func.coalesce(agg.c.sms_nhac_no_vay, 0) == 0),
+        and_(
+            retail,
+            func.coalesce(agg.c.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD,
+            func.coalesce(agg.c.the_ghi_no_noi_dia, 0) == 0,
+            func.coalesce(agg.c.the_td_quoc_te, 0) == 0,
+            func.coalesce(agg.c.the_td_loc_viet, 0) == 0,
+        ),
+    )
+
+
+def _ma_kh_query_for_group_at_branch(
+    db: Session,
+    period_key: str,
+    branch_code: str,
+    pgd_code: str | None,
+    group_key: str,
+):
+    """Danh sách mã KH thuộc nhóm phân tích, tính trên số liệu đúng tại CN/PGD."""
+    agg = _branch_finance_agg_subquery(db, period_key, branch_code, pgd_code)
+    if group_key == "large_deposit":
+        return db.query(agg.c.ma_kh).filter(
+            (func.coalesce(agg.c.so_du_tien_gui, 0) + func.coalesce(agg.c.so_du_tgtt_binh_quan, 0)) >= GROUP_DEPOSIT_THRESHOLD
+        )
+    if group_key == "large_loan":
+        return db.query(agg.c.ma_kh).filter(func.coalesce(agg.c.so_du_tien_vay, 0) >= GROUP_LOAN_THRESHOLD)
+    if group_key == "high_casa":
+        return db.query(agg.c.ma_kh).filter(func.coalesce(agg.c.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD)
+    if group_key == "cross_sell":
+        return db.query(agg.c.ma_kh).filter(_branch_cross_sell_condition(agg))
+    if group_key in {"multi_branch", "primary_location_attention"}:
+        scoped = db.query(agg.c.ma_kh)
+        profile_filter = (
+            and_(CustomerPeriodProfile.branch_count > 1, CustomerPeriodProfile.primary_branch_code.isnot(None))
+            if group_key == "primary_location_attention"
+            else CustomerPeriodProfile.branch_count > 1
+        )
+        return (
+            db.query(CustomerPeriodProfile.ma_kh)
+            .filter(
+                CustomerPeriodProfile.period_key == period_key,
+                CustomerPeriodProfile.ma_kh.in_(scoped),
+                profile_filter,
+            )
+        )
     return None
 
 
@@ -163,9 +252,50 @@ def split_filter_values(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+PROFILE_SORT_COLUMNS = {
+    "ma_cn": CustomerPeriodProfile.primary_branch_code,
+    "ten_cn": CustomerPeriodProfile.primary_branch_code,
+    "ma_pgd": CustomerPeriodProfile.primary_pgd_code,
+    "ma_kh_chuan": CustomerPeriodProfile.ma_kh,
+    "ma_kh": CustomerPeriodProfile.ma_kh,
+    "ten_kh": CustomerPeriodProfile.ten_kh,
+    "loai_khach_hang": CustomerPeriodProfile.loai_khach_hang,
+    "so_du_tien_vay": CustomerPeriodProfile.so_du_tien_vay,
+    "so_du_tien_gui_ckh": CustomerPeriodProfile.so_du_tien_gui,
+    "so_du_tien_gui": CustomerPeriodProfile.so_du_tien_gui,
+    "loai_vay": CustomerPeriodProfile.loai_vay,
+    "dsctt": CustomerPeriodProfile.doanh_so_chuyen_tien_ve_tk,
+    "doanh_so_chuyen_tien_ve_tai_khoan": CustomerPeriodProfile.doanh_so_chuyen_tien_ve_tk,
+    "so_du_tgtt_binh_quan": CustomerPeriodProfile.so_du_tgtt_binh_quan,
+    "can_bo": CustomerPeriodProfile.ten_can_bo,
+    "ten_can_bo": CustomerPeriodProfile.ten_can_bo,
+    "branch_count": CustomerPeriodProfile.branch_count,
+}
+
+# Sort số → NULL/None coi như 0 để DESC/ASC ổn định.
+PROFILE_NUMERIC_SORT_KEYS = {
+    "so_du_tien_vay",
+    "so_du_tien_gui_ckh",
+    "so_du_tien_gui",
+    "dsctt",
+    "doanh_so_chuyen_tien_ve_tai_khoan",
+    "so_du_tgtt_binh_quan",
+    "branch_count",
+}
+
+# Khi lọc CN/PGD: sort dư nợ/CKH/CASA theo số liệu đúng phạm vi (branch_details).
+BRANCH_SCOPE_SORT_FIELDS = {
+    "so_du_tien_vay": "so_du_tien_vay",
+    "so_du_tien_gui_ckh": "so_du_tien_gui",
+    "so_du_tien_gui": "so_du_tien_gui",
+    "so_du_tgtt_binh_quan": "so_du_tgtt_binh_quan",
+}
+
+
 def apply_profile_filters(
     query,
     *,
+    period_key: str | None = None,
     keyword: str | None = None,
     branch_code: str | None = None,
     pgd_code: str | None = None,
@@ -203,12 +333,125 @@ def apply_profile_filters(
     for service in unused_services:
         query = query.filter(getattr(CustomerPeriodProfile, service) == 0)
     if group_key:
-        condition = group_condition(group_key)
-        if condition is not None:
-            query = query.filter(condition)
+        branch_group_keys = {
+            "large_deposit",
+            "large_loan",
+            "high_casa",
+            "cross_sell",
+            "multi_branch",
+            "primary_location_attention",
+        }
+        if branch_code and period_key and group_key in branch_group_keys:
+            ma_kh_query = _ma_kh_query_for_group_at_branch(
+                query.session,
+                period_key,
+                branch_code,
+                pgd_code,
+                group_key,
+            )
+            if ma_kh_query is not None:
+                query = query.filter(CustomerPeriodProfile.ma_kh.in_(ma_kh_query))
+            else:
+                condition = group_condition(group_key)
+                if condition is not None:
+                    query = query.filter(condition)
+        else:
+            condition = group_condition(group_key)
+            if condition is not None:
+                query = query.filter(condition)
     if no_service:
         query = query.filter(no_service_condition())
     return query
+
+
+def apply_profile_sort(
+    query,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    *,
+    db: Session | None = None,
+    period_key: str | None = None,
+    branch_code: str | None = None,
+    pgd_code: str | None = None,
+):
+    """Sắp xếp toàn bộ kết quả đã lọc (trước phân trang).
+
+    Có lọc CN/PGD + sort dư nợ/CKH/CASA → xếp theo số phát sinh đúng phạm vi lọc.
+    """
+    sort_key = (sort_by or "").strip()
+    direction = (sort_dir or "").strip().lower()
+    order_fn = desc if direction == "desc" else asc
+
+    if (
+        db is not None
+        and period_key
+        and branch_code
+        and direction in {"asc", "desc"}
+        and sort_key in BRANCH_SCOPE_SORT_FIELDS
+    ):
+        agg = _branch_finance_agg_subquery(db, period_key, branch_code, pgd_code)
+        amount_col = getattr(agg.c, BRANCH_SCOPE_SORT_FIELDS[sort_key])
+        query = query.outerjoin(agg, CustomerPeriodProfile.ma_kh == agg.c.ma_kh)
+        return query.order_by(order_fn(func.coalesce(amount_col, 0)), CustomerPeriodProfile.ma_kh)
+
+    column = PROFILE_SORT_COLUMNS.get(sort_key)
+    if column is None or direction not in {"asc", "desc"}:
+        return query.order_by(desc(CustomerPeriodProfile.branch_count), CustomerPeriodProfile.ma_kh)
+    order_expr = func.coalesce(column, 0) if sort_key in PROFILE_NUMERIC_SORT_KEYS else column
+    return query.order_by(order_fn(order_expr), CustomerPeriodProfile.ma_kh)
+
+
+def _branch_finance_by_ma_kh(
+    db: Session,
+    period_key: str,
+    branch_code: str,
+    pgd_code: str | None,
+    ma_khs: list[str],
+) -> dict[str, object]:
+    if not ma_khs:
+        return {}
+    agg = _branch_finance_agg_subquery(db, period_key, branch_code, pgd_code)
+    rows = (
+        db.query(
+            agg.c.ma_kh,
+            agg.c.so_du_tien_vay,
+            agg.c.so_du_tien_gui,
+            agg.c.so_du_tgtt_binh_quan,
+        )
+        .filter(agg.c.ma_kh.in_(ma_khs))
+        .all()
+    )
+    return {row.ma_kh: row for row in rows}
+
+
+def _apply_branch_finance_to_payloads(
+    db: Session,
+    period_key: str,
+    branch_code: str | None,
+    pgd_code: str | None,
+    payloads: list[dict],
+) -> list[dict]:
+    """Khi đang lọc CN/PGD: số dư trên payload = số phát sinh đúng phạm vi (khớp sort/nhóm)."""
+    if not branch_code or not payloads:
+        return payloads
+    finance_map = _branch_finance_by_ma_kh(
+        db,
+        period_key,
+        branch_code,
+        pgd_code,
+        [str(item.get("ma_kh") or "") for item in payloads if item.get("ma_kh")],
+    )
+    for item in payloads:
+        fin = finance_map.get(str(item.get("ma_kh") or ""))
+        if fin is None:
+            item["so_du_tien_vay"] = 0
+            item["so_du_tien_gui"] = 0
+            item["so_du_tgtt_binh_quan"] = 0
+            continue
+        item["so_du_tien_vay"] = serialize_value(fin.so_du_tien_vay)
+        item["so_du_tien_gui"] = serialize_value(fin.so_du_tien_gui)
+        item["so_du_tgtt_binh_quan"] = serialize_value(fin.so_du_tgtt_binh_quan)
+    return payloads
 
 
 @router.get("/periods")
@@ -404,6 +647,8 @@ def list_profiles(
     group_key: str | None = None,
     no_service: bool = False,
     multi_branch: bool | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
     limit: int | None = Query(default=None, ge=1, le=1000),
@@ -413,6 +658,7 @@ def list_profiles(
     query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
     query = apply_profile_filters(
         query,
+        period_key=period_key,
         keyword=keyword,
         branch_code=branch_code,
         pgd_code=pgd_code,
@@ -422,6 +668,16 @@ def list_profiles(
         group_key=group_key,
         multi_branch=multi_branch,
         no_service=no_service,
+    )
+    total = query.count() if include_total else None
+    query = apply_profile_sort(
+        query,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        db=db,
+        period_key=period_key,
+        branch_code=branch_code,
+        pgd_code=pgd_code,
     )
 
     fields = [
@@ -467,18 +723,152 @@ def list_profiles(
         "branch_details",
         "processing_job_id",
     ]
-    total = query.count() if include_total else None
     effective_page_size = limit if isinstance(limit, int) else page_size
     rows = (
-        query.order_by(desc(CustomerPeriodProfile.branch_count), CustomerPeriodProfile.ma_kh)
+        query
         .offset((page - 1) * effective_page_size)
         .limit(effective_page_size)
         .all()
     )
-    items = [serialize_model(item, fields) for item in rows]
+    items = _apply_branch_finance_to_payloads(
+        db,
+        period_key,
+        branch_code,
+        pgd_code,
+        [serialize_model(item, fields) for item in rows],
+    )
     if include_total:
         return {"items": items, "total": total, "page": page, "page_size": effective_page_size}
     return items
+
+
+EXPORT_MAX_ROWS = 100_000
+
+PROFILE_EXPORT_COLUMNS = [
+    ("ma_kh", "Mã KH"),
+    ("ten_kh", "Tên KH"),
+    ("loai_khach_hang", "Loại KH"),
+    ("branch_codes", "Mã CN"),
+    ("primary_branch_code", "CN chính"),
+    ("pgd_codes", "PGD"),
+    ("primary_pgd_code", "PGD chính"),
+    ("primary_pgd_name", "Tên PGD chính"),
+    ("so_du_tien_vay", "Dư nợ vay"),
+    ("so_du_tien_gui", "Tiền gửi CKH"),
+    ("so_du_tgtt_binh_quan", "TGTT bình quân"),
+    ("doanh_so_chuyen_tien_ve_tk", "DS chuyển tiền về TK"),
+    ("loai_vay", "Loại vay"),
+    ("ma_cb", "Mã cán bộ"),
+    ("ten_can_bo", "Tên cán bộ"),
+    ("telephone", "Số điện thoại"),
+    ("branch_count", "Số CN"),
+    ("pgd_count", "Số PGD"),
+    ("thau_chi", "Thấu chi"),
+    ("tk_so_dep", "TK số đẹp"),
+    ("agribank_plus", "Agribank Plus"),
+    ("tin_nhan_ott", "Tin nhắn OTT"),
+    ("sms_nhac_no_vay", "SMS nhắc nợ vay"),
+    ("sms_tien_gui", "SMS tiền gửi"),
+    ("the_ghi_no_noi_dia", "Thẻ ghi nợ nội địa"),
+    ("the_td_quoc_te", "Thẻ TD quốc tế"),
+    ("the_td_loc_viet", "Thẻ TD Lộc Việt"),
+]
+
+
+@router.get("/profiles/export")
+def export_profiles(
+    period_key: str = Query(...),
+    keyword: str | None = None,
+    branch_code: str | None = None,
+    pgd_code: str | None = None,
+    loan_type: str | None = None,
+    officer_code: str | None = None,
+    unused_service: str | None = None,
+    group_key: str | None = None,
+    no_service: bool = False,
+    multi_branch: bool | None = None,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Xuất Excel theo đúng bộ lọc báo cáo (tối đa EXPORT_MAX_ROWS dòng)."""
+    query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
+    query = apply_profile_filters(
+        query,
+        period_key=period_key,
+        keyword=keyword,
+        branch_code=branch_code,
+        pgd_code=pgd_code,
+        loan_type=loan_type,
+        officer_code=officer_code,
+        unused_service=unused_service,
+        group_key=group_key,
+        multi_branch=multi_branch,
+        no_service=no_service,
+    )
+    total = query.count()
+    if total == 0:
+        raise HTTPException(status_code=404, detail="Không có khách hàng phù hợp bộ lọc để xuất Excel")
+    if total > EXPORT_MAX_ROWS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Có {total:,} KH phù hợp, vượt giới hạn xuất {EXPORT_MAX_ROWS:,} dòng. "
+                "Hãy thu hẹp bộ lọc (CN/PGD/cán bộ/…) rồi xuất lại."
+            ),
+        )
+
+    query = apply_profile_sort(
+        query,
+        sort_by=sort_by,
+        sort_dir=sort_dir,
+        db=db,
+        period_key=period_key,
+        branch_code=branch_code,
+        pgd_code=pgd_code,
+    )
+    workbook = Workbook(write_only=True)
+    sheet = workbook.create_sheet("Bao_cao_KH")
+    sheet.append([label for _, label in PROFILE_EXPORT_COLUMNS])
+
+    field_names = [field for field, _ in PROFILE_EXPORT_COLUMNS]
+    batch: list = []
+    for item in query.yield_per(1_000):
+        batch.append(item)
+        if len(batch) >= 1_000:
+            payloads = _apply_branch_finance_to_payloads(
+                db,
+                period_key,
+                branch_code,
+                pgd_code,
+                [serialize_model(row, field_names) for row in batch],
+            )
+            for payload in payloads:
+                sheet.append([payload.get(field) for field in field_names])
+            batch = []
+    if batch:
+        payloads = _apply_branch_finance_to_payloads(
+            db,
+            period_key,
+            branch_code,
+            pgd_code,
+            [serialize_model(row, field_names) for row in batch],
+        )
+        for payload in payloads:
+            sheet.append([payload.get(field) for field in field_names])
+
+    buffer = BytesIO()
+    workbook.save(buffer)
+    buffer.seek(0)
+    filename = f"bao_cao_kh_{period_key}.xlsx"
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "X-Export-Row-Count": str(total),
+        },
+    )
 
 
 @router.get("/profile-summary")
@@ -497,6 +887,7 @@ def get_profile_summary(
     query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
     query = apply_profile_filters(
         query,
+        period_key=period_key,
         keyword=keyword,
         branch_code=branch_code,
         pgd_code=pgd_code,
@@ -537,6 +928,7 @@ def get_profile_groups(
     query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
     query = apply_profile_filters(
         query,
+        period_key=period_key,
         keyword=keyword,
         branch_code=branch_code,
         pgd_code=pgd_code,
@@ -545,49 +937,118 @@ def get_profile_groups(
         unused_service=unused_service,
         multi_branch=multi_branch,
     )
-    groups = [
-        {
-            "key": "large_deposit",
-            "label": "Nhóm tiền gửi lớn",
-            "description": f"Tiền gửi CKH + TGTT bình quân từ {GROUP_DEPOSIT_THRESHOLD:,} đồng",
-            "count": query.filter(
-                (func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0))
-                >= GROUP_DEPOSIT_THRESHOLD
-            ).count(),
-        },
-        {
-            "key": "large_loan",
-            "label": "Nhóm dư nợ lớn",
-            "description": f"Dư nợ từ {GROUP_LOAN_THRESHOLD:,} đồng",
-            "count": query.filter(func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) >= GROUP_LOAN_THRESHOLD).count(),
-        },
-        {
-            "key": "high_casa",
-            "label": "Nhóm CASA cao",
-            "description": f"TGTT bình quân từ {GROUP_CASA_THRESHOLD:,} đồng",
-            "count": query.filter(func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD).count(),
-        },
-        {
-            "key": "multi_branch",
-            "label": "Nhóm khách hàng nhiều chi nhánh",
-            "description": "Khách hàng phát sinh tại hơn 1 chi nhánh",
-            "count": query.filter(CustomerPeriodProfile.branch_count > 1).count(),
-        },
-        {
-            "key": "cross_sell",
-            "label": "Nhóm tiềm năng bán chéo",
-            "description": "Có ít nhất một cảnh báo bán chéo từ dữ liệu hiện có",
-            "count": query.filter(cross_sell_condition()).count(),
-        },
-        {
-            "key": "primary_location_attention",
-            "label": "KH cần phân công nơi chăm sóc chính",
-            "description": "Khách hàng nhiều chi nhánh đã xác định điểm giao dịch nổi trội",
-            "count": query.filter(and_(CustomerPeriodProfile.branch_count > 1, CustomerPeriodProfile.primary_branch_code.isnot(None))).count(),
-        },
-    ]
+    scope = "branch" if branch_code else "province"
+    scope_label = f"CN {branch_code.strip()}" if branch_code else "Toàn hệ thống"
+    if branch_code and pgd_code:
+        scope_label = f"CN {branch_code.strip()} / PGD {pgd_code.strip()}"
+
+    if branch_code:
+        agg = _branch_finance_agg_subquery(db, period_key, branch_code, pgd_code)
+        eligible = query.with_entities(CustomerPeriodProfile.ma_kh)
+        scoped_agg = db.query(agg).filter(agg.c.ma_kh.in_(eligible)).subquery()
+        multi_branch_count = (
+            query.filter(CustomerPeriodProfile.branch_count > 1).count()
+        )
+        primary_attention_count = (
+            query.filter(
+                CustomerPeriodProfile.branch_count > 1,
+                CustomerPeriodProfile.primary_branch_code.isnot(None),
+            ).count()
+        )
+        groups = [
+            {
+                "key": "large_deposit",
+                "label": "Nhóm tiền gửi lớn",
+                "description": f"CKH + TGTT tại {scope_label} từ {GROUP_DEPOSIT_THRESHOLD:,} đồng",
+                "count": db.query(func.count()).select_from(scoped_agg).filter(
+                    (func.coalesce(scoped_agg.c.so_du_tien_gui, 0) + func.coalesce(scoped_agg.c.so_du_tgtt_binh_quan, 0))
+                    >= GROUP_DEPOSIT_THRESHOLD
+                ).scalar() or 0,
+            },
+            {
+                "key": "large_loan",
+                "label": "Nhóm dư nợ lớn",
+                "description": f"Dư nợ tại {scope_label} từ {GROUP_LOAN_THRESHOLD:,} đồng",
+                "count": db.query(func.count()).select_from(scoped_agg).filter(
+                    func.coalesce(scoped_agg.c.so_du_tien_vay, 0) >= GROUP_LOAN_THRESHOLD
+                ).scalar() or 0,
+            },
+            {
+                "key": "high_casa",
+                "label": "Nhóm CASA cao",
+                "description": f"TGTT bình quân tại {scope_label} từ {GROUP_CASA_THRESHOLD:,} đồng",
+                "count": db.query(func.count()).select_from(scoped_agg).filter(
+                    func.coalesce(scoped_agg.c.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD
+                ).scalar() or 0,
+            },
+            {
+                "key": "multi_branch",
+                "label": "Nhóm khách hàng nhiều chi nhánh",
+                "description": f"KH thuộc phạm vi {scope_label} và phát sinh > 1 chi nhánh",
+                "count": multi_branch_count,
+            },
+            {
+                "key": "cross_sell",
+                "label": "Nhóm tiềm năng bán chéo",
+                "description": f"Cơ hội bán chéo tính trên số liệu tại {scope_label}",
+                "count": db.query(func.count()).select_from(scoped_agg).filter(
+                    _branch_cross_sell_condition(scoped_agg)
+                ).scalar() or 0,
+            },
+            {
+                "key": "primary_location_attention",
+                "label": "KH cần phân công nơi chăm sóc chính",
+                "description": f"KH nhiều CN trong phạm vi {scope_label}, đã có điểm giao dịch chính",
+                "count": primary_attention_count,
+            },
+        ]
+    else:
+        groups = [
+            {
+                "key": "large_deposit",
+                "label": "Nhóm tiền gửi lớn",
+                "description": f"Tiền gửi CKH + TGTT bình quân từ {GROUP_DEPOSIT_THRESHOLD:,} đồng",
+                "count": query.filter(
+                    (func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0))
+                    >= GROUP_DEPOSIT_THRESHOLD
+                ).count(),
+            },
+            {
+                "key": "large_loan",
+                "label": "Nhóm dư nợ lớn",
+                "description": f"Dư nợ từ {GROUP_LOAN_THRESHOLD:,} đồng",
+                "count": query.filter(func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) >= GROUP_LOAN_THRESHOLD).count(),
+            },
+            {
+                "key": "high_casa",
+                "label": "Nhóm CASA cao",
+                "description": f"TGTT bình quân từ {GROUP_CASA_THRESHOLD:,} đồng",
+                "count": query.filter(func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD).count(),
+            },
+            {
+                "key": "multi_branch",
+                "label": "Nhóm khách hàng nhiều chi nhánh",
+                "description": "Khách hàng phát sinh tại hơn 1 chi nhánh",
+                "count": query.filter(CustomerPeriodProfile.branch_count > 1).count(),
+            },
+            {
+                "key": "cross_sell",
+                "label": "Nhóm tiềm năng bán chéo",
+                "description": "Có ít nhất một cảnh báo bán chéo từ dữ liệu hiện có",
+                "count": query.filter(cross_sell_condition()).count(),
+            },
+            {
+                "key": "primary_location_attention",
+                "label": "KH cần phân công nơi chăm sóc chính",
+                "description": "Khách hàng nhiều chi nhánh đã xác định điểm giao dịch nổi trội",
+                "count": query.filter(and_(CustomerPeriodProfile.branch_count > 1, CustomerPeriodProfile.primary_branch_code.isnot(None))).count(),
+            },
+        ]
+
     return {
         "period_key": period_key,
+        "scope": scope,
+        "scope_label": scope_label,
         "thresholds": {
             "large_deposit": GROUP_DEPOSIT_THRESHOLD,
             "large_loan": GROUP_LOAN_THRESHOLD,
@@ -696,6 +1157,58 @@ def compare_periods(
     }
 
 
+def _load_active_org_department_registry(
+    db: Session,
+) -> tuple[dict[tuple[str, str], str], dict[str, set[str]], set[str]]:
+    rows = (
+        db.query(OrgBranch.branch_code, OrgDepartment.department_code, OrgDepartment.department_name)
+        .join(OrgDepartment, OrgDepartment.branch_id == OrgBranch.id)
+        .filter(OrgDepartment.department_code.isnot(None), OrgDepartment.status == "active")
+        .all()
+    )
+    branch_pgd_to_name: dict[tuple[str, str], str] = {}
+    branch_to_pgds: dict[str, set[str]] = {}
+    all_pgd_codes: set[str] = set()
+    for branch, pgd, name in rows:
+        branch_value = str(branch or "").strip()
+        pgd_value = str(pgd or "").strip()
+        name_value = str(name or "").strip()
+        if not pgd_value:
+            continue
+        all_pgd_codes.add(pgd_value)
+        if branch_value:
+            branch_to_pgds.setdefault(branch_value, set()).add(pgd_value)
+            if name_value:
+                branch_pgd_to_name[(branch_value, pgd_value)] = name_value
+    return branch_pgd_to_name, branch_to_pgds, all_pgd_codes
+
+
+def _pgd_allowed_in_org(
+    pgd: str,
+    *,
+    branch_code: str | None,
+    branch_to_pgds: dict[str, set[str]],
+    all_pgd_codes: set[str],
+) -> bool:
+    if branch_code:
+        return pgd in branch_to_pgds.get(branch_code.strip(), set())
+    return pgd in all_pgd_codes
+
+
+def _pgd_option_label(
+    pgd: str,
+    branch_code: str | None,
+    branch_pgd_to_name: dict[tuple[str, str], str],
+    pgd_name_map: dict[str, str],
+) -> str:
+    if branch_code:
+        org_name = branch_pgd_to_name.get((branch_code.strip(), pgd))
+        if org_name:
+            return org_name
+    scoped = pgd_name_map.get(f"{branch_code}:{pgd}") if branch_code else None
+    return scoped or pgd_name_map.get(pgd) or pgd
+
+
 @router.get("/profile-filter-options")
 def get_profile_filter_options(
     period_key: str = Query(...),
@@ -736,7 +1249,17 @@ def get_profile_filter_options(
                     pgds.add(pgd)
             else:
                 pgds.add(value)
-    pgds = sorted(pgds)
+    branch_pgd_to_name, branch_to_pgds, all_pgd_codes = _load_active_org_department_registry(db)
+    pgds = sorted(
+        pgd
+        for pgd in pgds
+        if _pgd_allowed_in_org(
+            pgd,
+            branch_code=branch_code,
+            branch_to_pgds=branch_to_pgds,
+            all_pgd_codes=all_pgd_codes,
+        )
+    )
 
     pgd_name_map: dict[str, str] = {}
     detail_rows = (
@@ -755,26 +1278,14 @@ def get_profile_filter_options(
         if branch_value:
             pgd_name_map.setdefault(f"{branch_value}:{pgd_value}", name_value)
 
-    department_rows = (
-        db.query(OrgBranch.branch_code, OrgDepartment.department_code, OrgDepartment.department_name)
-        .join(OrgDepartment, OrgDepartment.branch_id == OrgBranch.id)
-        .filter(OrgDepartment.department_code.isnot(None))
-        .all()
-    )
-    for branch, pgd, name in department_rows:
-        branch_value = str(branch or "").strip()
-        pgd_value = str(pgd or "").strip()
-        name_value = str(name or "").strip()
-        if not pgd_value or not name_value:
-            continue
+    for (branch_value, pgd_value), name_value in branch_pgd_to_name.items():
         pgd_name_map.setdefault(pgd_value, name_value)
-        if branch_value:
-            pgd_name_map.setdefault(f"{branch_value}:{pgd_value}", name_value)
+        pgd_name_map.setdefault(f"{branch_value}:{pgd_value}", name_value)
 
     pgd_options = [
         {
             "value": pgd,
-            "label": (pgd_name_map.get(f"{branch_code}:{pgd}") if branch_code else None) or pgd_name_map.get(pgd) or pgd,
+            "label": _pgd_option_label(pgd, branch_code, branch_pgd_to_name, pgd_name_map),
         }
         for pgd in pgds
     ]

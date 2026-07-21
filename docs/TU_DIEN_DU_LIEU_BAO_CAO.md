@@ -2,6 +2,8 @@
 
 Tài liệu này mô tả các trường dữ liệu đang hiển thị trên Dashboard, trang Báo cáo khách hàng và modal Chi tiết khách hàng.
 
+> **Tra nhanh Ctrl+F khi trình bày:** [`SO_TAY_NHAT_DU_LIEU_C360.md`](./SO_TAY_NHAT_DU_LIEU_C360.md)
+
 Mục tiêu:
 
 - Biết mỗi trường hiển thị lấy từ bảng nào trong DB.
@@ -114,7 +116,7 @@ backend/app/customer_processing.py
 | Số dư tiền vay | `so_du_tien_vay` | `customer_period_profiles` | `so_du_tien_vay` | LN01 | `DU_NO` | Sum dư nợ theo `CUSTSEQ` |
 | Loại vay | `loai_vay` | `customer_period_profiles` | `loai_vay` | LN01 | `LOAN_TYPE` | Map loại vay sang Thấu chi/Ngắn/Trung/Dài rồi ghép `/` |
 | TGTT bình quân | `so_du_tgtt_binh_quan` | `customer_period_profiles` | `so_du_tgtt_binh_quan` | PF14 | `AVERAGEBALANCE`, `MONTERM`, `CCY` | Sum dòng `MONTERM = 0`, quy đổi theo tỷ giá |
-| Doanh số chuyển tiền về TK | `doanh_so_chuyen_tien_ve_tai_khoan` | `customer_period_profiles` | `doanh_so_chuyen_tien_ve_tk` | DP01 | `CRAMT` | Sum CRAMT theo khách hàng |
+| Doanh số chuyển tiền về TK | `doanh_so_chuyen_tien_ve_tai_khoan` | `customer_period_profiles` | `doanh_so_chuyen_tien_ve_tk` | DP01 | `CURRENT_BALANCE` | `MAX(0, tổng số dư DP kỳ N − tổng số dư DP kỳ N−1)` theo `ma_kh`; chỉ cộng TK có `current_balance >= 0`; KH mới hoặc kỳ đầu = 0 |
 | Cán bộ quản lý | `ten_can_bo` | `customer_period_profiles` | `ten_can_bo` | LN01 | `OFFICER_NAME` | Nếu nhiều cán bộ, lấy cán bộ khoản vay có `DU_NO` lớn nhất |
 | Mã cán bộ | `ma_cb` | `customer_period_profiles` | `ma_cb` | LN01 | `OFFICER_IPCAS` | Đi cùng cán bộ quản lý chính |
 | Số điện thoại | `telephone` | `customer_period_profiles` | `telephone` | DP01 | `TELEPHONE` | Lấy từ DP01 |
@@ -230,14 +232,15 @@ customer_period_profiles
 
 ## 8. Mapping cơ hội bán chéo trên Báo cáo
 
-Các nhãn cơ hội bán chéo hiện được tính ở frontend từ dòng `customer_period_profiles`.
+Các nhãn cơ hội bán chéo hiện được tính ở frontend từ dòng `customer_period_profiles` (đồng bộ backend `cross_sell_condition`).
+
+KH cá nhân (`Cá nhân`) mới được gợi ý **thẻ** và **Agribank Plus**. `Hộ kinh doanh`, `Hộ gia đình` và các loại doanh nghiệp / tổ chức không áp hai quy tắc này. Nhãn "Nhiều CN cần quản lý chính" không còn thuộc cơ hội bán chéo.
 
 | Nhãn hiển thị | Điều kiện | Cột DB liên quan | Nguồn |
 |---|---|---|---|
-| TG lớn chưa dùng Agribank Plus | `so_du_tien_gui + so_du_tgtt_binh_quan >= 1 tỷ` và `agribank_plus = 0` | `so_du_tien_gui`, `so_du_tgtt_binh_quan`, `agribank_plus` | PF14 + CN05 |
-| Có dư nợ thiếu SMS nhắc nợ | `so_du_tien_vay > 0` và `sms_nhac_no_vay = 0` | `so_du_tien_vay`, `sms_nhac_no_vay` | LN01 + CN05 |
-| TGTT cao chưa có thẻ | `so_du_tgtt_binh_quan >= 500 triệu` và chưa có thẻ | `so_du_tgtt_binh_quan`, `the_ghi_no_noi_dia`, `the_td_quoc_te`, `the_td_loc_viet` | PF14 + CN05 |
-| Nhiều CN cần quản lý chính | `branch_count > 1` | `branch_count` | Tổng hợp |
+| TG lớn chưa dùng Agribank Plus | KH cá nhân và `so_du_tien_gui + so_du_tgtt_binh_quan >= 1 tỷ` và `agribank_plus = 0` | `loai_khach_hang`, `so_du_tien_gui`, `so_du_tgtt_binh_quan`, `agribank_plus` | DP01 + PF14 + CN05 |
+| Có dư nợ thiếu SMS nhắc nợ | `so_du_tien_vay > 0` và `sms_nhac_no_vay = 0` (áp cả CN và DN) | `so_du_tien_vay`, `sms_nhac_no_vay` | LN01 + CN05 |
+| TGTT cao chưa có thẻ | KH cá nhân và `so_du_tgtt_binh_quan >= 500 triệu` và chưa có thẻ | `loai_khach_hang`, `so_du_tgtt_binh_quan`, `the_ghi_no_noi_dia`, `the_td_quoc_te`, `the_td_loc_viet` | DP01 + PF14 + CN05 |
 
 ## 9. Các file code liên quan
 

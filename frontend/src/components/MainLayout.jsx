@@ -93,7 +93,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
             <span>
               <Typography.Text strong>{currentUser?.full_name}</Typography.Text>
               <Typography.Text type="secondary" className="app-user-subtitle">
-                {currentUser?.branch_code || 'C360'} · {currentUser?.role_name || 'Người dùng'}
+                {[currentUser?.branch_code, currentUser?.role_name || 'Người dùng'].filter(Boolean).join(' · ')}
               </Typography.Text>
             </span>
             <Button icon={<LogoutOutlined />} onClick={onLogout}>

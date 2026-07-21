@@ -49,6 +49,7 @@ import {
 
 import client from '../api/client';
 import { resolveBranchScope, useAuth } from '../auth';
+import { compactMoney } from '../utils/customerMetrics';
 
 const { Paragraph, Text, Title } = Typography;
 
@@ -119,21 +120,6 @@ function money(value) {
   return moneyFormatter.format(Number(value || 0));
 }
 
-function compactMoney(value) {
-  const amount = Math.abs(Number(value || 0));
-  const sign = Number(value || 0) < 0 ? '-' : '';
-  if (amount >= 1_000_000_000_000) {
-    return `${sign}${moneyFormatter.format(Number((amount / 1_000_000_000_000).toFixed(1)))} nghìn tỷ`;
-  }
-  if (amount >= 1_000_000_000) {
-    return `${sign}${moneyFormatter.format(Number((amount / 1_000_000_000).toFixed(1)))} tỷ`;
-  }
-  if (amount >= 1_000_000) {
-    return `${sign}${moneyFormatter.format(Number((amount / 1_000_000).toFixed(1)))} triệu`;
-  }
-  return `${sign}${moneyFormatter.format(amount)}`;
-}
-
 function moneyTooltip(value) {
   return `${money(value || 0)} đ`;
 }
@@ -161,6 +147,40 @@ function splitList(value) {
     .split(',')
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function sortBranchesPrimaryFirst(branches, primaryBranchCode) {
+  const primary = String(primaryBranchCode || '').trim();
+  if (!primary || !branches.length) return branches;
+  return [...branches].sort((a, b) => {
+    const aPrimary = String(a).trim() === primary ? 0 : 1;
+    const bPrimary = String(b).trim() === primary ? 0 : 1;
+    return aPrimary - bPrimary;
+  });
+}
+
+function renderBranchCodesInline(value, primaryBranchCode) {
+  const branches = sortBranchesPrimaryFirst(splitList(value), primaryBranchCode);
+  if (!branches.length) return <Text type="secondary">—</Text>;
+  const primary = String(primaryBranchCode || '').trim();
+  return (
+    <span>
+      {branches.map((code, index) => {
+        const isPrimary = primary && String(code).trim() === primary;
+        return (
+          <span key={`${code}-${index}`}>
+            {index > 0 ? ', ' : ''}
+            <Text
+              strong={isPrimary}
+              style={isPrimary ? { color: '#dc2626', fontWeight: 700 } : undefined}
+            >
+              {code}
+            </Text>
+          </span>
+        );
+      })}
+    </span>
+  );
 }
 
 function normalizePgdCodes(value) {
@@ -308,13 +328,22 @@ function getPendingServices() {
   return SERVICE_DEFS.filter((s) => s.pending);
 }
 
+/** Chỉ KH cá nhân mới được gợi ý thẻ và Agribank Plus (Hộ kinh doanh / Hộ gia đình = DN). */
+const RETAIL_CUSTOMER_TYPES = new Set(['Cá nhân', 'KHCN']);
+
+function isRetailCustomer(row) {
+  const type = String(row?.loai_khach_hang || '').trim();
+  return RETAIL_CUSTOMER_TYPES.has(type);
+}
+
 const CROSS_SELL_RULES = [
   {
     key: 'deposit_plus',
     label: 'TG lớn chưa dùng Agribank Plus',
     color: 'green',
     test: (row) =>
-      Number(row.so_du_tien_gui_ckh || 0) + Number(row.so_du_tgtt_binh_quan || 0) >= 1_000_000_000
+      isRetailCustomer(row)
+      && Number(row.so_du_tien_gui_ckh || 0) + Number(row.so_du_tgtt_binh_quan || 0) >= 1_000_000_000
       && Number(row.agribank_plus || 0) === 0,
   },
   {
@@ -328,16 +357,11 @@ const CROSS_SELL_RULES = [
     label: 'TGTT cao chưa có thẻ',
     color: 'blue',
     test: (row) =>
-      Number(row.so_du_tgtt_binh_quan || 0) >= 500_000_000
+      isRetailCustomer(row)
+      && Number(row.so_du_tgtt_binh_quan || 0) >= 500_000_000
       && Number(row.the_ghi_no_noi_dia || 0) === 0
       && Number(row.the_td_quoc_te || 0) === 0
       && Number(row.the_td_loc_viet || 0) === 0,
-  },
-  {
-    key: 'multi_branch_owner',
-    label: 'Nhiều CN cần quản lý chính',
-    color: 'purple',
-    test: (row) => Number(row.branch_count || 0) > 1,
   },
 ];
 
@@ -636,7 +660,9 @@ function CustomerDetailModal({ customer, open, onClose }) {
           style={{ marginBottom: 8 }}
         >
           <Descriptions.Item label="Mã KH chuẩn">{customer.ma_kh_chuan}</Descriptions.Item>
-          <Descriptions.Item label="Mã CN">{customer.ma_cn}</Descriptions.Item>
+          <Descriptions.Item label="Mã CN">
+            {renderBranchCodesInline(customer.ma_cn, customer.primary_branch_code)}
+          </Descriptions.Item>
           <Descriptions.Item label="Loại KH">{customer.loai_khach_hang}</Descriptions.Item>
           <Descriptions.Item label="Loại vay">{customer.loai_vay || '—'}</Descriptions.Item>
           <Descriptions.Item label="Số điện thoại">{customer.telephone || '—'}</Descriptions.Item>
@@ -1089,15 +1115,51 @@ function ServiceDetailView({ customer }) {
 }
 
 // ─── Cột bảng chính – KHỚP VỚI MẪU EXCEL (các cột màu xanh) ──────────────────────────
-// ─── Cột bảng chính – KHỚP VỚI MẪU EXCEL (các cột màu xanh) ──────────────────────────
-function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
+/** Chuẩn hóa field Ant Design (columnKey/dataIndex) → key sort API / sortOrder. */
+const REPORT_SORT_FIELD_ALIASES = {
+  ma_cn: 'ma_cn',
+  ten_cn: 'ten_cn',
+  ma_pgd: 'ma_pgd',
+  ma_kh_chuan: 'ma_kh_chuan',
+  ma_kh: 'ma_kh_chuan',
+  ten_kh: 'ten_kh',
+  loai_khach_hang: 'loai_khach_hang',
+  so_du_tien_vay: 'so_du_tien_vay',
+  so_du_tien_gui_ckh: 'so_du_tien_gui_ckh',
+  so_du_tien_gui: 'so_du_tien_gui_ckh',
+  loai_vay: 'loai_vay',
+  dsctt: 'dsctt',
+  doanh_so_chuyen_tien_ve_tai_khoan: 'dsctt',
+  so_du_tgtt_binh_quan: 'so_du_tgtt_binh_quan',
+  can_bo: 'can_bo',
+  ten_can_bo: 'can_bo',
+  branch_count: 'branch_count',
+};
+
+function normalizeReportSortField(field) {
+  if (!field) return null;
+  const key = Array.isArray(field) ? field[0] : field;
+  return REPORT_SORT_FIELD_ALIASES[key] || key;
+}
+
+function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}, sortState = {}, sttOffset = 0) {
+  const sortOrderOf = (key) => (sortState.field === key ? sortState.order : null);
+  // compare luôn 0 để Ant Design không reorder trang hiện tại; sort thật trên server (toàn bộ danh sách đã lọc).
+  const serverSorter = (key, tooltip) => ({
+    sorter: { compare: () => 0 },
+    sortOrder: sortOrderOf(key),
+    showSorterTooltip: { title: tooltip || 'Sắp xếp trên toàn bộ danh sách đã lọc' },
+  });
+
   return [
     {
       title: 'STT',
       key: 'stt',
       width: 44,
       align: 'center',
-      render: (_, __, index) => <Text type="secondary" style={{ fontSize: 11 }}>{index + 1}</Text>,
+      render: (_, __, index) => (
+        <Text type="secondary" style={{ fontSize: 11 }}>{sttOffset + index + 1}</Text>
+      ),
     },
     {
       title: 'Mã CN',
@@ -1105,16 +1167,22 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'ma_cn',
       width: 120,
       align: 'center',
-      sorter: (a, b) => (a.ma_cn || '').localeCompare(b.ma_cn || ''),
+      ...serverSorter('ma_cn', 'Sắp theo CN chính (toàn bộ danh sách đã lọc)'),
       render: (value, row) => {
-        const branches = splitList(value);
+        const branches = sortBranchesPrimaryFirst(splitList(value), row.primary_branch_code);
         if (!branches.length) return <Text type="secondary">—</Text>;
         return (
           <Space size={[4, 4]} wrap>
             {branches.map((code) => {
               const role = getBranchRole(row, code);
+              const isPrimary = role === 'Chính';
               return (
-                <Tag key={code} color={role === 'Chính' ? 'green' : 'default'} className="report-role-tag">
+                <Tag
+                  key={code}
+                  color={isPrimary ? 'red' : 'default'}
+                  className="report-role-tag"
+                  style={isPrimary ? { fontWeight: 700 } : undefined}
+                >
                   {code}
                   {role && <span className="report-role-tag-label">{role}</span>}
                 </Tag>
@@ -1128,21 +1196,16 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       title: 'Tên CN',
       key: 'ten_cn',
       width: 160,
-      sorter: (a, b) => {
-        const nameA = CN_NAMES[a.ma_cn] || a.ma_cn || '';
-        const nameB = CN_NAMES[b.ma_cn] || b.ma_cn || '';
-        return nameA.localeCompare(nameB);
+      ...serverSorter('ten_cn', 'Sắp theo mã CN chính (toàn bộ danh sách đã lọc)'),
+      render: (_, row) => {
+        const branches = sortBranchesPrimaryFirst(splitList(row.ma_cn), row.primary_branch_code);
+        if (!branches.length) return <Text type="secondary">—</Text>;
+        return (
+          <Text style={{ fontSize: 12 }}>
+            {branches.map((code) => CN_NAMES[code] || code).join(', ')}
+          </Text>
+        );
       },
-      render: (_, row) => (
-        <Text style={{ fontSize: 12 }}>
-          {String(row.ma_cn || '')
-            .split(',')
-            .map((item) => item.trim())
-            .filter(Boolean)
-            .map((code) => CN_NAMES[code] || code)
-            .join(', ') || '—'}
-        </Text>
-      ),
     },
     {
       title: 'PGD',
@@ -1150,7 +1213,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'ma_pgd',
       width: 180,
       align: 'center',
-      sorter: (a, b) => (a.ma_pgd || '').localeCompare(b.ma_pgd || ''),
+      ...serverSorter('ma_pgd', 'Sắp theo PGD chính (toàn bộ danh sách đã lọc)'),
       render: (value, row) => {
         const items = normalizePgdCodes(value);
         if (!items.length) return <Text type="secondary">—</Text>;
@@ -1182,7 +1245,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'ma_kh_chuan',
       width: 120,
       fixed: 'left',
-      sorter: (a, b) => (a.ma_kh_chuan || '').localeCompare(b.ma_kh_chuan || ''),
+      ...serverSorter('ma_kh_chuan'),
       render: (v) => <Text code style={{ fontSize: 11 }}>{v}</Text>,
     },
     {
@@ -1191,7 +1254,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'ten_kh',
       width: 210,
       fixed: 'left',
-      sorter: (a, b) => (a.ten_kh || '').localeCompare(b.ten_kh || ''),
+      ...serverSorter('ten_kh'),
       render: (v, row) => (
         <Button type="link" size="small" className="kh-name-link" onClick={() => onDetailClick(row)}>
           {v || '—'}
@@ -1206,7 +1269,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'loai_khach_hang',
       width: 100,
       align: 'center',
-      sorter: (a, b) => (a.loai_khach_hang || '').localeCompare(b.loai_khach_hang || ''),
+      ...serverSorter('loai_khach_hang'),
       render: (v) => v ? <Tag color="blue" style={{ fontSize: 10, margin: 0 }}>{v}</Tag> : <Text type="secondary">—</Text>,
     },
     {
@@ -1215,7 +1278,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'so_du_tien_vay',
       width: 130,
       align: 'right',
-      sorter: (a, b) => Number(a.so_du_tien_vay || 0) - Number(b.so_du_tien_vay || 0),
+      ...serverSorter('so_du_tien_vay'),
       render: (v) => <Text style={{ fontSize: 12 }}>{money(v) || <span style={{ color: '#cbd5e1' }}>—</span>}</Text>,
     },
     {
@@ -1224,7 +1287,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'so_du_tien_gui_ckh',
       width: 130,
       align: 'right',
-      sorter: (a, b) => Number(a.so_du_tien_gui_ckh || 0) - Number(b.so_du_tien_gui_ckh || 0),
+      ...serverSorter('so_du_tien_gui_ckh'),
       render: (v) => <Text style={{ fontSize: 12 }}>{money(v) || <span style={{ color: '#cbd5e1' }}>—</span>}</Text>,
     },
     {
@@ -1232,7 +1295,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       dataIndex: 'loai_vay',
       key: 'loai_vay',
       width: 120,
-      sorter: (a, b) => (a.loai_vay || '').localeCompare(b.loai_vay || ''),
+      ...serverSorter('loai_vay'),
       render: (v) => v
         ? <Tag style={{ fontSize: 11, margin: 0 }}>{v}</Tag>
         : <Text type="secondary" style={{ fontSize: 11 }}>—</Text>,
@@ -1243,7 +1306,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'dsctt',
       width: 140,
       align: 'right',
-      sorter: (a, b) => Number(a.doanh_so_chuyen_tien_ve_tai_khoan || 0) - Number(b.doanh_so_chuyen_tien_ve_tai_khoan || 0),
+      ...serverSorter('dsctt'),
       render: (v) => <Text style={{ fontSize: 12 }}>{money(v) || <span style={{ color: '#cbd5e1' }}>—</span>}</Text>,
     },
     {
@@ -1252,7 +1315,7 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'so_du_tgtt_binh_quan',
       width: 130,
       align: 'right',
-      sorter: (a, b) => Number(a.so_du_tgtt_binh_quan || 0) - Number(b.so_du_tgtt_binh_quan || 0),
+      ...serverSorter('so_du_tgtt_binh_quan'),
       render: (v) => <Text style={{ fontSize: 12 }}>{money(v) || <span style={{ color: '#cbd5e1' }}>—</span>}</Text>,
     },
     {
@@ -1261,14 +1324,13 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       key: 'tong_loi_ich_thang',
       width: 100,
       align: 'center',
-      sorter: (a, b) => Number(a.tong_loi_ich_thang || 0) - Number(b.tong_loi_ich_thang || 0),
       render: () => <Tag style={{ fontSize: 10 }}><ClockCircleOutlined /> Chờ</Tag>,
     },
     {
       title: 'Cán bộ quản lý',
       key: 'can_bo',
       width: 170,
-      sorter: (a, b) => (a.ten_can_bo || '').localeCompare(b.ten_can_bo || ''),
+      ...serverSorter('can_bo'),
       render: (_, row) => (
         <div>
           <div style={{ fontSize: 12, fontWeight: 500 }}>
@@ -1287,7 +1349,6 @@ function buildColumns(onDetailClick, onUnusedClick, pgdNameMap = {}) {
       dataIndex: 'ghi_chu',
       key: 'ghi_chu',
       width: 170,
-      sorter: (a, b) => countUsed(a) - countUsed(b),
       render: (v, row) => {
         const used = countUsed(row);
         const total = ACTIVE_SERVICES.length;
@@ -1355,6 +1416,7 @@ function CustomerReport() {
   const [reportPeriods, setReportPeriods] = useState([]);
   const [selectedPeriod, setSelectedPeriod] = useState(null);
   const [reportPagination, setReportPagination] = useState({ current: 1, pageSize: 25, total: 0 });
+  const [reportSort, setReportSort] = useState({ field: null, order: null });
   const [reportSummary, setReportSummary] = useState({
     total_customers: 0,
     total_loan: 0,
@@ -1366,8 +1428,10 @@ function CustomerReport() {
   const [comparePeriod, setComparePeriod] = useState(null);
   const [periodComparison, setPeriodComparison] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [periodsLoading, setPeriodsLoading] = useState(false);
   const [filterOptionsLoading, setFilterOptionsLoading] = useState(false);
+  const [filterOptionsLoaded, setFilterOptionsLoaded] = useState(false);
   const [comparisonLoading, setComparisonLoading] = useState(false);
   const [periodLoadingLabel, setPeriodLoadingLabel] = useState('');
   const [reportReady, setReportReady] = useState(false);
@@ -1496,13 +1560,22 @@ function CustomerReport() {
   const [groupRows, setGroupRows] = useState([]);
   const [groupLoading, setGroupLoading] = useState(false);
   const [groupPagination, setGroupPagination] = useState({ current: 1, pageSize: 25, total: 0 });
+  const [groupSort, setGroupSort] = useState({ field: null, order: null });
 
   function openDetail(row) { setDetailCustomer(row); setDetailOpen(true); }
   function openUnused(row) { setUnusedCustomer(row); setUnusedOpen(true); }
 
   const baseColumns = useMemo(
-    () => buildColumns(openDetail, openUnused, filterOptions.pgd_names || {}),
-    [filterOptions.pgd_names],
+    () => buildColumns(
+      openDetail,
+      openUnused,
+      filterOptions.pgd_names || {},
+      reportSort,
+      ((reportPagination.current || 1) - 1) * (reportPagination.pageSize || 25),
+    ),
+    // openDetail/openUnused ổn định theo closure kỳ hiện tại; tránh phụ thuộc hàm tạo lại mỗi render
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filterOptions.pgd_names, reportSort, reportPagination.current, reportPagination.pageSize],
   );
   const columnOptions = useMemo(
     () => baseColumns.map((column) => ({ label: column.title, value: column.key })),
@@ -1511,6 +1584,17 @@ function CustomerReport() {
   const columns = useMemo(
     () => baseColumns.filter((column) => visibleColumnKeys.includes(column.key)),
     [baseColumns, visibleColumnKeys],
+  );
+  const groupColumns = useMemo(
+    () => buildColumns(
+      openDetail,
+      openUnused,
+      filterOptions.pgd_names || {},
+      groupSort,
+      ((groupPagination.current || 1) - 1) * (groupPagination.pageSize || 25),
+    ).filter((column) => visibleColumnKeys.includes(column.key)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filterOptions.pgd_names, groupSort, groupPagination.current, groupPagination.pageSize, visibleColumnKeys],
   );
 
   useEffect(() => {
@@ -1549,7 +1633,9 @@ function CustomerReport() {
     }
   }
 
-  function getReportParams(periodKey) {
+  function getReportParams(periodKey, sort = reportSort) {
+    const sortDir = sort?.order === 'ascend' ? 'asc' : sort?.order === 'descend' ? 'desc' : undefined;
+    const sortField = normalizeReportSortField(sort?.field);
     return {
       period_key: periodKey,
       keyword: searchText || undefined,
@@ -1559,10 +1645,61 @@ function CustomerReport() {
       officer_code: filterOfficer || undefined,
       unused_service: filterUnusedSvc.length ? filterUnusedSvc.join(',') : undefined,
       multi_branch: filterMultiBranch === null ? undefined : filterMultiBranch,
+      sort_by: sortDir ? (sortField || undefined) : undefined,
+      sort_dir: sortDir,
     };
   }
 
-  async function loadReport(period = selectedPeriod, nextPagination = reportPagination) {
+  async function exportExcel() {
+    if (!selectedPeriod) {
+      message.warning('Chưa chọn kỳ dữ liệu để xuất Excel');
+      return;
+    }
+    setExporting(true);
+    try {
+      const response = await client.get('/customer-processing/profiles/export', {
+        params: getReportParams(selectedPeriod),
+        responseType: 'blob',
+        timeout: 300000,
+      });
+      const contentType = response.headers['content-type'] || '';
+      if (contentType.includes('application/json')) {
+        const text = await response.data.text();
+        const payload = JSON.parse(text);
+        throw new Error(payload.detail || 'Không xuất được Excel');
+      }
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `bao_cao_kh_${selectedPeriod}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+      message.success('Đã tải file Excel theo bộ lọc hiện tại');
+    } catch (error) {
+      let detail = error.message;
+      const data = error.response?.data;
+      if (data instanceof Blob) {
+        try {
+          const payload = JSON.parse(await data.text());
+          detail = payload.detail || detail;
+        } catch {
+          // keep default message
+        }
+      } else if (error.response?.data?.detail) {
+        detail = error.response.data.detail;
+      }
+      message.error(detail || 'Xuất Excel thất bại');
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function loadReport(period = selectedPeriod, nextPagination = reportPagination, nextSort = reportSort) {
     const periodKey = period;
     if (!periodKey) {
       message.warning('Chưa có kỳ dữ liệu đã xử lý để xem báo cáo');
@@ -1575,20 +1712,20 @@ function CustomerReport() {
       const [profileResponse, summaryResponse, sourceResponse, groupResponse] = await Promise.all([
         client.get('/customer-processing/profiles', {
           params: {
-            ...getReportParams(periodKey),
+            ...getReportParams(periodKey, nextSort),
             include_total: true,
             page: current,
             page_size: pageSize,
           },
         }),
         client.get('/customer-processing/profile-summary', {
-          params: getReportParams(periodKey),
+          params: getReportParams(periodKey, nextSort),
         }),
         client.get('/imports/report-sources', {
           params: { period_key: periodKey },
         }),
         client.get('/customer-processing/profile-groups', {
-          params: getReportParams(periodKey),
+          params: getReportParams(periodKey, nextSort),
         }),
       ]);
       const profilePayload = profileResponse.data;
@@ -1600,6 +1737,7 @@ function CustomerReport() {
       }
       setRows(normalizedRows);
       setReportPagination({ current, pageSize, total });
+      setReportSort(nextSort || { field: null, order: null });
       setReportSummary(summaryResponse.data || {});
       setGroupStats(groupResponse.data || { groups: [], thresholds: {} });
       setSourceRows(Array.isArray(sourceResponse.data) ? sourceResponse.data : []);
@@ -1637,6 +1775,7 @@ function CustomerReport() {
   async function loadFilterOptions(period = selectedPeriod) {
     if (!period) return;
     setFilterOptionsLoading(true);
+    setFilterOptionsLoaded(false);
     try {
       const { data } = await client.get('/customer-processing/profile-filter-options', {
         params: {
@@ -1646,6 +1785,7 @@ function CustomerReport() {
         },
       });
       setFilterOptions(data || { branches: [], pgds: [], pgd_options: [], pgd_names: {}, loan_types: [], officers: [] });
+      setFilterOptionsLoaded(true);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -1725,7 +1865,11 @@ function CustomerReport() {
     loadNoServiceCustomers({ current: 1, pageSize: noServicePagination.pageSize, total: 0 });
   }
 
-  async function loadGroupCustomers(group = selectedGroup, nextPagination = groupPagination) {
+  async function loadGroupCustomers(
+    group = selectedGroup,
+    nextPagination = groupPagination,
+    nextSort = groupSort,
+  ) {
     if (!selectedPeriod || !group?.key) return;
     const current = nextPagination?.current || 1;
     const pageSize = nextPagination?.pageSize || 25;
@@ -1733,7 +1877,7 @@ function CustomerReport() {
     try {
       const { data } = await client.get('/customer-processing/profiles', {
         params: {
-          ...getReportParams(selectedPeriod),
+          ...getReportParams(selectedPeriod, nextSort),
           group_key: group.key,
           include_total: true,
           page: current,
@@ -1746,6 +1890,7 @@ function CustomerReport() {
         pageSize,
         total: Number(data?.total || 0),
       });
+      setGroupSort(nextSort || { field: null, order: null });
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -1754,9 +1899,11 @@ function CustomerReport() {
   }
 
   function openGroupModal(group) {
+    const initialSort = { field: null, order: null };
     setSelectedGroup(group);
+    setGroupSort(initialSort);
     setGroupModalOpen(true);
-    loadGroupCustomers(group, { current: 1, pageSize: groupPagination.pageSize, total: 0 });
+    loadGroupCustomers(group, { current: 1, pageSize: groupPagination.pageSize, total: 0 }, initialSort);
   }
 
   function loadDemoData() {
@@ -1859,8 +2006,8 @@ function CustomerReport() {
 
   const pgdOptions = useMemo(() => {
     const allowed = new Set(branchScope.allowedPgds || []);
-    const sourcePgds = filterOptions.pgd_options?.length
-      ? filterOptions.pgd_options
+    const sourcePgds = filterOptionsLoaded
+      ? (filterOptions.pgd_options || [])
       : [...new Set(
       rows
         .filter((r) => !effectiveFilterCn || String(r.ma_cn || '').includes(effectiveFilterCn))
@@ -1874,7 +2021,7 @@ function CustomerReport() {
       value: typeof pgd === 'string' ? pgd : pgd.value,
       label: typeof pgd === 'string' ? formatPgdLabel(pgd, filterOptions.pgd_names || {}) : pgd.label,
     }));
-  }, [branchScope.allowedPgds, branchScope.canViewProvince, filterOptions.pgd_options, filterOptions.pgd_names, rows, effectiveFilterCn]);
+  }, [branchScope.allowedPgds, branchScope.canViewProvince, filterOptions.pgd_options, filterOptions.pgd_names, filterOptionsLoaded, rows, effectiveFilterCn]);
 
   const loanTypeOptions = useMemo(() => {
     if (filterOptions.loan_types?.length) {
@@ -2052,7 +2199,7 @@ function CustomerReport() {
         label: 'TG lớn thiếu Agribank Plus',
         value: 'Quy tắc',
         unit: '>= 1 tỷ',
-        tooltip: 'Có tiền gửi CKH + TGTT bình quân lớn nhưng chưa dùng Agribank Plus',
+        tooltip: 'Khách cá nhân có tiền gửi CKH + TGTT bình quân lớn nhưng chưa dùng Agribank Plus (không áp hộ kinh doanh / doanh nghiệp)',
       },
       {
         tone: 'red',
@@ -2164,10 +2311,6 @@ function CustomerReport() {
     // 5. lọc theo Phòng giao dịch (PGD)
     if (effectiveFilterPgd) {
       result = result.filter((r) => String(r.ma_pgd || '').includes(effectiveFilterPgd));
-    }
-    // 6. Sắp xếp theo PGD nếu chỉ chọn lọc theo CN mà không chọn PGD cụ thể
-    if (effectiveFilterCn && !effectiveFilterPgd) {
-      result = [...result].sort((a, b) => (a.ma_pgd || '').localeCompare(b.ma_pgd || ''));
     }
     return result;
   }, [rows, searchText, filterOfficer, filterUnusedSvc, effectiveFilterCn, effectiveFilterPgd, filterLoanType, filterMultiBranch]);
@@ -2356,7 +2499,15 @@ function CustomerReport() {
               ]}
             />
           </Form.Item>
-          <Button icon={<DownloadOutlined />} disabled block style={{ opacity: 0.65 }}>
+          <Button
+            icon={<DownloadOutlined />}
+            block
+            type="primary"
+            ghost
+            loading={exporting}
+            disabled={!selectedPeriod || viewMode !== 'report'}
+            onClick={exportExcel}
+          >
             Xuất Excel
           </Button>
         </Form>
@@ -2386,6 +2537,11 @@ function CustomerReport() {
                   <TrophyOutlined />
                   <span>Phân tích trọng tâm</span>
                   <Tag color="blue">Theo kỳ {selectedPeriod || '—'}</Tag>
+                  <Tag color={effectiveFilterCn ? 'purple' : 'green'}>
+                    {effectiveFilterCn
+                      ? `Phạm vi CN ${effectiveFilterCn}${effectiveFilterPgd ? ` / PGD ${effectiveFilterPgd}` : ''}`
+                      : 'Toàn hệ thống'}
+                  </Tag>
                 </Space>
               ),
               children: (
@@ -2613,6 +2769,14 @@ function CustomerReport() {
                     loading={loading}
                     onClick={() => loadReport(selectedPeriod, { ...reportPagination, current: 1 })}
                   />
+                  <Tooltip title="Xuất Excel theo bộ lọc hiện tại (tối đa 100.000 dòng)">
+                    <Button
+                      icon={<DownloadOutlined />}
+                      loading={exporting}
+                      disabled={!selectedPeriod || viewMode !== 'report'}
+                      onClick={exportExcel}
+                    />
+                  </Tooltip>
                 </Space.Compact>
               </Form.Item>
             </Col>
@@ -2743,7 +2907,10 @@ function CustomerReport() {
             <Space>
              
               <Tag color="blue">Tổng: {money(reportPagination.total)} KH</Tag>
-              <Tag color="geekblue">Trang hiện tại: {filteredRows.length} dòng</Tag>
+              <Tag color="geekblue">Trang: {rows.length}/{reportPagination.pageSize || 25}</Tag>
+              {reportSort.field && reportSort.order && (
+                <Tag color="purple">Sort toàn bộ danh sách đã lọc</Tag>
+              )}
             </Space>
           }
           extra={
@@ -2783,7 +2950,7 @@ function CustomerReport() {
                 </Tag>
               )}
               <Text type="secondary" style={{ fontSize: 12 }}>
-                Click tên KH → Chi tiết &nbsp;|&nbsp; <AimOutlined style={{ color: '#c0392b' }} /> → Bán chéo
+                Click tên KH → Chi tiết · Sort = toàn bộ danh sách đã lọc (không chỉ trang này)
               </Text>
             </Space>
           }
@@ -2794,7 +2961,7 @@ function CustomerReport() {
             size="small"
             rowKey="ma_kh_chuan"
             columns={columns}
-            dataSource={filteredRows}
+            dataSource={rows}
             loading={{ spinning: loading, tip: reportLoadingTip }}
             scroll={{ x: 'max-content', y: tableScrollY }}
             pagination={{
@@ -2803,14 +2970,25 @@ function CustomerReport() {
               total: reportPagination.total,
               showSizeChanger: true,
               pageSizeOptions: [25, 50, 100, 200],
-              showTotal: (total, range) => `${range[0]}-${range[1]} / ${money(total)} khách hàng`,
+              showTotal: (total, range) => `${range[0]}-${range[1]} / ${money(total)} khách hàng đã lọc`,
             }}
-            onChange={(pagination) => {
-              loadReport(selectedPeriod, {
-                current: pagination.current,
-                pageSize: pagination.pageSize,
-                total: reportPagination.total,
-              });
+            onChange={(pagination, _filters, sorter) => {
+              const nextSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+              const field = nextSorter?.order
+                ? normalizeReportSortField(nextSorter.columnKey || nextSorter.field)
+                : null;
+              const order = nextSorter?.order || null;
+              const nextSort = { field, order };
+              const sortChanged = field !== reportSort.field || order !== reportSort.order;
+              loadReport(
+                selectedPeriod,
+                {
+                  current: sortChanged ? 1 : pagination.current,
+                  pageSize: pagination.pageSize,
+                  total: reportPagination.total,
+                },
+                nextSort,
+              );
             }}
             locale={{ emptyText: <Empty description="Chưa có dữ liệu báo cáo cho kỳ này" /> }}
             rowClassName={(_, index) => (index % 2 === 0 ? 'row-even' : 'row-odd')}
@@ -2914,7 +3092,7 @@ function CustomerReport() {
           bordered
           size="small"
           rowKey="ma_kh_chuan"
-          columns={columns}
+          columns={groupColumns}
           dataSource={groupRows}
           loading={groupLoading}
           scroll={{ x: 'max-content', y: 520 }}
@@ -2926,12 +3104,23 @@ function CustomerReport() {
             pageSizeOptions: [25, 50, 100],
             showTotal: (total, range) => `${range[0]}-${range[1]} / ${money(total)} khách hàng`,
           }}
-          onChange={(pagination) => {
-            loadGroupCustomers(selectedGroup, {
-              current: pagination.current,
-              pageSize: pagination.pageSize,
-              total: groupPagination.total,
-            });
+          onChange={(pagination, _filters, sorter) => {
+            const nextSorter = Array.isArray(sorter) ? sorter[0] : sorter;
+            const field = nextSorter?.order
+              ? normalizeReportSortField(nextSorter.columnKey || nextSorter.field)
+              : null;
+            const order = nextSorter?.order || null;
+            const nextSort = { field, order };
+            const sortChanged = field !== groupSort.field || order !== groupSort.order;
+            loadGroupCustomers(
+              selectedGroup,
+              {
+                current: sortChanged ? 1 : pagination.current,
+                pageSize: pagination.pageSize,
+                total: groupPagination.total,
+              },
+              nextSort,
+            );
           }}
           locale={{ emptyText: <Empty description="Không có khách hàng thuộc nhóm này" /> }}
         />

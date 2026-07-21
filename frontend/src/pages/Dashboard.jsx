@@ -28,6 +28,8 @@ import { useCustomerSummary } from '../hooks/useCustomerSummary';
 
 const { Paragraph, Text, Title } = Typography;
 
+const ALL_BRANCHES_VALUE = '__ALL__';
+
 function StatusIndicator({ title, status, icon }) {
   const isOk = status === 'connected' || status === 'ok';
   const color = status === 'checking' ? 'processing' : isOk ? 'success' : 'error';
@@ -114,7 +116,6 @@ function Dashboard() {
   );
   const effectiveFilterCn = branchScope.filterCn;
   const effectiveFilterPgd = branchScope.filterPgd;
-  const branchSelectValue = effectiveFilterCn || undefined;
 
   const cnOptions = useMemo(() => {
     const allowed = new Set(branchScope.allowedBranches || []);
@@ -122,8 +123,15 @@ function Dashboard() {
     const visible = branchScope.canViewProvince || allowed.size === 0
       ? source
       : source.filter((code) => allowed.has(code));
-    return visible.map((code) => ({ value: code, label: code }));
-  }, [branchScope.allowedBranches, branchScope.canViewProvince, scopeOptions.branches]);
+    const branchItems = visible.map((code) => ({ value: code, label: code }));
+    if (branchScope.canViewProvince || branchScope.canChangeBranch) {
+      return [{ value: ALL_BRANCHES_VALUE, label: 'Chọn tất cả' }, ...branchItems];
+    }
+    return branchItems;
+  }, [branchScope.allowedBranches, branchScope.canChangeBranch, branchScope.canViewProvince, scopeOptions.branches]);
+
+  const branchSelectValue = effectiveFilterCn
+    || (branchScope.canViewProvince || branchScope.canChangeBranch ? ALL_BRANCHES_VALUE : undefined);
 
   const pgdOptions = useMemo(() => {
     const allowed = new Set(branchScope.allowedPgds || []);
@@ -145,7 +153,8 @@ function Dashboard() {
   );
 
   const handleCnChange = useCallback((value) => {
-    const resolved = resolveBranchScope(user, value || null, null);
+    const nextCn = !value || value === ALL_BRANCHES_VALUE ? null : value;
+    const resolved = resolveBranchScope(user, nextCn, null);
     if (resolved.denied) {
       message.warning('Bạn không có quyền xem chi nhánh này');
       setFilterCn(resolved.defaultCn);
@@ -182,12 +191,14 @@ function Dashboard() {
   useEffect(() => {
     if (!periodKey || isDemo) return;
     let mounted = true;
+    const controller = new AbortController();
     client
       .get('/customer-processing/profile-filter-options', {
         params: {
           period_key: periodKey,
           branch_code: effectiveFilterCn || undefined,
         },
+        signal: controller.signal,
       })
       .then(({ data }) => {
         if (!mounted) return;
@@ -196,11 +207,13 @@ function Dashboard() {
           pgds: data?.pgd_options || data?.pgds || [],
         });
       })
-      .catch(() => {
-        if (mounted) setScopeOptions({ branches: [], pgds: [] });
+      .catch((error) => {
+        if (!mounted || error?.code === 'ERR_CANCELED') return;
+        setScopeOptions({ branches: [], pgds: [] });
       });
     return () => {
       mounted = false;
+      controller.abort();
     };
   }, [effectiveFilterCn, isDemo, periodKey]);
 
@@ -283,7 +296,7 @@ function Dashboard() {
           <Space wrap style={{ marginTop: 12 }}>
             <Select
               placeholder="Chọn kỳ dữ liệu"
-              style={{ minWidth: 180 }}
+              style={{ minWidth: 234 }}
               value={periodKey}
               onChange={handlePeriodChange}
               options={periodOptions}
@@ -293,16 +306,16 @@ function Dashboard() {
             />
             <Select
               placeholder="Phạm vi xem"
-              style={{ minWidth: 200 }}
+              style={{ minWidth: 260 }}
               value={branchSelectValue}
               onChange={handleCnChange}
               options={cnOptions}
-              allowClear
+              allowClear={false}
               disabled={dataLoading || !branchScope.canChangeBranch}
             />
             <Select
               placeholder={effectiveFilterCn ? 'Lọc PGD thuộc chi nhánh' : 'Lọc toàn bộ PGD'}
-              style={{ minWidth: 140 }}
+              style={{ minWidth: 182 }}
               value={effectiveFilterPgd}
               onChange={handlePgdChange}
               options={pgdOptions}
@@ -376,7 +389,7 @@ function Dashboard() {
           <Col xs={24} sm={12} lg={8} xl={5}>
             <KpiCard
               loading={dataLoading}
-              label="Tổng CASA (TGTT bình quan)"
+              label="Tổng CASA (TGTT bình quân)"
               value={
                 <Tooltip title={`${money(metrics.casa)} đ`}>
                   <span>{compactMoney(metrics.casa)} <span className="dashboard-kpi-unit">đ</span></span>
@@ -415,6 +428,7 @@ function Dashboard() {
         loading={dataLoading}
         emptyDescription="Hãy liên kết cơ sở dữ liệu để hiển thị biểu đồ phân tích trực quan"
         showTrend
+        filterBranch={effectiveFilterCn}
       />
 
       <CampaignList

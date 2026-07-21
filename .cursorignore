@@ -1,0 +1,86 @@
+﻿# =============================================================================
+# CURSOR IGNORE — Chặn AI đọc / đưa các file nhạy cảm vào context gửi lên server
+# =============================================================================
+# Cách dùng kèm theo (bắt buộc):
+#   1. Bật Privacy Mode: Ctrl+Shift+J → General → Privacy Mode ON
+#   2. Không paste output database / Excel KH / ảnh chụp dữ liệu thật vào chat
+#   3. Không yêu cầu Agent query DB trừ khi thật sự cần (và đã chấp nhận rủi ro)
+#
+# Lưu ý: File trong danh sách này sẽ KHÔNG được index / không gửi làm context AI.
+# Privacy Mode ngăn dùng dữ liệu để train; .cursorignore ngăn đọc file nhạy cảm.
+# =============================================================================
+
+# --- Mật khẩu, chuỗi kết nối, token ---
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+backend/.env
+frontend/.env
+
+# --- Database: dump, backup, volume, file SQL chứa dữ liệu ---
+*.dump
+*.backup
+*.db
+*.sqlite
+*.sqlite3
+postgres_data/
+database/backups/
+backend/qlkh_db*
+backend/qlkh_db.sql
+qlkh_db*
+restore-db.bat
+backup-db.bat
+
+# SQL export / dump (giữ init.sql schema rỗng nếu cần dev — không có dữ liệu KH)
+**/*_dump.sql
+**/*_backup.sql
+**/export*.sql
+
+# --- File nguồn IPCAS / Excel / CSV (dữ liệu khách hàng thật) ---
+*.xlsx
+*.xls
+*.csv
+*.tsv
+BANG QUAN LY KHACH HANG*
+**/BANG QUAN LY KHACH HANG*
+
+# --- Thư mục import / export / upload / log runtime ---
+documents/
+tmp_import/
+backend/uploads/
+backend/exports/
+backend/logs/
+backend/offline_packages/
+
+# --- Log có thể lộ query / lỗi DB ---
+*.log
+**/*.log
+
+# --- Docker / Postgres local data ---
+postgres_data/
+**/postgres_data/
+
+# --- Artifact Cursor / terminal (nếu có trong workspace) ---
+terminals/
+agent-transcripts/
+**/.cursor/projects/**/terminals/
+**/.cursor/projects/**/agent-transcripts/
+
+# --- File tạm / cache Python có thể chứa object lớn ---
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+__pycache__/
+*.pyc
+
+# --- Node build (không cần gửi lên AI) ---
+node_modules/
+frontend/node_modules/
+dist/
+frontend/dist/
+
+# --- OS ---
+.DS_Store
+Thumbs.db

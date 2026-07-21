@@ -1,6 +1,7 @@
 from sqlalchemy import delete, distinct, func, text
 from sqlalchemy.orm import Session
 
+from app.customer_processing import apply_transfer_inflow_to_summaries
 from app.models import (
     CN05CustomerService,
     CustomerPeriodSummary,
@@ -166,8 +167,8 @@ SUMMARY_INSERT_SQL = text(
             MAX(cust_type) AS cust_type,
             MAX(employee_number) AS ma_cb,
             MAX(employee_name) AS ten_can_bo,
-            SUM(COALESCE(current_balance, 0)) AS so_du_tien_gui_ckh,
-            SUM(COALESCE(dramt, 0) + COALESCE(cramt, 0)) AS doanh_so_chuyen_tien_ve_tai_khoan
+            SUM(CASE WHEN COALESCE(current_balance, 0) >= 0 THEN COALESCE(current_balance, 0) ELSE 0 END) AS so_du_tien_gui_ckh,
+            0 AS doanh_so_chuyen_tien_ve_tai_khoan
         FROM dp01_deposit_accounts
         WHERE period_key = :period_key AND ma_kh_chuan IS NOT NULL
         GROUP BY ma_kh_chuan
@@ -328,6 +329,7 @@ SUMMARY_INSERT_SQL = text(
 def summarize_period(db: Session, period_key: str) -> int:
     db.execute(delete(CustomerPeriodSummary).where(CustomerPeriodSummary.period_key == period_key))
     db.execute(SUMMARY_INSERT_SQL, {"period_key": period_key})
+    apply_transfer_inflow_to_summaries(db, period_key)
     refresh_report_sources(db, period_key)
     db.commit()
     return (

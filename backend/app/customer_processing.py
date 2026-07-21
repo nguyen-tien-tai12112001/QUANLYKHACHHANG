@@ -62,6 +62,134 @@ DEFAULT_VND_RATE_SQL = text(
 )
 
 
+UPDATE_PROFILES_TRANSFER_INFLOW_SQL = text(
+    """
+    WITH dp_balance AS (
+        SELECT
+            dp.period_key,
+            COALESCE(NULLIF(TRIM(dp.ma_kh_chuan), ''), TRIM(dp.ma_kh)) AS customer_key,
+            SUM(
+                CASE
+                    WHEN COALESCE(dp.current_balance, 0) >= 0
+                    THEN COALESCE(dp.current_balance, 0) * COALESCE(rate.exchange_rate, 1)
+                    ELSE 0
+                END
+            ) AS total_balance
+        FROM dp01_deposit_accounts dp
+        LEFT JOIN customer_period_exchange_rates rate
+            ON rate.period_key = dp.period_key
+            AND rate.ccy = UPPER(TRIM(COALESCE(dp.ccy, 'VND')))
+        WHERE dp.period_key IN (:period_key, :previous_period_key)
+            AND dp.ma_kh IS NOT NULL
+        GROUP BY dp.period_key, COALESCE(NULLIF(TRIM(dp.ma_kh_chuan), ''), TRIM(dp.ma_kh))
+    ),
+    current_bal AS (
+        SELECT customer_key, total_balance
+        FROM dp_balance
+        WHERE period_key = :period_key
+    ),
+    previous_bal AS (
+        SELECT customer_key, total_balance
+        FROM dp_balance
+        WHERE period_key = :previous_period_key
+    )
+    UPDATE customer_period_profiles profile
+    SET doanh_so_chuyen_tien_ve_tk = CASE
+        WHEN prev.customer_key IS NULL THEN 0
+        ELSE GREATEST(0, COALESCE(curr.total_balance, 0) - COALESCE(prev.total_balance, 0))
+    END
+    FROM current_bal curr
+    LEFT JOIN previous_bal prev ON prev.customer_key = curr.customer_key
+    WHERE profile.period_key = :period_key
+        AND profile.ma_kh = curr.customer_key
+    """
+)
+
+
+UPDATE_SUMMARIES_TRANSFER_INFLOW_SQL = text(
+    """
+    WITH dp_balance AS (
+        SELECT
+            dp.period_key,
+            COALESCE(NULLIF(TRIM(dp.ma_kh_chuan), ''), TRIM(dp.ma_kh)) AS customer_key,
+            SUM(
+                CASE
+                    WHEN COALESCE(dp.current_balance, 0) >= 0
+                    THEN COALESCE(dp.current_balance, 0) * COALESCE(rate.exchange_rate, 1)
+                    ELSE 0
+                END
+            ) AS total_balance
+        FROM dp01_deposit_accounts dp
+        LEFT JOIN customer_period_exchange_rates rate
+            ON rate.period_key = dp.period_key
+            AND rate.ccy = UPPER(TRIM(COALESCE(dp.ccy, 'VND')))
+        WHERE dp.period_key IN (:period_key, :previous_period_key)
+            AND (dp.ma_kh IS NOT NULL OR dp.ma_kh_chuan IS NOT NULL)
+        GROUP BY dp.period_key, COALESCE(NULLIF(TRIM(dp.ma_kh_chuan), ''), TRIM(dp.ma_kh))
+    ),
+    current_bal AS (
+        SELECT customer_key, total_balance
+        FROM dp_balance
+        WHERE period_key = :period_key
+    ),
+    previous_bal AS (
+        SELECT customer_key, total_balance
+        FROM dp_balance
+        WHERE period_key = :previous_period_key
+    )
+    UPDATE customer_period_summaries summary
+    SET doanh_so_chuyen_tien_ve_tai_khoan = CASE
+        WHEN prev.customer_key IS NULL THEN 0
+        ELSE GREATEST(0, COALESCE(curr.total_balance, 0) - COALESCE(prev.total_balance, 0))
+    END
+    FROM current_bal curr
+    LEFT JOIN previous_bal prev ON prev.customer_key = curr.customer_key
+    WHERE summary.period_key = :period_key
+        AND summary.ma_kh_chuan = curr.customer_key
+    """
+)
+
+
+def get_previous_period_key(db: Session, period_key: str) -> str | None:
+    row = (
+        db.query(ImportBatch.period_key)
+        .filter(ImportBatch.period_key < period_key)
+        .order_by(ImportBatch.period_key.desc())
+        .first()
+    )
+    return row[0] if row else None
+
+
+def apply_transfer_inflow_to_profiles(db: Session, period_key: str) -> None:
+    previous_period_key = get_previous_period_key(db, period_key)
+    if not previous_period_key:
+        db.execute(
+            text("UPDATE customer_period_profiles SET doanh_so_chuyen_tien_ve_tk = 0 WHERE period_key = :period_key"),
+            {"period_key": period_key},
+        )
+        return
+    db.execute(
+        UPDATE_PROFILES_TRANSFER_INFLOW_SQL,
+        {"period_key": period_key, "previous_period_key": previous_period_key},
+    )
+
+
+def apply_transfer_inflow_to_summaries(db: Session, period_key: str) -> None:
+    previous_period_key = get_previous_period_key(db, period_key)
+    if not previous_period_key:
+        db.execute(
+            text(
+                "UPDATE customer_period_summaries SET doanh_so_chuyen_tien_ve_tai_khoan = 0 WHERE period_key = :period_key"
+            ),
+            {"period_key": period_key},
+        )
+        return
+    db.execute(
+        UPDATE_SUMMARIES_TRANSFER_INFLOW_SQL,
+        {"period_key": period_key, "previous_period_key": previous_period_key},
+    )
+
+
 BRANCH_DETAIL_SQL = text(
     """
     WITH dp_customers AS (
@@ -398,7 +526,7 @@ PROFILE_SQL = text(
             COUNT(DISTINCT CONCAT(branch_code, ':', COALESCE(ma_pgd, ''))) AS pgd_count,
             SUM(dp_record_count) AS dp_record_count,
             SUM(COALESCE(so_du_tien_gui, 0)) AS so_du_tien_gui,
-            SUM(COALESCE(doanh_so_cramt, 0)) AS doanh_so_chuyen_tien_ve_tk,
+            0 AS doanh_so_chuyen_tien_ve_tk,
             SUM(COALESCE(so_du_tien_vay, 0)) AS so_du_tien_vay,
             CONCAT_WS(
                 '/',
@@ -831,6 +959,10 @@ def load_supported_optional_files(db: Session, period_key: str) -> int:
         file_type = detect_optional_file_type(item.original_filename)
         if not file_type:
             continue
+        if not Path(item.file_path).is_file():
+            item.status = "error"
+            item.note = f"Không tìm thấy file bổ sung trên đĩa: {item.file_path}"
+            continue
         try:
             if file_type == "BAO_LANH":
                 total_rows += parse_bao_lanh_file(db, item)
@@ -958,6 +1090,10 @@ def process_customer_period(job_id: int) -> None:
 
         update_job(db, job, "processing", "Gom khách hàng trùng MA_KH trên nhiều chi nhánh thành một hồ sơ", 78)
         db.execute(PROFILE_SQL, {"period_key": job.period_key, "job_id": job.id})
+        db.commit()
+
+        update_job(db, job, "processing", "Tính doanh số chuyển tiền về TK theo số dư DP", 88)
+        apply_transfer_inflow_to_profiles(db, job.period_key)
         db.commit()
 
         total_customers = (

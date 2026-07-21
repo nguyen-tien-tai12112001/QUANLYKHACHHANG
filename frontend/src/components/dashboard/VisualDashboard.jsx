@@ -29,6 +29,7 @@ function VisualDashboard({
   loading = false,
   emptyDescription,
   showTrend = true,
+  filterBranch = null,
 }) {
   const view = useMemo(() => resolveDashboardView(aggregate, rows), [aggregate, rows]);
 
@@ -73,7 +74,11 @@ function VisualDashboard({
                       </Tag>
                     </span>
                     <strong style={{ color: '#1e293b' }}>
-                      {s.pct}% <span style={{ color: '#64748b', fontWeight: 500, fontSize: 11 }}>({s.count}/{total.toLocaleString()} KH)</span>
+                      {s.pct}%{' '}
+                      <span style={{ color: '#64748b', fontWeight: 500, fontSize: 11 }}>
+                        ({Number(s.count || 0).toLocaleString('en-US')}/
+                        {Number(s.base ?? total).toLocaleString('en-US')} {s.base_label || 'KH'})
+                      </span>
                     </strong>
                   </div>
                   <div
@@ -114,7 +119,17 @@ function VisualDashboard({
           style={{ borderRadius: '12px', boxShadow: '0 4px 12px rgba(0,0,0,0.02)' }}
         >
           <div style={{ maxHeight: '340px', overflowY: 'auto' }}>
-            {officerLeaderboard.map((o, index) => (
+            {officerLeaderboard.length === 0 ? (
+              <Empty
+                image={Empty.PRESENTED_IMAGE_SIMPLE}
+                description={
+                  filterBranch
+                    ? 'Chưa có dữ liệu cán bộ tín dụng cho chi nhánh này'
+                    : 'Chưa có dữ liệu cán bộ tín dụng toàn tỉnh'
+                }
+              />
+            ) : (
+            officerLeaderboard.map((o, index) => (
               <div
                 key={o.code}
                 style={{
@@ -147,7 +162,8 @@ function VisualDashboard({
                   </div>
                 </div>
               </div>
-            ))}
+            ))
+            )}
           </div>
         </Card>
       </Col>
