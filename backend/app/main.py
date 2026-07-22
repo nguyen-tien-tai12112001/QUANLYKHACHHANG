@@ -13,7 +13,12 @@ from app.imports.importer import enqueue_pending_import_files, start_import_work
 from app.seed_data import seed_initial_data
 
 
-app = FastAPI(title=settings.APP_NAME)
+app = FastAPI(
+    title=settings.APP_NAME,
+    docs_url="/api/docs",
+    openapi_url="/api/openapi.json",
+    redoc_url="/api/redoc",
+)
 
 app.add_middleware(
     CORSMiddleware,

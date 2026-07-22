@@ -1,181 +1,134 @@
 # QUANLYKHACHHANG
 
-QUANLYKHACHHANG là dự án fullstack dùng để quản lý khách hàng, import dữ liệu CSV và tổng hợp báo cáo. Giai đoạn hiện tại chỉ dựng khung dự án chuẩn, chạy được Frontend, Backend và kết nối PostgreSQL.
+Hệ thống quản lý, import, xử lý và báo cáo dữ liệu khách hàng.
 
-## Công nghệ sử dụng
+Hướng dẫn triển khai chi tiết trên máy khác:
+[docs/TRIEN_KHAI_DOCKER_MAY_KHAC.md](docs/TRIEN_KHAI_DOCKER_MAY_KHAC.md)
 
-- Frontend: ReactJS, Vite, Ant Design, Axios
-- Backend: Python FastAPI
-- Database: PostgreSQL 16 qua Docker Compose hoac PostgreSQL local/server
-- Ket noi DB: SQLAlchemy voi psycopg
-- Quản lý DB bên ngoài: DBeaver
-- TODO: Bổ sung Polars để xử lý nhiều file CSV.
-- TODO: Tạo bảng dữ liệu theo từng loại file import.
-- TODO: Tổng hợp báo cáo.
-- TODO: Xuất Excel.
-- TODO: Đóng gói chạy offline.
+## Công nghệ
 
-## Cấu trúc thư mục
+- Frontend: React 19, Vite, Ant Design, Axios
+- Backend: Python 3.12, FastAPI, SQLAlchemy, Polars
+- Database: PostgreSQL 16
+- Migration: Alembic
+- Production local: Docker Compose, Nginx
 
-```text
-QUANLYKHACHHANG/
-├─ docs/
-│  └─ THIET_KE_KHO_DU_LIEU_KHACH_HANG.md
-├─ backend/
-│  ├─ app/
-│  │  ├─ main.py
-│  │  ├─ config.py
-│  │  ├─ database.py
-│  │  └─ api/
-│  │     └─ health.py
-│  ├─ uploads/
-│  ├─ exports/
-│  ├─ logs/
-│  ├─ requirements.txt
-│  ├─ .env.example
-│  └─ README.md
-├─ frontend/
-│  ├─ src/
-│  │  ├─ api/
-│  │  │  └─ client.js
-│  │  ├─ pages/
-│  │  │  └─ Dashboard.jsx
-│  │  ├─ components/
-│  │  │  └─ MainLayout.jsx
-│  │  ├─ App.jsx
-│  │  └─ main.jsx
-│  ├─ package.json
-│  ├─ vite.config.js
-│  └─ .env.example
-├─ database/
-│  └─ init.sql
-├─ docker-compose.yml
-├─ .env.example
-├─ start-dev.bat
-└─ README.md
+## Chạy toàn bộ bằng Docker
+
+Yêu cầu: Docker Desktop và Docker Compose.
+
+Trên Windows PowerShell, tại thư mục gốc dự án:
+
+```powershell
+Copy-Item .env.example .env
+docker compose config
+docker compose up -d --build
+docker compose ps
 ```
 
-## Chạy PostgreSQL bằng Docker
+Truy cập:
 
-```bat
+- Frontend: http://localhost
+- Swagger: http://localhost/api/docs
+- OpenAPI: http://localhost/api/openapi.json
+- Health check: http://localhost/api/health
+- Backend trực tiếp để debug: http://localhost:8000
+- PostgreSQL: localhost:5432
+
+Frontend production gọi backend bằng đường dẫn tương đối `/api`. Nginx giữ
+nguyên prefix này và proxy request sang service `backend:8000`.
+
+## Xem log
+
+```powershell
+docker compose logs -f
+docker compose logs -f backend
+docker compose logs -f frontend
+docker compose logs -f postgres
+```
+
+## Dừng và chạy lại
+
+```powershell
+docker compose down
 docker compose up -d
 ```
 
-Kiểm tra container:
+`docker compose down` không xóa dữ liệu PostgreSQL. Không chạy lệnh sau nếu
+không chủ động muốn xóa database và các volume dữ liệu:
 
-```bat
-docker ps
+```powershell
+docker compose down -v
 ```
 
 ## Kết nối DBeaver
 
-- Host: localhost
-- Port: 5432
-- Database: qlkh_db
-- Username: qlkh_user
-- Password: qlkh_password
+Đọc các giá trị từ file `.env`:
 
-## Chạy backend
+- Host: `localhost`
+- Port: `5432`
+- Database: `POSTGRES_DB`
+- Username: `POSTGRES_USER`
+- Password: `POSTGRES_PASSWORD`
 
-```bat
-cd backend
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+## Alembic
+
+Kiểm tra revision và lịch sử:
+
+```powershell
+docker compose exec backend alembic current
+docker compose exec backend alembic history
+docker compose exec backend alembic upgrade head
 ```
 
-## Chạy frontend
+Revision đầu tiên là baseline idempotent. Database trống được tạo từ toàn bộ
+SQLAlchemy metadata; database cũ không bị drop hoặc tạo lại bảng. Backend vẫn
+giữ `init_db()` trong giai đoạn chuyển tiếp để áp dụng các nâng cấp schema cũ
+đang được khai báo an toàn bằng `IF NOT EXISTS`.
 
-```bat
-cd frontend
-npm install
-copy .env.example .env
-npm run dev -- --host 0.0.0.0 --port 3000
+Không chạy `alembic revision --autogenerate` rồi áp dụng ngay lên dữ liệu thật
+khi chưa đọc và kiểm tra nội dung migration sinh ra.
+
+## Backup và restore
+
+Backup:
+
+```powershell
+.\backup-db.bat
 ```
 
-## Chạy nhanh trên Windows
+Restore một file SQL:
 
-```bat
-start-dev.bat
+```powershell
+.\restore-db.bat database\backups\ten_file.sql
 ```
 
-Script này sẽ chạy Docker Compose PostgreSQL, tạo file `.env` nếu chưa có, mở backend và frontend trong các cửa sổ terminal riêng.
+File backup nằm trong `database/backups` và không được commit lên Git.
 
-## Cấu hình Database
+## Chạy chế độ phát triển
 
-## Tài liệu thiết kế
+Script dưới đây chỉ khởi động PostgreSQL bằng Docker, sau đó chạy FastAPI và
+Vite trực tiếp trên Windows với hot reload:
 
-Toàn bộ ý tưởng nghiệp vụ, logic import, chuẩn hóa `MA_KH_CHUAN`, thiết kế bảng dữ liệu và hướng triển khai code được ghi tại:
-
-```text
-docs/THIET_KE_KHO_DU_LIEU_KHACH_HANG.md
+```powershell
+.\start-dev.bat
 ```
 
-Dự án hỗ trợ 2 cách kết nối PostgreSQL:
-
-1. PostgreSQL chạy bằng Docker.
-2. PostgreSQL cài trực tiếp trên máy local/server.
-
-Backend không hard-code host, port, user, password trong code. Toàn bộ cấu hình DB nằm trong file:
-
-```text
-backend/.env
-```
-
-Nếu dùng PostgreSQL Docker, giữ nguyên:
-
-```env
-DATABASE_URL=postgresql+psycopg://qlkh_user:qlkh_password@localhost:5432/qlkh_db
-```
-
-Nếu dùng PostgreSQL local:
-
-```env
-DATABASE_URL=postgresql+psycopg://postgres:123456@localhost:5432/quanlykhachhang
-```
-
-Nếu dùng PostgreSQL trên máy chủ khác:
-
-```env
-DATABASE_URL=postgresql+psycopg://postgres:123456@192.168.1.10:5432/quanlykhachhang
-```
-
-Sau khi sửa `backend/.env`, restart backend là được.
-
-## Kiểm tra kết nối DB
-
-Sau khi PostgreSQL và backend đã chạy:
-
-```bat
-curl http://localhost:8000/api/health
-```
-
-Kết quả thành công:
-
-```json
-{
-  "status": "ok",
-  "app": "QUANLYKHACHHANG",
-  "database": "connected"
-}
-```
-
-Nếu DB lỗi, API sẽ trả về `status: error`, `database: disconnected` và kèm thông tin lỗi trong `message`.
-
-## Link truy cập
+Địa chỉ chế độ phát triển:
 
 - Frontend: http://localhost:3000
-- Backend docs: http://localhost:8000/docs
-- Health API: http://localhost:8000/api/health
-- Import files API: http://localhost:8000/api/imports/files
-- Summary API: http://localhost:8000/api/imports/summary?period_key=yyyymmdd
+- Backend: http://localhost:8000
+- Swagger: http://localhost:8000/api/docs
 
-## Gợi ý bước tiếp theo
+`backend/.env.example` và `frontend/.env.example` được giữ để hỗ trợ chế độ
+phát triển ngoài Docker.
 
-- Tạo model và migration database.
-- Xây API upload nhiều file CSV.
-- Bổ sung Polars để đọc và chuẩn hóa dữ liệu CSV.
-- Thiết kế bảng riêng cho từng loại file import.
-- Xây dashboard báo cáo và chức năng xuất Excel.
+## Dữ liệu bền vững
+
+Docker Compose giữ dữ liệu tại:
+
+- `quanlykhachhang_postgres_data`: PostgreSQL
+- `backend/uploads`: file import đang chờ/đang xử lý
+- `backend/exports`: file xuất và backup do backend sinh ra
+
+Thư mục `documents` của máy host được mount chỉ đọc để seed dữ liệu tổ chức.

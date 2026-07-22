@@ -3,8 +3,8 @@ import axios from 'axios';
 import { getRegisteredAccessToken, notifyUnauthorized } from '../auth/authBridge';
 
 const client = axios.create({
-  baseURL: import.meta.env.VITE_API_URL,
-  timeout: 60000,
+  baseURL: import.meta.env.VITE_API_URL || '/api',
+  timeout: 600000,
 });
 
 client.interceptors.request.use((config) => {

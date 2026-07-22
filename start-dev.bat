@@ -2,7 +2,7 @@
 setlocal
 
 echo Starting PostgreSQL with Docker Compose...
-docker compose up -d
+docker compose up -d postgres
 
 if not exist backend\.env (
   copy backend\.env.example backend\.env
@@ -19,4 +19,3 @@ echo Opening frontend terminal...
 start cmd /k "cd /d %~dp0frontend && npm install && npm run dev -- --host 0.0.0.0 --port 3000"
 
 endlocal
-

@@ -27,6 +27,8 @@ frontend/dist/
 
 # Environment
 .env
+.env.*
+!.env.example
 frontend/.env
 
 # Database local dumps and Docker data
@@ -37,6 +39,9 @@ postgres_data/
 
 # Local business/import data
 documents/
+!documents/
+documents/*
+!documents/.gitkeep
 
 # OS / editor
 .DS_Store

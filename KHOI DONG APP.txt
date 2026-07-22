@@ -1,7 +1,17 @@
-Cách thủ công (khuyên dùng khi muốn kiểm soát từng bước)
+Cách chạy toàn bộ bằng Docker (khuyên dùng)
+cd D:\Code\QUANLYKHACHHANG
+copy .env.example .env
+docker compose up -d --build
+docker compose ps
+
+Mở ứng dụng: http://localhost
+Swagger: http://localhost/api/docs
+Health check: http://localhost/api/health
+
+Cách thủ công dành cho phát triển có hot reload
 Bước 1: Bật database (Docker)
 cd D:\Code\QUANLYKHACHHANG
-docker compose up -d
+docker compose up -d postgres
 docker ps
 Bước 2: Khởi động Backend (terminal 1)
 cd D:\Code\QUANLYKHACHHANG\backend
