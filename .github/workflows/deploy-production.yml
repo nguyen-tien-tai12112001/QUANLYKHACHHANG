@@ -1,0 +1,216 @@
+name: Build and deploy production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: quanlykhachhang-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+  BACKEND_IMAGE: ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-backend
+  FRONTEND_IMAGE: ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-frontend
+  DEPLOY_DIR: D:\Apps\QUANLYKHACHHANG
+
+jobs:
+  build-images:
+    name: Build ${{ matrix.name }} image
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            context: ./backend
+            image: ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-backend
+          - name: frontend
+            context: ./frontend
+            image: ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-frontend
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          push: true
+          tags: |
+            ${{ matrix.image }}:${{ github.sha }}
+            ${{ matrix.image }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          cache-from: type=gha,scope=${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+  deploy:
+    name: Deploy to Windows production server
+    needs:
+      - build-images
+    if: vars.ENABLE_PRODUCTION_DEPLOY == 'true'
+    runs-on:
+      - self-hosted
+      - Windows
+      - X64
+      - production
+    environment: production
+    permissions:
+      contents: read
+      packages: read
+    defaults:
+      run:
+        shell: powershell
+
+    steps:
+      - name: Checkout deployment configuration
+        uses: actions/checkout@v4
+
+      - name: Verify Docker Desktop
+        run: |
+          docker version
+          docker compose version
+          docker info
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install production Compose file
+        run: |
+          New-Item -ItemType Directory -Force '${{ env.DEPLOY_DIR }}' | Out-Null
+          Copy-Item '.\docker-compose.prod.yml' `
+            '${{ env.DEPLOY_DIR }}\docker-compose.prod.yml' -Force
+
+          if (-not (Test-Path '${{ env.DEPLOY_DIR }}\.env')) {
+            throw 'Missing production environment file: ${{ env.DEPLOY_DIR }}\.env'
+          }
+
+      - name: Pull immutable images
+        working-directory: D:\Apps\QUANLYKHACHHANG
+        run: |
+          $env:IMAGE_TAG = '${{ github.sha }}'
+          docker compose --env-file .env -f docker-compose.prod.yml pull backend frontend
+
+      - name: Ensure PostgreSQL is running
+        working-directory: D:\Apps\QUANLYKHACHHANG
+        run: |
+          $env:IMAGE_TAG = '${{ github.sha }}'
+          docker compose --env-file .env -f docker-compose.prod.yml up -d postgres
+
+      - name: Wait for PostgreSQL
+        run: |
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+            $status = docker inspect --format '{{.State.Health.Status}}' qlkh_postgres 2>$null
+            if ($status -eq 'healthy') {
+              Write-Host 'PostgreSQL is healthy.'
+              exit 0
+            }
+            Start-Sleep -Seconds 5
+          }
+
+          docker logs --tail 200 qlkh_postgres
+          throw 'PostgreSQL did not become healthy.'
+
+      - name: Backup database before migration
+        working-directory: D:\Apps\QUANLYKHACHHANG
+        run: |
+          $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+          $backupFile = "/backups/pre-deploy-$timestamp-${{ github.sha }}.dump"
+          $dbUser = (docker compose --env-file .env -f docker-compose.prod.yml `
+            exec -T postgres printenv POSTGRES_USER).Trim()
+          $dbName = (docker compose --env-file .env -f docker-compose.prod.yml `
+            exec -T postgres printenv POSTGRES_DB).Trim()
+
+          if (-not $dbUser -or -not $dbName) {
+            throw 'Cannot read PostgreSQL credentials from the container.'
+          }
+
+          docker compose --env-file .env -f docker-compose.prod.yml `
+            exec -T postgres pg_dump -U $dbUser -d $dbName -Fc -f $backupFile
+
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Database backup failed.'
+          }
+
+          Write-Host "Database backup created at $backupFile"
+
+      - name: Run Alembic migration
+        working-directory: D:\Apps\QUANLYKHACHHANG
+        run: |
+          $env:IMAGE_TAG = '${{ github.sha }}'
+          docker compose --env-file .env -f docker-compose.prod.yml `
+            run --rm --no-deps backend alembic upgrade head
+
+      - name: Restart backend
+        working-directory: D:\Apps\QUANLYKHACHHANG
+        run: |
+          $env:IMAGE_TAG = '${{ github.sha }}'
+          docker compose --env-file .env -f docker-compose.prod.yml `
+            up -d --no-deps backend
+
+      - name: Wait for backend
+        run: |
+          for ($attempt = 1; $attempt -le 30; $attempt++) {
+            $status = docker inspect --format '{{.State.Health.Status}}' qlkh_backend 2>$null
+            if ($status -eq 'healthy') {
+              Write-Host 'Backend is healthy.'
+              exit 0
+            }
+            Start-Sleep -Seconds 5
+          }
+
+          docker logs --tail 200 qlkh_backend
+          throw 'Backend did not become healthy.'
+
+      - name: Restart frontend
+        working-directory: D:\Apps\QUANLYKHACHHANG
+        run: |
+          $env:IMAGE_TAG = '${{ github.sha }}'
+          docker compose --env-file .env -f docker-compose.prod.yml `
+            up -d --no-deps frontend
+
+      - name: Verify application
+        run: |
+          for ($attempt = 1; $attempt -le 20; $attempt++) {
+            try {
+              $health = Invoke-RestMethod -Uri 'http://127.0.0.1/api/health' -TimeoutSec 10
+              if ($health.status -eq 'ok' -and $health.database -eq 'connected') {
+                Write-Host 'Deployment successful.'
+                $env:IMAGE_TAG = '${{ github.sha }}'
+                docker compose `
+                  --env-file '${{ env.DEPLOY_DIR }}\.env' `
+                  -f '${{ env.DEPLOY_DIR }}\docker-compose.prod.yml' ps
+                exit 0
+              }
+            } catch {
+              Write-Host "Health attempt $attempt failed: $($_.Exception.Message)"
+            }
+            Start-Sleep -Seconds 5
+          }
+
+          docker logs --tail 200 qlkh_frontend
+          docker logs --tail 200 qlkh_backend
+          throw 'Application health check failed.'

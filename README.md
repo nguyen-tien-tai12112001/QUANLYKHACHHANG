@@ -5,6 +5,9 @@ Hệ thống quản lý, import, xử lý và báo cáo dữ liệu khách hàng
 Hướng dẫn triển khai chi tiết trên máy khác:
 [docs/TRIEN_KHAI_DOCKER_MAY_KHAC.md](docs/TRIEN_KHAI_DOCKER_MAY_KHAC.md)
 
+Hướng dẫn CI/CD lên máy chủ Windows 11 bằng GitHub Actions và GHCR:
+[docs/TRIEN_KHAI_CICD_WINDOWS.md](docs/TRIEN_KHAI_CICD_WINDOWS.md)
+
 ## Công nghệ
 
 - Frontend: React 19, Vite, Ant Design, Axios

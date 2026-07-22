@@ -1,0 +1,72 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: qlkh_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - "${APP_DATA_DIR:-D:/Apps/QUANLYKHACHHANG/data}/backups:/backups"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - qlkh_network
+
+  backend:
+    image: ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-backend:${IMAGE_TAG:-latest}
+    container_name: qlkh_backend
+    restart: unless-stopped
+    environment:
+      APP_NAME: ${APP_NAME:-QUANLYKHACHHANG}
+      DATABASE_URL: ${DATABASE_URL}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      IMPORT_WORKER_COUNT: ${IMPORT_WORKER_COUNT:-1}
+      IMPORT_CHUNK_SIZE: ${IMPORT_CHUNK_SIZE:-20000}
+      DELETE_UPLOAD_AFTER_SUCCESS: ${DELETE_UPLOAD_AFTER_SUCCESS:-true}
+      PROCESSING_WORK_MEM: ${PROCESSING_WORK_MEM:-256MB}
+    volumes:
+      - "${APP_DATA_DIR:-D:/Apps/QUANLYKHACHHANG/data}/uploads:/app/uploads"
+      - "${APP_DATA_DIR:-D:/Apps/QUANLYKHACHHANG/data}/exports:/app/exports"
+      - "${APP_DATA_DIR:-D:/Apps/QUANLYKHACHHANG/data}/documents:/documents:ro"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - qlkh_network
+
+  frontend:
+    image: ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-frontend:${IMAGE_TAG:-latest}
+    container_name: qlkh_frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qlkh_network
+
+volumes:
+  postgres_data:
+    name: quanlykhachhang_postgres_data
+
+networks:
+  qlkh_network:
+    name: qlkh_network
