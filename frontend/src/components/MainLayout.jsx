@@ -52,8 +52,8 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
         className="app-sidebar"
       >
         <div className="app-logo">
-          <img className="app-logo-image" src={logoUrl} alt="C370" />
-          {!collapsed ? <span>C370</span> : null}
+          <img className="app-logo-image" src={logoUrl} alt="C360" />
+          {!collapsed ? <span>C360</span> : null}
           <Tooltip title={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}>
             <Button
               type="text"
@@ -85,7 +85,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
               />
             </Tooltip>
             <Typography.Title level={4} className="app-title">
-              C370
+              C360
             </Typography.Title>
           </Space>
           <Space className="app-user" size={12}>
