@@ -137,8 +137,6 @@ def serialize_branch(branch: OrgBranch) -> dict:
         "id": branch.id,
         "branch_code": branch.branch_code,
         "branch_name": branch.branch_name,
-        "test_code": branch.test_code,
-        "test_note": branch.test_note,
         "status": branch.status,
         "department_count": len(branch.departments),
         "user_count": len(branch.users),

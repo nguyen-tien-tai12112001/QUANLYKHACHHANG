@@ -86,7 +86,7 @@ const sectionMeta = {
 };
 
 const defaultVisibleColumns = {
-  branches: ['branch_code', 'branch_name', 'test_code', 'test_note', 'department_count', 'user_count', 'status'],
+  branches: ['branch_code', 'branch_name', 'department_count', 'user_count', 'status'],
   departments: ['branch_name', 'department_code', 'department_name', 'manager_name', 'user_count', 'status'],
   users: ['full_name', 'employee_code', 'ipcas_username', 'department_name', 'role_code', 'data_scope', 'is_active'],
   roles: ['role_code', 'role_name', 'description', 'user_count', 'permissions'],
@@ -414,8 +414,6 @@ function SystemAdmin({ section = 'branches' }) {
       return [
         { title: 'Mã chi nhánh', dataIndex: 'branch_code', key: 'branch_code', width: 140, render: (value) => <Tag color="red">{value}</Tag> },
         { title: 'Tên chi nhánh', dataIndex: 'branch_name', key: 'branch_name' },
-        { title: 'Mã kiểm thử', dataIndex: 'test_code', key: 'test_code', width: 160, render: (value) => value ? <Tag color="blue">{value}</Tag> : '—' },
-        { title: 'Ghi chú kiểm thử', dataIndex: 'test_note', key: 'test_note', width: 240, render: (value) => value || '—' },
         { title: 'Phòng ban', dataIndex: 'department_count', key: 'department_count', width: 110 },
         { title: 'Cán bộ', dataIndex: 'user_count', key: 'user_count', width: 100 },
         { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 130, render: activeTag },

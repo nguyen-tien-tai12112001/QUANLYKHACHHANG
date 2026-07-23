@@ -499,8 +499,6 @@ class OrgBranch(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     branch_code: Mapped[str] = mapped_column(String(10), unique=True, index=True, nullable=False)
     branch_name: Mapped[str] = mapped_column(String(255), nullable=False)
-    test_code: Mapped[str | None] = mapped_column(String(50))
-    test_note: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
