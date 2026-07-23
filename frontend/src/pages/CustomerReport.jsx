@@ -2414,7 +2414,7 @@ function CustomerReport() {
             Theo dõi dữ liệu khách hàng theo kỳ, đối chiếu sản phẩm dịch vụ và cơ hội chăm sóc.
           </Text>
         </div>
-        <Tag color="red" className="report-header-badge">C360</Tag>
+        <Tag color="red" className="report-header-badge">C370</Tag>
       </div>
 
       <Drawer

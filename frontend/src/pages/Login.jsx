@@ -21,8 +21,8 @@ function Login({ onLogin }) {
     <main className="login-page">
       <section className="login-intro">
         <div className="login-brand">
-          <img src={logoUrl} alt="C360" />
-          <Title level={1}>C360</Title>
+          <img src={logoUrl} alt="C370" />
+          <Title level={1}>C370</Title>
         </div>
         <Text className="login-kicker">Hệ thống quản lý khách hàng tập trung</Text>
         <Paragraph>
