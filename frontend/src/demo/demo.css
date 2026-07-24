@@ -410,28 +410,47 @@
   height: 100%;
 }
 
-.demo-service-list {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0 18px;
+.demo-service-card .ant-card-head {
+  min-height: 54px;
+  border-bottom-color: #eee3dc;
+  background: linear-gradient(90deg, #fff9f6, #fff);
 }
 
-.demo-service-card.is-compact .demo-service-list {
-  grid-template-columns: minmax(0, 1fr);
+.demo-service-card .ant-card-body {
+  padding: 16px;
+}
+
+.demo-service-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(205px, 1fr));
+  gap: 12px;
 }
 
 .demo-service-item {
   display: flex;
-  min-height: 48px;
-  align-items: center;
+  min-height: 82px;
+  align-items: flex-start;
+  flex-direction: column;
   justify-content: space-between;
-  gap: 12px;
-  border-bottom: 1px solid #f1e9e4;
+  gap: 10px;
+  padding: 13px 14px;
+  border: 1px solid #eee3dc;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 2px 8px rgba(74, 43, 31, 0.04);
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.demo-service-item:hover {
+  border-color: #d9b8aa;
+  box-shadow: 0 5px 14px rgba(74, 43, 31, 0.08);
+  transform: translateY(-1px);
 }
 
 .demo-service-item > .ant-typography {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
+  font-weight: 600;
   line-height: 1.35;
   overflow-wrap: normal;
   word-break: normal;

@@ -158,11 +158,11 @@ function StatusValue({ value }) {
   return <Tag color="warning">Chưa có dữ liệu</Tag>;
 }
 
-function ServiceGroup({ title, icon, items, compact = false }) {
+function ServiceGroup({ title, icon, items }) {
   const active = items.filter((item) => item.value === true).length;
   return (
     <Card
-      className={`demo-service-card${compact ? ' is-compact' : ''}`}
+      className="demo-service-card"
       title={<Space>{icon}<span>{title}</span></Space>}
       extra={<Tag color="blue">{active}/{items.length} sản phẩm</Tag>}
     >
@@ -414,19 +414,19 @@ function ProfilePage({ customerId, navigate }) {
             </Col>
           </Row>
           <Row gutter={[16, 16]} className="demo-section">
-            <Col xs={24} lg={8}><ServiceGroup compact title="Ngân hàng điện tử" icon={<GlobalOutlined />} items={[
+            <Col span={24}><ServiceGroup title="Ngân hàng điện tử" icon={<GlobalOutlined />} items={[
               { label: 'Agribank Plus', value: customer.digital.agribankPlus },
               { label: 'OTT', value: customer.digital.ott },
               { label: 'E-Banking', value: customer.digital.eBanking },
               { label: 'Loa thần tài', value: customer.digital.loaThanTai },
             ]} /></Col>
-            <Col xs={24} lg={8}><ServiceGroup compact title="Sản phẩm thẻ" icon={<CreditCardOutlined />} items={[
+            <Col span={24}><ServiceGroup title="Sản phẩm thẻ" icon={<CreditCardOutlined />} items={[
               { label: 'Thẻ ghi nợ nội địa', value: customer.cards.domesticDebit },
               { label: 'Thẻ Lộc Việt', value: customer.cards.locViet },
               { label: 'Thẻ ghi nợ quốc tế', value: customer.cards.internationalDebit },
               { label: 'Thẻ tín dụng quốc tế', value: customer.cards.internationalCredit },
             ]} /></Col>
-            <Col xs={24} lg={8}><ServiceGroup compact title="ABIC" icon={<ShopOutlined />} items={[
+            <Col span={24}><ServiceGroup title="ABIC" icon={<ShopOutlined />} items={[
               { label: 'Bảo an tín dụng', value: customer.abic.creditProtection },
               { label: 'Bảo an tài khoản', value: customer.abic.accountProtection },
               { label: 'Bảo hiểm ô tô', value: customer.abic.automobile },
