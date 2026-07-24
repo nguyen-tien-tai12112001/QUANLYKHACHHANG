@@ -416,6 +416,10 @@
   gap: 0 18px;
 }
 
+.demo-service-card.is-compact .demo-service-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 .demo-service-item {
   display: flex;
   min-height: 48px;
@@ -425,8 +429,17 @@
   border-bottom: 1px solid #f1e9e4;
 }
 
+.demo-service-item > .ant-typography {
+  min-width: 0;
+  flex: 1 1 auto;
+  line-height: 1.35;
+  overflow-wrap: normal;
+  word-break: normal;
+}
+
 .demo-service-item .ant-tag {
   margin: 0;
+  flex: 0 0 auto;
   white-space: nowrap;
 }
 
@@ -746,8 +759,17 @@
   border-bottom: 1px solid #f1e9e4;
 }
 
+.demo-quick-product-row > .ant-typography {
+  min-width: 0;
+  flex: 1 1 auto;
+  line-height: 1.35;
+  word-break: normal;
+}
+
 .demo-quick-product-row .ant-tag {
   margin: 0;
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .demo-search-hero {
