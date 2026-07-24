@@ -62,6 +62,7 @@ import {
   HighValueCustomersPage,
 } from './DemoCustomerPages';
 import DemoAlertsPage, { demoAlerts } from './DemoAlertsPage';
+import DemoExecutiveDashboard from './DemoExecutiveDashboard';
 import './demo.css';
 
 const { Header, Sider, Content } = Layout;
@@ -759,7 +760,7 @@ export default function DemoApp() {
   }
 
   const contentByPage = {
-    dashboard: <DashboardPage navigate={navigate} onCustomerOpen={openCustomer} />,
+    dashboard: <DemoExecutiveDashboard onCustomerOpen={openCustomer} />,
     alerts: <DemoAlertsPage onCustomerOpen={openCustomer} />,
     customers: <CustomerListPage navigate={navigate} onCustomerOpen={openCustomer} mode="all" />,
     'customer-search': <CustomerSearchPage onCustomerOpen={openCustomer} />,
@@ -790,7 +791,7 @@ export default function DemoApp() {
   };
   const content = page === 'profile'
     ? <ProfilePage customerId={customerId} navigate={navigate} />
-    : contentByPage[page] || <DashboardPage navigate={navigate} onCustomerOpen={openCustomer} />;
+    : contentByPage[page] || <DemoExecutiveDashboard onCustomerOpen={openCustomer} />;
 
   return (
     <Layout className="demo-shell">
