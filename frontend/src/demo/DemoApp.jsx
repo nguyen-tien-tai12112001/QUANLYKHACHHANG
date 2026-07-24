@@ -54,6 +54,13 @@ import {
   ReportsPage,
   SourceManagementPage,
 } from './DemoExtendedPages';
+import {
+  AttentionCustomersPage,
+  CustomerAssignmentPage,
+  CustomerQuickViewModal,
+  CustomerSearchPage,
+  HighValueCustomersPage,
+} from './DemoCustomerPages';
 import './demo.css';
 
 const { Header, Sider, Content } = Layout;
@@ -169,7 +176,7 @@ function ServiceGroup({ title, icon, items }) {
   );
 }
 
-function DashboardPage({ navigate }) {
+function DashboardPage({ navigate, onCustomerOpen }) {
   const summary = useMemo(() => summarizeCustomers(), []);
   const opportunityRows = useMemo(
     () => [...demoCustomers].sort((a, b) => b.opportunityCount - a.opportunityCount || b.totalBenefits - a.totalBenefits).slice(0, 8),
@@ -219,7 +226,7 @@ function DashboardPage({ navigate }) {
               pagination={false}
               rowKey="id"
               dataSource={opportunityRows}
-              onRow={(row) => ({ onClick: () => navigate('profile', row.id) })}
+              onRow={(row) => ({ onClick: () => onCustomerOpen(row.id) })}
               columns={[
                 { title: 'Khách hàng', dataIndex: 'customerName', ellipsis: true, render: (value, row) => <div><Text strong>{value}</Text><br /><Text type="secondary">{row.customerCode}</Text></div> },
                 { title: 'Phân khúc', dataIndex: 'segment', width: 120, render: (value) => <Tag color={value === 'PLATINUM' ? 'purple' : value === 'GOLD' ? 'gold' : 'default'}>{value}</Tag> },
@@ -249,7 +256,7 @@ function DashboardPage({ navigate }) {
   );
 }
 
-function CustomerListPage({ navigate, mode = 'all' }) {
+function CustomerListPage({ navigate, onCustomerOpen, mode = 'all' }) {
   const [keyword, setKeyword] = useState('');
   const [branch, setBranch] = useState('all');
   const [customerType, setCustomerType] = useState('all');
@@ -335,7 +342,7 @@ function CustomerListPage({ navigate, mode = 'all' }) {
           columns={columns}
           scroll={{ x: 1700 }}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 100], showTotal: (total) => `${total.toLocaleString('vi-VN')} khách hàng` }}
-          onRow={(row) => ({ onClick: () => navigate('profile', row.id) })}
+          onRow={(row) => ({ onClick: () => onCustomerOpen(row.id) })}
           rowClassName="demo-clickable-row"
         />
       </Card>
@@ -722,6 +729,21 @@ export default function DemoApp() {
   const [customerId, setCustomerId] = useState(initial.customerId);
   const [collapsed, setCollapsed] = useState(false);
   const [openKeys, setOpenKeys] = useState(() => [menuGroupForPage(initial.page)].filter(Boolean));
+  const [quickCustomerId, setQuickCustomerId] = useState(() => {
+    const value = Number(new URLSearchParams(window.location.search).get('quick'));
+    return value > 0 ? value : null;
+  });
+
+  const quickCustomer = quickCustomerId ? demoCustomers.find((item) => item.id === quickCustomerId) : null;
+
+  function openCustomer(customerIdToOpen) {
+    setQuickCustomerId(Number(customerIdToOpen));
+  }
+
+  function openFullProfile(customerIdToOpen) {
+    setQuickCustomerId(null);
+    navigate('profile', customerIdToOpen);
+  }
 
   function navigate(nextPage, nextCustomerId = null) {
     setPage(nextPage);
@@ -734,25 +756,25 @@ export default function DemoApp() {
   }
 
   const contentByPage = {
-    dashboard: <DashboardPage navigate={navigate} />,
-    customers: <CustomerListPage navigate={navigate} mode="all" />,
-    'customer-search': <CustomerListPage navigate={navigate} mode="search" />,
-    'customer-high-value': <CustomerListPage navigate={navigate} mode="high-value" />,
-    'customer-attention': <CustomerListPage navigate={navigate} mode="attention" />,
-    'customer-assignment': <CustomerListPage navigate={navigate} mode="assignment" />,
-    'analytics-deposits': <AnalyticsPage domain="deposits" navigate={navigate} />,
-    'analytics-loans': <AnalyticsPage domain="loans" navigate={navigate} />,
-    'analytics-international': <AnalyticsPage domain="international" navigate={navigate} />,
-    'analytics-fees': <AnalyticsPage domain="fees" navigate={navigate} />,
+    dashboard: <DashboardPage navigate={navigate} onCustomerOpen={openCustomer} />,
+    customers: <CustomerListPage navigate={navigate} onCustomerOpen={openCustomer} mode="all" />,
+    'customer-search': <CustomerSearchPage onCustomerOpen={openCustomer} />,
+    'customer-high-value': <HighValueCustomersPage onCustomerOpen={openCustomer} />,
+    'customer-attention': <AttentionCustomersPage onCustomerOpen={openCustomer} />,
+    'customer-assignment': <CustomerAssignmentPage onCustomerOpen={openCustomer} />,
+    'analytics-deposits': <AnalyticsPage domain="deposits" navigate={navigate} onCustomerOpen={openCustomer} />,
+    'analytics-loans': <AnalyticsPage domain="loans" navigate={navigate} onCustomerOpen={openCustomer} />,
+    'analytics-international': <AnalyticsPage domain="international" navigate={navigate} onCustomerOpen={openCustomer} />,
+    'analytics-fees': <AnalyticsPage domain="fees" navigate={navigate} onCustomerOpen={openCustomer} />,
     'products-overview': <ProductsPage group="overview" navigate={navigate} />,
     'products-digital': <ProductsPage group="digital" navigate={navigate} />,
     'products-cards': <ProductsPage group="cards" navigate={navigate} />,
     'products-bills': <ProductsPage group="bills" navigate={navigate} />,
     'products-abic': <ProductsPage group="abic" navigate={navigate} />,
-    opportunities: <CustomerListPage navigate={navigate} mode="opportunities" />,
-    'care-unused': <CareOperationsPage mode="unused" navigate={navigate} />,
-    'care-declining': <CareOperationsPage mode="declining" navigate={navigate} />,
-    'care-plans': <CareOperationsPage mode="plans" navigate={navigate} />,
+    opportunities: <CustomerListPage navigate={navigate} onCustomerOpen={openCustomer} mode="opportunities" />,
+    'care-unused': <CareOperationsPage mode="unused" navigate={navigate} onCustomerOpen={openCustomer} />,
+    'care-declining': <CareOperationsPage mode="declining" navigate={navigate} onCustomerOpen={openCustomer} />,
+    'care-plans': <CareOperationsPage mode="plans" navigate={navigate} onCustomerOpen={openCustomer} />,
     'data-sources': <SourceManagementPage mode="sources" />,
     quality: <QualityPage navigate={navigate} />,
     'data-mapping': <SourceManagementPage mode="mapping" />,
@@ -764,7 +786,7 @@ export default function DemoApp() {
   };
   const content = page === 'profile'
     ? <ProfilePage customerId={customerId} navigate={navigate} />
-    : contentByPage[page] || <DashboardPage navigate={navigate} />;
+    : contentByPage[page] || <DashboardPage navigate={navigate} onCustomerOpen={openCustomer} />;
 
   return (
     <Layout className="demo-shell">
@@ -797,6 +819,12 @@ export default function DemoApp() {
         </Header>
         <Content className="demo-content">{content}</Content>
       </Layout>
+      <CustomerQuickViewModal
+        customer={quickCustomer}
+        open={Boolean(quickCustomer)}
+        onClose={() => setQuickCustomerId(null)}
+        onOpenProfile={openFullProfile}
+      />
     </Layout>
   );
 }

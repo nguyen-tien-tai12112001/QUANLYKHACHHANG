@@ -147,7 +147,7 @@ const analyticsConfig = {
   },
 };
 
-export function AnalyticsPage({ domain = 'deposits', navigate }) {
+export function AnalyticsPage({ domain = 'deposits', onCustomerOpen }) {
   const config = analyticsConfig[domain] || analyticsConfig.deposits;
   const [branch, setBranch] = useState('all');
   const scoped = useMemo(() => branch === 'all' ? demoCustomers : demoCustomers.filter((item) => item.branchCode === branch), [branch]);
@@ -205,7 +205,7 @@ export function AnalyticsPage({ domain = 'deposits', navigate }) {
           rowKey="id"
           pagination={false}
           dataSource={topCustomers}
-          onRow={(row) => ({ onClick: () => navigate('profile', row.id) })}
+          onRow={(row) => ({ onClick: () => onCustomerOpen(row.id) })}
           rowClassName="demo-clickable-row"
           columns={[
             { title: 'Khách hàng', dataIndex: 'customerName', render: (value, row) => <div><Text strong>{value}</Text><br /><Text type="secondary">{row.customerCode} · {row.segment}</Text></div> },
@@ -459,7 +459,7 @@ export function FieldMappingPage() {
   );
 }
 
-export function CareOperationsPage({ mode = 'plans', navigate }) {
+export function CareOperationsPage({ mode = 'plans', onCustomerOpen }) {
   const rows = useMemo(() => demoCustomers
     .filter((item) => mode === 'declining' ? item.history.at(-1).deposits < item.history.at(-2).deposits * 0.93 : item.opportunityCount >= 12)
     .slice(0, 80)
@@ -480,7 +480,7 @@ export function CareOperationsPage({ mode = 'plans', navigate }) {
         <Col xs={24} md={8}><MiniMetric label="Giá trị tiềm năng" value={compactMoney(rows.reduce((sum, item) => sum + item.potential, 0))} note="Ước tính minh họa" tone="gold" icon={<DollarOutlined />} /></Col>
       </Row>
       <Card className="demo-table-card demo-section">
-        <Table rowKey="id" dataSource={rows} pagination={{ defaultPageSize: 15 }} onRow={(row) => ({ onClick: () => navigate('profile', row.id) })} rowClassName="demo-clickable-row" columns={[
+        <Table rowKey="id" dataSource={rows} pagination={{ defaultPageSize: 15 }} onRow={(row) => ({ onClick: () => onCustomerOpen(row.id) })} rowClassName="demo-clickable-row" columns={[
           { title: 'Khách hàng', dataIndex: 'customerName', render: (value, row) => <div><Text strong>{value}</Text><br /><Text type="secondary">{row.customerCode} · {row.segment}</Text></div> },
           { title: 'Sản phẩm/Chủ đề', dataIndex: 'suggestedProduct', render: (value) => <Tag color="blue">{value}</Tag> },
           { title: 'Cán bộ', dataIndex: 'officer' },
@@ -535,4 +535,3 @@ export function ReportsPage({ mode = 'branches' }) {
     </div>
   );
 }
-
