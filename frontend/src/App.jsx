@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react';
-import { notification } from 'antd';
+import { lazy, Suspense, useEffect, useState } from 'react';
+import { Spin, notification } from 'antd';
 
 import { AuthProvider } from './auth';
 import MainLayout from './components/MainLayout';
@@ -12,7 +12,9 @@ import SystemAdmin from './pages/SystemAdmin';
 import AuditLogs from './pages/AuditLogs';
 import client from './api/client';
 
-function App() {
+const DemoApp = lazy(() => import('./demo/DemoApp'));
+
+function LegacyApp() {
   const [activeMenu, setActiveMenu] = useState('dashboard');
   const [currentUser, setCurrentUser] = useState(() => {
     try {
@@ -95,6 +97,17 @@ function App() {
       </MainLayout>
     </AuthProvider>
   );
+}
+
+function App() {
+  if (window.location.pathname.startsWith('/demo')) {
+    return (
+      <Suspense fallback={<div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><Spin size="large" /></div>}>
+        <DemoApp />
+      </Suspense>
+    );
+  }
+  return <LegacyApp />;
 }
 
 export default App;
