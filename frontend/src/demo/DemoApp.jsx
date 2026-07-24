@@ -61,6 +61,7 @@ import {
   CustomerSearchPage,
   HighValueCustomersPage,
 } from './DemoCustomerPages';
+import DemoAlertsPage, { demoAlerts } from './DemoAlertsPage';
 import './demo.css';
 
 const { Header, Sider, Content } = Layout;
@@ -90,6 +91,7 @@ const pagePaths = {
   'customer-high-value': '/demo/customers/high-value',
   'customer-attention': '/demo/customers/attention',
   'customer-assignment': '/demo/customers/assignment',
+  alerts: '/demo/alerts',
   'analytics-deposits': '/demo/analytics/deposits',
   'analytics-loans': '/demo/analytics/loans',
   'analytics-international': '/demo/analytics/international',
@@ -643,6 +645,7 @@ function QualityPage({ navigate }) {
 
 const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: 'Tổng quan' },
+  { key: 'alerts', icon: <AlertOutlined />, label: <span>Cảnh báo tự động <Badge count={demoAlerts.length} overflowCount={999} size="small" /></span> },
   {
     key: 'customers-group',
     icon: <TeamOutlined />,
@@ -757,6 +760,7 @@ export default function DemoApp() {
 
   const contentByPage = {
     dashboard: <DashboardPage navigate={navigate} onCustomerOpen={openCustomer} />,
+    alerts: <DemoAlertsPage onCustomerOpen={openCustomer} />,
     customers: <CustomerListPage navigate={navigate} onCustomerOpen={openCustomer} mode="all" />,
     'customer-search': <CustomerSearchPage onCustomerOpen={openCustomer} />,
     'customer-high-value': <HighValueCustomersPage onCustomerOpen={openCustomer} />,
