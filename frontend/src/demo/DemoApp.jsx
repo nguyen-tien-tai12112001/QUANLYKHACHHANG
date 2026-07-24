@@ -47,6 +47,13 @@ import {
 
 import logoUrl from '../../favicon.jpg';
 import { demoCustomers, demoMeta, summarizeCustomers } from './data/mockCustomers';
+import {
+  AnalyticsPage,
+  CareOperationsPage,
+  ProductsPage,
+  ReportsPage,
+  SourceManagementPage,
+} from './DemoExtendedPages';
 import './demo.css';
 
 const { Header, Sider, Content } = Layout;
@@ -62,14 +69,42 @@ const compactMoney = (value) => {
 const periodLabel = (period) => `${period.slice(6, 8)}/${period.slice(4, 6)}/${period.slice(0, 4)}`;
 
 function parseInitialRoute() {
-  const parts = window.location.pathname.split('/').filter(Boolean);
-  if (parts[0] !== 'demo') return { page: 'dashboard', customerId: null };
-  if (parts[1] === 'customers' && parts[2]) return { page: 'profile', customerId: Number(parts[2]) };
-  if (parts[1] === 'customers') return { page: 'customers', customerId: null };
-  if (parts[1] === 'quality') return { page: 'quality', customerId: null };
-  if (parts[1] === 'opportunities') return { page: 'opportunities', customerId: null };
-  return { page: 'dashboard', customerId: null };
+  const pathname = window.location.pathname.replace(/\/+$/, '') || '/demo';
+  const customerMatch = pathname.match(/^\/demo\/customers\/(\d+)$/);
+  if (customerMatch) return { page: 'profile', customerId: Number(customerMatch[1]) };
+  const matchedPage = Object.entries(pagePaths).find(([, path]) => path === pathname)?.[0];
+  return { page: matchedPage || 'dashboard', customerId: null };
 }
+
+const pagePaths = {
+  dashboard: '/demo',
+  customers: '/demo/customers',
+  'customer-search': '/demo/customer-search',
+  'customer-high-value': '/demo/customers/high-value',
+  'customer-attention': '/demo/customers/attention',
+  'customer-assignment': '/demo/customers/assignment',
+  'analytics-deposits': '/demo/analytics/deposits',
+  'analytics-loans': '/demo/analytics/loans',
+  'analytics-international': '/demo/analytics/international',
+  'analytics-fees': '/demo/analytics/fees',
+  'products-overview': '/demo/products',
+  'products-digital': '/demo/products/digital',
+  'products-cards': '/demo/products/cards',
+  'products-bills': '/demo/products/bills',
+  'products-abic': '/demo/products/abic',
+  opportunities: '/demo/opportunities',
+  'care-unused': '/demo/care/unused',
+  'care-declining': '/demo/care/declining',
+  'care-plans': '/demo/care/plans',
+  'data-sources': '/demo/data/sources',
+  quality: '/demo/quality',
+  'data-mapping': '/demo/data/mapping',
+  'data-history': '/demo/data/history',
+  'reports-overall': '/demo/reports',
+  'reports-branches': '/demo/reports/branches',
+  'reports-officers': '/demo/reports/officers',
+  'reports-products': '/demo/reports/products',
+};
 
 function MetricCard({ title, value, note, icon, tone = 'red', onClick }) {
   return (
@@ -214,7 +249,7 @@ function DashboardPage({ navigate }) {
   );
 }
 
-function CustomerListPage({ navigate, opportunityOnly = false }) {
+function CustomerListPage({ navigate, mode = 'all' }) {
   const [keyword, setKeyword] = useState('');
   const [branch, setBranch] = useState('all');
   const [customerType, setCustomerType] = useState('all');
@@ -222,7 +257,10 @@ function CustomerListPage({ navigate, opportunityOnly = false }) {
   const filtered = useMemo(() => {
     const normalized = keyword.trim().toLocaleLowerCase('vi');
     return demoCustomers.filter((customer) => {
-      if (opportunityOnly && customer.opportunityCount < 10) return false;
+      if (mode === 'opportunities' && customer.opportunityCount < 10) return false;
+      if (mode === 'high-value' && customer.totalBenefits < 100_000_000) return false;
+      if (mode === 'attention' && customer.riskLevel === 'low') return false;
+      if (mode === 'assignment' && customer.id % 9 !== 0) return false;
       if (branch !== 'all' && customer.branchCode !== branch) return false;
       if (customerType !== 'all' && customer.customerType !== customerType) return false;
       if (risk !== 'all' && customer.riskLevel !== risk) return false;
@@ -231,7 +269,16 @@ function CustomerListPage({ navigate, opportunityOnly = false }) {
         .filter(Boolean)
         .some((value) => value.toLocaleLowerCase('vi').includes(normalized));
     });
-  }, [keyword, branch, customerType, risk, opportunityOnly]);
+  }, [keyword, branch, customerType, risk, mode]);
+
+  const pageMeta = {
+    all: ['PROFILE C360', 'Danh sách khách hàng demo', 'Toàn bộ hồ sơ khách hàng và chỉ tiêu tổng hợp theo kỳ.'],
+    search: ['TRA CỨU NHANH', 'Tìm kiếm Profile 360', 'Tìm theo mã khách hàng, CCCD/MST, điện thoại hoặc tên khách hàng.'],
+    'high-value': ['PHÂN KHÚC KHÁCH HÀNG', 'Khách hàng giá trị cao', 'Khách hàng có tổng lợi ích kỳ hiện tại từ 100 triệu đồng.'],
+    attention: ['CẢNH BÁO DANH MỤC', 'Khách hàng cần chú ý', 'Hồ sơ có rủi ro cao, thiếu dữ liệu hoặc cần cán bộ kiểm tra.'],
+    assignment: ['PHÂN CÔNG QUẢN LÝ', 'Khách hàng cần rà soát phân công', 'Danh sách minh họa các trường hợp cần xác nhận cán bộ/đơn vị quản lý chính.'],
+    opportunities: ['KHAI THÁC DỮ LIỆU', 'Cơ hội bán chéo', 'Khách hàng có nhiều sản phẩm tiềm năng chưa sử dụng.'],
+  }[mode] || ['PROFILE C360', 'Danh sách khách hàng demo', ''];
 
   const columns = [
     {
@@ -266,9 +313,9 @@ function CustomerListPage({ navigate, opportunityOnly = false }) {
     <div className="demo-page">
       <div className="demo-page-heading">
         <div>
-          <Text className="demo-eyebrow">{opportunityOnly ? 'KHAI THÁC DỮ LIỆU' : 'PROFILE C360'}</Text>
-          <Title level={2}>{opportunityOnly ? 'Cơ hội bán chéo' : 'Danh sách khách hàng demo'}</Title>
-          <Text type="secondary">{filtered.length.toLocaleString('vi-VN')} trên {demoCustomers.length.toLocaleString('vi-VN')} hồ sơ giả lập</Text>
+          <Text className="demo-eyebrow">{pageMeta[0]}</Text>
+          <Title level={2}>{pageMeta[1]}</Title>
+          <Text type="secondary">{pageMeta[2]} · {filtered.length.toLocaleString('vi-VN')} trên {demoCustomers.length.toLocaleString('vi-VN')} hồ sơ</Text>
         </div>
         <Tag color="purple">KHÔNG PHẢI DỮ LIỆU THẬT</Tag>
       </div>
@@ -589,46 +636,155 @@ function QualityPage({ navigate }) {
 
 const menuItems = [
   { key: 'dashboard', icon: <DashboardOutlined />, label: 'Tổng quan' },
-  { key: 'customers', icon: <TeamOutlined />, label: 'Khách hàng' },
-  { key: 'opportunities', icon: <PieChartOutlined />, label: 'Cơ hội bán chéo' },
-  { key: 'quality', icon: <FileSearchOutlined />, label: 'Chất lượng dữ liệu' },
+  {
+    key: 'customers-group',
+    icon: <TeamOutlined />,
+    label: 'Khách hàng',
+    children: [
+      { key: 'customers', label: 'Danh sách khách hàng' },
+      { key: 'customer-search', label: 'Tìm kiếm Profile 360' },
+      { key: 'customer-high-value', label: 'Khách hàng giá trị cao' },
+      { key: 'customer-attention', label: 'Khách hàng cần chú ý' },
+      { key: 'customer-assignment', label: 'Phân công quản lý' },
+    ],
+  },
+  {
+    key: 'analytics-group',
+    icon: <BarChartOutlined />,
+    label: 'Phân tích nghiệp vụ',
+    children: [
+      { key: 'analytics-deposits', label: 'Tiền gửi' },
+      { key: 'analytics-loans', label: 'Tiền vay' },
+      { key: 'analytics-international', label: 'Kinh doanh quốc tế' },
+      { key: 'analytics-fees', label: 'Doanh thu & phí' },
+    ],
+  },
+  {
+    key: 'products-group',
+    icon: <CreditCardOutlined />,
+    label: 'Sản phẩm dịch vụ',
+    children: [
+      { key: 'products-overview', label: 'Tổng hợp SPDV' },
+      { key: 'products-digital', label: 'Ngân hàng điện tử' },
+      { key: 'products-cards', label: 'Thẻ & POS' },
+      { key: 'products-bills', label: 'Bill Payment' },
+      { key: 'products-abic', label: 'ABIC' },
+    ],
+  },
+  {
+    key: 'care-group',
+    icon: <PieChartOutlined />,
+    label: 'Khai thác khách hàng',
+    children: [
+      { key: 'opportunities', label: 'Cơ hội bán chéo' },
+      { key: 'care-unused', label: 'Khách hàng chưa dùng SP' },
+      { key: 'care-declining', label: 'Khách hàng suy giảm' },
+      { key: 'care-plans', label: 'Kế hoạch chăm sóc' },
+    ],
+  },
+  {
+    key: 'data-group',
+    icon: <DatabaseOutlined />,
+    label: 'Quản trị dữ liệu',
+    children: [
+      { key: 'data-sources', label: 'Trạng thái nguồn' },
+      { key: 'quality', label: 'Chất lượng dữ liệu' },
+      { key: 'data-mapping', label: 'Mapping 84 trường' },
+      { key: 'data-history', label: 'Lịch sử các kỳ' },
+    ],
+  },
+  {
+    key: 'reports-group',
+    icon: <FileSearchOutlined />,
+    label: 'Báo cáo',
+    children: [
+      { key: 'reports-overall', label: 'Báo cáo tổng hợp' },
+      { key: 'reports-branches', label: 'Theo chi nhánh' },
+      { key: 'reports-officers', label: 'Theo cán bộ' },
+      { key: 'reports-products', label: 'Theo sản phẩm' },
+    ],
+  },
 ];
+
+function menuGroupForPage(page) {
+  if (['customers', 'customer-search', 'customer-high-value', 'customer-attention', 'customer-assignment', 'profile'].includes(page)) return 'customers-group';
+  if (page.startsWith('analytics-')) return 'analytics-group';
+  if (page.startsWith('products-')) return 'products-group';
+  if (page === 'opportunities' || page.startsWith('care-')) return 'care-group';
+  if (page === 'quality' || page.startsWith('data-')) return 'data-group';
+  if (page.startsWith('reports-')) return 'reports-group';
+  return null;
+}
 
 export default function DemoApp() {
   const initial = useMemo(parseInitialRoute, []);
   const [page, setPage] = useState(initial.page);
   const [customerId, setCustomerId] = useState(initial.customerId);
   const [collapsed, setCollapsed] = useState(false);
+  const [openKeys, setOpenKeys] = useState(() => [menuGroupForPage(initial.page)].filter(Boolean));
 
   function navigate(nextPage, nextCustomerId = null) {
     setPage(nextPage);
     setCustomerId(nextCustomerId);
-    const path = nextPage === 'profile' ? `/demo/customers/${nextCustomerId}` : nextPage === 'dashboard' ? '/demo' : `/demo/${nextPage}`;
+    const nextGroup = menuGroupForPage(nextPage);
+    if (nextGroup) setOpenKeys([nextGroup]);
+    const path = nextPage === 'profile' ? `/demo/customers/${nextCustomerId}` : pagePaths[nextPage] || '/demo';
     window.history.pushState({}, '', path);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
+  const contentByPage = {
+    dashboard: <DashboardPage navigate={navigate} />,
+    customers: <CustomerListPage navigate={navigate} mode="all" />,
+    'customer-search': <CustomerListPage navigate={navigate} mode="search" />,
+    'customer-high-value': <CustomerListPage navigate={navigate} mode="high-value" />,
+    'customer-attention': <CustomerListPage navigate={navigate} mode="attention" />,
+    'customer-assignment': <CustomerListPage navigate={navigate} mode="assignment" />,
+    'analytics-deposits': <AnalyticsPage domain="deposits" navigate={navigate} />,
+    'analytics-loans': <AnalyticsPage domain="loans" navigate={navigate} />,
+    'analytics-international': <AnalyticsPage domain="international" navigate={navigate} />,
+    'analytics-fees': <AnalyticsPage domain="fees" navigate={navigate} />,
+    'products-overview': <ProductsPage group="overview" navigate={navigate} />,
+    'products-digital': <ProductsPage group="digital" navigate={navigate} />,
+    'products-cards': <ProductsPage group="cards" navigate={navigate} />,
+    'products-bills': <ProductsPage group="bills" navigate={navigate} />,
+    'products-abic': <ProductsPage group="abic" navigate={navigate} />,
+    opportunities: <CustomerListPage navigate={navigate} mode="opportunities" />,
+    'care-unused': <CareOperationsPage mode="unused" navigate={navigate} />,
+    'care-declining': <CareOperationsPage mode="declining" navigate={navigate} />,
+    'care-plans': <CareOperationsPage mode="plans" navigate={navigate} />,
+    'data-sources': <SourceManagementPage mode="sources" />,
+    quality: <QualityPage navigate={navigate} />,
+    'data-mapping': <SourceManagementPage mode="mapping" />,
+    'data-history': <SourceManagementPage mode="history" />,
+    'reports-overall': <ReportsPage mode="overall" />,
+    'reports-branches': <ReportsPage mode="branches" />,
+    'reports-officers': <ReportsPage mode="officers" />,
+    'reports-products': <ReportsPage mode="products" />,
+  };
   const content = page === 'profile'
     ? <ProfilePage customerId={customerId} navigate={navigate} />
-    : page === 'customers'
-      ? <CustomerListPage navigate={navigate} />
-      : page === 'opportunities'
-        ? <CustomerListPage navigate={navigate} opportunityOnly />
-        : page === 'quality'
-          ? <QualityPage navigate={navigate} />
-          : <DashboardPage navigate={navigate} />;
+    : contentByPage[page] || <DashboardPage navigate={navigate} />;
 
   return (
     <Layout className="demo-shell">
-      <Sider width={248} collapsedWidth={76} collapsed={collapsed} trigger={null} className="demo-sidebar">
+      <Sider width={270} collapsedWidth={76} collapsed={collapsed} trigger={null} className="demo-sidebar">
         <div className="demo-logo">
           <img src={logoUrl} alt="C360 Demo" />
           {!collapsed && <div><strong>C360</strong><small>Giao diện thử nghiệm</small></div>}
         </div>
-        <Menu theme="dark" mode="inline" selectedKeys={[page === 'profile' ? 'customers' : page]} items={menuItems} onClick={({ key }) => navigate(key)} />
+        <Menu
+          theme="dark"
+          mode="inline"
+          selectedKeys={[page === 'profile' ? 'customers' : page]}
+          openKeys={collapsed ? [] : openKeys}
+          onOpenChange={(keys) => setOpenKeys(keys.slice(-1))}
+          items={menuItems}
+          onClick={({ key }) => navigate(key)}
+        />
         {!collapsed && <div className="demo-sidebar-note"><Tag color="purple">DEMO</Tag><span>1.000 hồ sơ giả lập<br />Không dùng dữ liệu thật</span></div>}
       </Sider>
-      <Layout className="demo-main" style={{ marginLeft: collapsed ? 76 : 248 }}>
+      <Layout className="demo-main" style={{ marginLeft: collapsed ? 76 : 270 }}>
         <Header className="demo-header">
           <Space>
             <Button type="text" icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />} onClick={() => setCollapsed((value) => !value)} />
@@ -644,4 +800,3 @@ export default function DemoApp() {
     </Layout>
   );
 }
-
