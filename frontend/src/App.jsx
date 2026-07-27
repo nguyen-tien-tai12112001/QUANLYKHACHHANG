@@ -13,6 +13,40 @@ import AuditLogs from './pages/AuditLogs';
 import client from './api/client';
 
 const DemoApp = lazy(() => import('./demo/DemoApp'));
+const C360App = lazy(() => import('./c360/C360App'));
+
+function readStoredUser() {
+  try {
+    const raw = localStorage.getItem('c360_user');
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    localStorage.removeItem('c360_user');
+    return null;
+  }
+}
+
+function C360Route() {
+  const [currentUser, setCurrentUser] = useState(readStoredUser);
+
+  function handleLogin(user) {
+    localStorage.setItem('c360_user', JSON.stringify(user));
+    setCurrentUser(user);
+  }
+
+  function handleLogout() {
+    localStorage.removeItem('c360_user');
+    setCurrentUser(null);
+  }
+
+  if (!currentUser) return <Login onLogin={handleLogin} />;
+  return (
+    <AuthProvider>
+      <Suspense fallback={<div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><Spin size="large" /></div>}>
+        <C360App currentUser={currentUser} onLogout={handleLogout} />
+      </Suspense>
+    </AuthProvider>
+  );
+}
 
 function LegacyApp() {
   const [activeMenu, setActiveMenu] = useState('dashboard');
@@ -100,6 +134,9 @@ function LegacyApp() {
 }
 
 function App() {
+  if (window.location.pathname.startsWith('/c360')) {
+    return <C360Route />;
+  }
   if (window.location.pathname.startsWith('/demo')) {
     return (
       <Suspense fallback={<div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><Spin size="large" /></div>}>

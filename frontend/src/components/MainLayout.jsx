@@ -11,6 +11,7 @@ import {
   MenuUnfoldOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
+  SwapOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import { Avatar, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd';
@@ -89,6 +90,9 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
             </Typography.Title>
           </Space>
           <Space className="app-user" size={12}>
+            <Button icon={<SwapOutlined />} onClick={() => { window.location.href = '/c360'; }}>
+              Giao diện C360 mới
+            </Button>
             <Avatar className="app-user-avatar">{currentUser?.full_name?.charAt(0) || 'C'}</Avatar>
             <span>
               <Typography.Text strong>{currentUser?.full_name}</Typography.Text>

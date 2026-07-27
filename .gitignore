@@ -51,4 +51,5 @@ Thumbs.db
 
 # Temporary files
 tmp_import/
+.local-cache/
 *.log
