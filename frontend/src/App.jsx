@@ -106,7 +106,6 @@ function LegacyApp() {
     'customer-processing': <CustomerProcessing />,
     'data-sources': <DataGovernance mode="sources" />,
     'data-mapping': <DataGovernance mode="mapping" />,
-    'data-history': <DataGovernance mode="history" />,
     reports: <CustomerReport />,
     'admin-branches': <SystemAdmin section="branches" />,
     'admin-departments': <SystemAdmin section="departments" />,

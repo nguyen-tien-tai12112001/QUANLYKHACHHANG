@@ -8,7 +8,6 @@ export const PAGE_NAVIGATION = {
   'customer-processing': { path: '/data/customer-processing', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Xử lý dữ liệu KH' },
   'data-sources': { path: '/data/source-monitoring', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Giám sát nguồn dữ liệu' },
   'data-mapping': { path: '/data/dictionary', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Từ điển & mapping' },
-  'data-history': { path: '/data/history', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Lịch sử xử lý dữ liệu' },
   'admin-branches': { path: '/admin/branches', parent: 'admin', parentLabel: 'Quản trị hệ thống', title: 'Chi nhánh' },
   'admin-departments': { path: '/admin/departments', parent: 'admin', parentLabel: 'Quản trị hệ thống', title: 'Phòng ban' },
   'admin-users': { path: '/admin/users', parent: 'admin', parentLabel: 'Quản trị hệ thống', title: 'Người dùng' },

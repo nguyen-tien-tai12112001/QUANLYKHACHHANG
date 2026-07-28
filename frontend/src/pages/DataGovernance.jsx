@@ -30,10 +30,10 @@ import {
 
 import client from '../api/client';
 import {
-  determinationStatuses,
   fieldDictionary,
   fieldGroups,
 } from '../demo/data/fieldDictionary';
+import { mappingRuleFor } from '../constants/fieldMappingRules';
 import '../demo/demo.css';
 
 const { Text, Title } = Typography;
@@ -631,36 +631,149 @@ function QualityPage({ data }) {
   );
 }
 
-function MappingPage() {
+function MappingPage({ data }) {
   const [keyword, setKeyword] = useState('');
   const [group, setGroup] = useState('all');
   const [status, setStatus] = useState('all');
-  const filtered = useMemo(() => fieldDictionary.filter((item) => {
-    const haystack = `${item.code} ${item.label} ${item.source}`.toLocaleLowerCase('vi');
+  const [coverage, setCoverage] = useState({ total_profiles: 0, fields: {} });
+  const [coverageLoading, setCoverageLoading] = useState(false);
+  const [visibleColumns, setVisibleColumns] = useState(() => {
+    const defaults = [
+      'order', 'code', 'label', 'group', 'actualSource', 'profileField',
+      'calculation', 'reconciliation', 'coverage', 'runtimeStatus',
+    ];
+    try {
+      const stored = JSON.parse(localStorage.getItem('c360_dictionary_columns') || '[]');
+      return Array.isArray(stored) && stored.length ? stored : defaults;
+    } catch {
+      return defaults;
+    }
+  });
+
+  useEffect(() => {
+    if (!data.periodKey) {
+      setCoverage({ total_profiles: 0, fields: {} });
+      return undefined;
+    }
+    let active = true;
+    async function loadCoverage(showLoading = false) {
+      if (showLoading) setCoverageLoading(true);
+      try {
+        const { data: response } = await client.get('/customer-processing/profile-field-coverage', {
+          params: { period_key: data.periodKey },
+        });
+        if (active) setCoverage(response || { total_profiles: 0, fields: {} });
+      } catch (error) {
+        if (active) message.error(error.response?.data?.detail || error.message);
+      } finally {
+        if (active && showLoading) setCoverageLoading(false);
+      }
+    }
+    loadCoverage(true);
+    const timer = window.setInterval(() => loadCoverage(false), 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [data.periodKey]);
+
+  const mappedRows = useMemo(() => fieldDictionary.map((field) => {
+    const rule = mappingRuleFor(field);
+    const fieldCoverage = coverage.fields?.[field.code];
+    let runtimeStatus = 'not_implemented';
+    if (rule.profileField && !coverage.total_profiles) runtimeStatus = 'mapped';
+    if (rule.profileField && coverage.total_profiles && Number(fieldCoverage?.populated_count || 0) === 0) runtimeStatus = 'no_data';
+    if (rule.profileField && Number(fieldCoverage?.populated_count || 0) > 0) runtimeStatus = 'has_data';
+    return { ...field, ...rule, ...fieldCoverage, runtimeStatus };
+  }), [coverage]);
+  const filtered = useMemo(() => mappedRows.filter((item) => {
+    const haystack = `${item.code} ${item.label} ${item.actualSource} ${item.profileField || ''} ${item.calculation}`.toLocaleLowerCase('vi');
     return (!keyword || haystack.includes(keyword.toLocaleLowerCase('vi')))
       && (group === 'all' || item.group === group)
-      && (status === 'all' || (status === 'unrated' ? item.status == null : item.status === status));
-  }), [group, keyword, status]);
-  const clear = fieldDictionary.filter((item) => item.status === 1).length;
-  const unresolved = fieldDictionary.filter((item) => item.status == null).length;
+      && (status === 'all' || item.runtimeStatus === status);
+  }), [group, keyword, mappedRows, status]);
+  const implementedCount = mappedRows.filter((item) => item.profileField).length;
+  const availableCount = mappedRows.filter((item) => item.runtimeStatus === 'has_data').length;
+  const pendingCount = mappedRows.length - implementedCount;
+
+  const statusOptions = [
+    { value: 'all', label: 'Tất cả trạng thái' },
+    { value: 'has_data', label: 'Đang có dữ liệu' },
+    { value: 'no_data', label: 'Đã mapping, chưa có dữ liệu' },
+    { value: 'mapped', label: 'Đã mapping, chưa có hồ sơ kỳ' },
+    { value: 'not_implemented', label: 'Chưa triển khai' },
+  ];
+  const runtimeStatusTag = (value) => {
+    if (value === 'has_data') return <Tag color="success">Đang có dữ liệu</Tag>;
+    if (value === 'no_data') return <Tag color="warning">Mapping chưa có dữ liệu</Tag>;
+    if (value === 'mapped') return <Tag color="processing">Đã mapping</Tag>;
+    return <Tag>Chưa triển khai</Tag>;
+  };
+  const allColumns = [
+    { title: 'STT', dataIndex: 'order', key: 'order', width: 65, align: 'center' },
+    { title: 'Tên trường', dataIndex: 'code', key: 'code', width: 175, fixed: 'left', render: (value) => <Text code>{value}</Text> },
+    { title: 'Nội dung', dataIndex: 'label', key: 'label', width: 260 },
+    { title: 'Nhóm', dataIndex: 'group', key: 'group', width: 145, render: (value) => <Tag>{value}</Tag> },
+    { title: 'Kiểu', dataIndex: 'typeName', key: 'typeName', width: 95 },
+    { title: 'Nguồn đang dùng', dataIndex: 'actualSource', key: 'actualSource', width: 190, render: (value) => <Tag color="blue">{value}</Tag> },
+    {
+      title: 'Cột đích thực tế',
+      dataIndex: 'profileField',
+      key: 'profileField',
+      width: 210,
+      render: (value) => value ? <Text code>{value}</Text> : <Text type="secondary">Chưa có</Text>,
+    },
+    { title: 'Cách lấy / Công thức', dataIndex: 'calculation', key: 'calculation', width: 390 },
+    { title: 'Cách đối chiếu', dataIndex: 'reconciliation', key: 'reconciliation', width: 370 },
+    {
+      title: 'Độ phủ kỳ',
+      dataIndex: 'coverage_percent',
+      key: 'coverage',
+      width: 175,
+      render: (value, row) => row.profileField ? (
+        <Space orientation="vertical" size={1} style={{ width: '100%' }}>
+          <Progress percent={Number(value || 0)} size="small" />
+          <Text type="secondary">{numberLabel(row.populated_count)}/{numberLabel(row.total_count)} hồ sơ</Text>
+        </Space>
+      ) : <Text type="secondary">Chưa theo dõi</Text>,
+    },
+    { title: 'Trạng thái hiện tại', dataIndex: 'runtimeStatus', key: 'runtimeStatus', width: 190, render: runtimeStatusTag },
+    { title: 'Cho phép NULL', dataIndex: 'nullable', key: 'nullable', width: 120, align: 'center', render: (value) => value ? <Tag color="warning">Có</Tag> : <Tag color="success">Không</Tag> },
+  ];
+  const columns = allColumns.filter((column) => visibleColumns.includes(column.key));
+  const columnOptions = allColumns.map((column) => ({ value: column.key, label: column.title }));
 
   return (
     <div className="demo-page">
       <PageHeading
         title="Mapping 84 trường Profile khách hàng"
-        description="Từ điển thiết kế dự kiến từ bản demo; trạng thái này không đồng nghĩa trường đã được import vào database thật."
-        extra={<Tag color="purple">{fieldDictionary.length}/84 TRƯỜNG</Tag>}
+        description="Theo dõi trực tiếp nguồn, công thức, cách đối chiếu và độ phủ dữ liệu thực tế của từng trường Profile khách hàng."
+        extra={<PeriodActions data={data} />}
       />
       <Row gutter={[16, 16]}>
-        <Col xs={24} md={8}><Metric label="Đã xác định rõ nguồn" value={`${clear}/${fieldDictionary.length}`} note="Theo tài liệu thiết kế hiện tại" color="#218653" icon={<CheckCircleFilled />} /></Col>
-        <Col xs={24} md={8}><Metric label="Chưa đánh giá" value={`${unresolved} trường`} note="Cần chốt cùng nghiệp vụ" color="#8f1438" icon={<AlertOutlined />} /></Col>
-        <Col xs={24} md={8}><Metric label="Nhóm nghiệp vụ" value={`${fieldGroups.length} nhóm`} note="Phân nhóm Profile khách hàng" color="#3567a8" icon={<DatabaseOutlined />} /></Col>
+        <Col xs={24} md={6}><Metric label="Tổng trường theo dõi" value={fieldDictionary.length} note={`${fieldGroups.length} nhóm nghiệp vụ`} color="#3567a8" icon={<DatabaseOutlined />} /></Col>
+        <Col xs={24} md={6}><Metric label="Đã có mapping thật" value={`${implementedCount}/${fieldDictionary.length}`} note="Có cột đích trong Profile" color="#7254a3" icon={<CheckCircleFilled />} /></Col>
+        <Col xs={24} md={6}><Metric label="Đang có dữ liệu" value={`${availableCount} trường`} note={`Kỳ ${periodLabel(data.periodKey)}`} color="#218653" icon={<CheckCircleFilled />} /></Col>
+        <Col xs={24} md={6}><Metric label="Chưa triển khai" value={`${pendingCount} trường`} note="Chưa có cột đích/công thức chạy thật" color="#8f1438" icon={<AlertOutlined />} /></Col>
       </Row>
       <Card className="demo-filter-card demo-section">
         <Space wrap>
-          <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tìm tên trường, nội dung hoặc nguồn..." allowClear style={{ width: 320 }} />
+          <Input value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tìm trường, nguồn, cột đích hoặc công thức..." allowClear style={{ width: 340 }} />
           <Select value={group} onChange={setGroup} style={{ minWidth: 180 }} options={[{ value: 'all', label: 'Tất cả nhóm' }, ...fieldGroups.map((value) => ({ value, label: value }))]} />
-          <Select value={status} onChange={setStatus} style={{ minWidth: 200 }} options={determinationStatuses} />
+          <Select value={status} onChange={setStatus} style={{ minWidth: 230 }} options={statusOptions} />
+          <Select
+            mode="multiple"
+            value={visibleColumns}
+            onChange={(values) => {
+              const next = values.length ? values : ['code', 'label', 'runtimeStatus'];
+              setVisibleColumns(next);
+              localStorage.setItem('c360_dictionary_columns', JSON.stringify(next));
+            }}
+            maxTagCount={1}
+            style={{ minWidth: 230 }}
+            placeholder="Chọn cột hiển thị"
+            options={columnOptions}
+          />
           <Tag color="blue">{filtered.length} trường</Tag>
         </Space>
       </Card>
@@ -668,28 +781,10 @@ function MappingPage() {
         <Table
           rowKey="code"
           dataSource={filtered}
+          loading={coverageLoading}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 84], showTotal: (total) => `${total} trường` }}
-          scroll={{ x: 1300 }}
-          columns={[
-            { title: 'STT', dataIndex: 'order', width: 65, align: 'center' },
-            { title: 'Tên trường', dataIndex: 'code', width: 175, fixed: 'left', render: (value) => <Text code>{value}</Text> },
-            { title: 'Nội dung', dataIndex: 'label', width: 270 },
-            { title: 'Nhóm', dataIndex: 'group', width: 150, render: (value) => <Tag>{value}</Tag> },
-            { title: 'Kiểu', dataIndex: 'typeName', width: 100 },
-            { title: 'Nguồn dự kiến', dataIndex: 'source', width: 145, render: (value) => <Tag color="blue">{value}</Tag> },
-            { title: 'Bảng đích dự kiến', dataIndex: 'targetTable', width: 230, render: (value) => <Text code>{value}</Text> },
-            {
-              title: 'Trạng thái xác định',
-              dataIndex: 'status',
-              width: 190,
-              render: (value, row) => value === 1
-                ? <Tag color="success">{row.statusName}</Tag>
-                : value == null
-                  ? <Tag color="error">{row.statusName}</Tag>
-                  : <Tag color="warning">{value} - {row.statusName}</Tag>,
-            },
-            { title: 'Cho phép NULL', dataIndex: 'nullable', width: 120, align: 'center', render: (value) => value ? <Tag color="warning">Có</Tag> : <Tag color="success">Không</Tag> },
-          ]}
+          scroll={{ x: columns.reduce((sum, column) => sum + Number(column.width || 180), 0) }}
+          columns={columns}
         />
       </Card>
     </div>
@@ -751,7 +846,7 @@ export default function DataGovernance({ mode = 'sources' }) {
     <>
       {data.error ? <Alert closable type="warning" showIcon message={data.error} style={{ marginBottom: 16 }} /> : null}
       {mode === 'quality' ? <QualityPage data={data} />
-        : mode === 'mapping' ? <MappingPage />
+        : mode === 'mapping' ? <MappingPage data={data} />
           : mode === 'history' ? <HistoryPage data={data} />
             : <SourcesPage data={data} />}
     </>

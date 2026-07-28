@@ -1,6 +1,7 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from io import BytesIO
+from time import monotonic
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
@@ -29,6 +30,32 @@ from app.models import (
 
 
 router = APIRouter(prefix="/api/customer-processing", tags=["customer-processing"])
+
+PROFILE_DICTIONARY_FIELD_MAP = {
+    "MCN": "primary_branch_code",
+    "MPGD": "primary_pgd_code",
+    "MKH": "ma_kh",
+    "TENKH": "ten_kh",
+    "LOAIKH": "loai_khach_hang",
+    "DIEN_THOAI": "telephone",
+    "MACB": "ma_cb",
+    "TENCB": "ten_can_bo",
+    "DS_TKTT": "doanh_so_chuyen_tien_ve_tk",
+    "SODU_TGCKH": "so_du_tien_gui",
+    "SODU_TKTTBQ": "so_du_tgtt_binh_quan",
+    "DUNO_NHTT": "so_du_tien_vay",
+    "DUNO_TC": "thau_chi",
+    "TKSODEP": "tk_so_dep",
+    "AGRIBANKPLUS": "agribank_plus",
+    "OTT": "tin_nhan_ott",
+    "EBANKING": "e_banking",
+    "SMS_TKTV": "sms_nhac_no_vay",
+    "SMS_TKTG": "sms_tien_gui",
+    "THE_GNND": "the_ghi_no_noi_dia",
+    "THE_LOCVIET": "the_td_loc_viet",
+    "THE_TDQT": "the_td_quoc_te",
+}
+_PROFILE_COVERAGE_CACHE: dict[str, tuple[float, dict]] = {}
 
 
 def serialize_value(value):
@@ -497,6 +524,48 @@ def list_processing_periods(db: Session = Depends(get_db)):
         )
         result.append(payload)
     return result
+
+
+@router.get("/profile-field-coverage")
+def profile_field_coverage(
+    period_key: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    cached = _PROFILE_COVERAGE_CACHE.get(period_key)
+    if cached and monotonic() - cached[0] < 60:
+        return cached[1]
+    total = (
+        db.query(func.count(CustomerPeriodProfile.id))
+        .filter(CustomerPeriodProfile.period_key == period_key)
+        .scalar()
+        or 0
+    )
+    expressions = []
+    codes = []
+    for code, attribute in PROFILE_DICTIONARY_FIELD_MAP.items():
+        column = getattr(CustomerPeriodProfile, attribute)
+        condition = column.isnot(None)
+        if hasattr(column.type, "length"):
+            condition = and_(condition, func.trim(column) != "")
+        expressions.append(func.count(CustomerPeriodProfile.id).filter(condition).label(code))
+        codes.append(code)
+    row = (
+        db.query(*expressions)
+        .filter(CustomerPeriodProfile.period_key == period_key)
+        .one()
+    )
+    fields = {}
+    for code, count in zip(codes, row, strict=True):
+        value = int(count or 0)
+        fields[code] = {
+            "profile_field": PROFILE_DICTIONARY_FIELD_MAP[code],
+            "populated_count": value,
+            "total_count": int(total),
+            "coverage_percent": round(value * 100 / total, 2) if total else 0,
+        }
+    payload = {"period_key": period_key, "total_profiles": int(total), "fields": fields}
+    _PROFILE_COVERAGE_CACHE[period_key] = (monotonic(), payload)
+    return payload
 
 
 @router.post("/optional-files")

@@ -50,7 +50,6 @@ const baseMenuItems = [
       { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
       { key: 'data-sources', icon: <DatabaseOutlined />, label: 'Giám sát nguồn dữ liệu' },
       { key: 'data-mapping', icon: <BranchesOutlined />, label: 'Từ điển & mapping' },
-      { key: 'data-history', icon: <AuditOutlined />, label: 'Lịch sử xử lý dữ liệu' },
     ],
   },
   {
