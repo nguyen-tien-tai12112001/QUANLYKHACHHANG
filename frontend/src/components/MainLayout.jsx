@@ -23,9 +23,9 @@ const menuItems = [
   {
     key: 'executive',
     icon: <DashboardOutlined />,
-    label: 'Điều hành',
+    label: 'Tổng quan',
     children: [
-      { key: 'c360-dashboard', icon: <DashboardOutlined />, label: 'Tổng quan C360' },
+      { key: 'c360-dashboard', icon: <DashboardOutlined />, label: 'Dashboard điều hành' },
       { key: 'c360-insights', icon: <BarChartOutlined />, label: 'Cảnh báo & phân nhóm' },
       { key: 'dashboard', icon: <BarChartOutlined />, label: 'Dashboard nghiệp vụ' },
     ],
@@ -33,9 +33,9 @@ const menuItems = [
   {
     key: 'customers',
     icon: <TeamOutlined />,
-    label: 'Khách hàng',
+    label: 'Quản lý khách hàng',
     children: [
-      { key: 'c360-customers', icon: <TeamOutlined />, label: 'Danh sách C360' },
+      { key: 'c360-customers', icon: <TeamOutlined />, label: 'Danh sách khách hàng' },
       { key: 'reports', icon: <BarChartOutlined />, label: 'Báo cáo khách hàng' },
     ],
   },
@@ -46,9 +46,9 @@ const menuItems = [
     children: [
       { key: 'data-warehouse', icon: <DatabaseOutlined />, label: 'Kho dữ liệu' },
       { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
-      { key: 'data-sources', icon: <DatabaseOutlined />, label: 'Trạng thái nguồn' },
-      { key: 'data-mapping', icon: <BranchesOutlined />, label: 'Mapping 84 trường' },
-      { key: 'data-history', icon: <AuditOutlined />, label: 'Lịch sử các kỳ' },
+      { key: 'data-sources', icon: <DatabaseOutlined />, label: 'Giám sát nguồn dữ liệu' },
+      { key: 'data-mapping', icon: <BranchesOutlined />, label: 'Từ điển & mapping' },
+      { key: 'data-history', icon: <AuditOutlined />, label: 'Lịch sử xử lý dữ liệu' },
     ],
   },
   {
@@ -56,7 +56,7 @@ const menuItems = [
     icon: <SettingOutlined />,
     label: 'Quản trị hệ thống',
     children: [
-      { key: 'admin-branches', icon: <DatabaseOutlined />, label: 'Quản trị chi nhánh' },
+      { key: 'admin-branches', icon: <DatabaseOutlined />, label: 'Chi nhánh' },
       { key: 'admin-departments', icon: <ApartmentOutlined />, label: 'Phòng ban' },
       { key: 'admin-users', icon: <TeamOutlined />, label: 'Người dùng' },
       { key: 'admin-roles', icon: <SafetyCertificateOutlined />, label: 'Nhóm quyền' },
