@@ -291,7 +291,11 @@ function ImportData() {
   const [backupDir, setBackupDir] = useState('');
 
   const selectedPeriod = Form.useWatch('period_key', form);
-  const filterValues = Form.useWatch([], form);
+  const selectedFileType = Form.useWatch('file_type', form);
+  const selectedBranch = Form.useWatch('branch_code', form);
+  const selectedStatus = Form.useWatch('status', form);
+  const selectedKeyword = Form.useWatch('keyword', form);
+  const selectedUploadedRange = Form.useWatch('uploaded_range', form);
 
   function setFileList(nextValue) {
     const value = typeof nextValue === 'function' ? nextValue(warehouseSession.fileList) : nextValue;
@@ -432,8 +436,10 @@ function ImportData() {
     setBackupDir('');
   }
 
-  async function loadFiles() {
-    setLoadingFiles(true);
+  async function loadFiles({ silent = false } = {}) {
+    if (!silent) {
+      setLoadingFiles(true);
+    }
     try {
       const params = {};
       const values = form.getFieldsValue();
@@ -445,35 +451,56 @@ function ImportData() {
       if (values.uploaded_range?.[0]) params.uploaded_from = values.uploaded_range[0].format('YYYY-MM-DD');
       if (values.uploaded_range?.[1]) params.uploaded_to = values.uploaded_range[1].format('YYYY-MM-DD');
       const { data } = await client.get('/imports/files', { params });
-      setFiles(getArrayPayload(data));
+      const nextFiles = getArrayPayload(data);
+      setFiles(nextFiles);
+      return nextFiles;
     } catch (error) {
-      message.error(error.response?.data?.detail || error.message);
+      if (!silent) {
+        message.error(error.response?.data?.detail || error.message);
+      }
+      return null;
     } finally {
-      setLoadingFiles(false);
+      if (!silent) {
+        setLoadingFiles(false);
+      }
     }
   }
 
-  async function loadPeriods() {
-    setLoadingPeriods(true);
+  async function loadPeriods({ silent = false } = {}) {
+    if (!silent) {
+      setLoadingPeriods(true);
+    }
     try {
       const { data } = await client.get('/imports/periods');
-      setPeriods(getArrayPayload(data));
+      const nextPeriods = getArrayPayload(data);
+      setPeriods(nextPeriods);
+      return nextPeriods;
     } catch (error) {
-      message.error(error.response?.data?.detail || error.message);
+      if (!silent) {
+        message.error(error.response?.data?.detail || error.message);
+      }
+      return null;
     } finally {
-      setLoadingPeriods(false);
+      if (!silent) {
+        setLoadingPeriods(false);
+      }
     }
   }
 
-  async function loadStalledJobs() {
+  async function loadStalledJobs({ silent = false } = {}) {
     try {
       const periodKey = form.getFieldValue('period_key');
       const { data } = await client.get('/imports/jobs/stalled', {
         params: periodKey ? { period_key: periodKey } : {},
       });
-      setStalledJobs(getArrayPayload(data));
+      const nextJobs = getArrayPayload(data);
+      setStalledJobs(nextJobs);
+      return nextJobs;
     } catch {
-      setStalledJobs([]);
+      if (!silent) {
+        setStalledJobs([]);
+      }
+      return null;
     }
   }
 
@@ -789,24 +816,31 @@ function ImportData() {
       loadStalledJobs();
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [JSON.stringify(filterValues || {})]);
+  }, [
+    selectedPeriod,
+    selectedFileType,
+    selectedBranch,
+    selectedStatus,
+    selectedKeyword,
+    selectedUploadedRange?.[0]?.valueOf(),
+    selectedUploadedRange?.[1]?.valueOf(),
+  ]);
 
   useEffect(() => {
-    const hasPendingJob = importJobs.some((job) => job.importFileId && ['queued', 'processing'].includes(job.status));
-    if (!hasPendingJob) {
-      return undefined;
-    }
-
-    const timer = window.setInterval(async () => {
+    async function refreshWarehouseInBackground() {
+      if (document.visibilityState === 'hidden') {
+        return;
+      }
       try {
-        const [{ data: fileData }, { data: periodData }] = await Promise.all([
-          client.get('/imports/files'),
-          client.get('/imports/periods'),
+        const [nextFiles] = await Promise.all([
+          loadFiles({ silent: true }),
+          loadPeriods({ silent: true }),
+          loadStalledJobs({ silent: true }),
         ]);
-        const nextFiles = getArrayPayload(fileData);
+        if (!nextFiles) {
+          return;
+        }
         const fileById = new Map(nextFiles.map((file) => [file.id, file]));
-        setFiles(nextFiles);
-        setPeriods(getArrayPayload(periodData));
         setImportJobs((jobs) =>
           jobs.map((job) => {
             const file = fileById.get(job.importFileId);
@@ -839,10 +873,28 @@ function ImportData() {
       } catch {
         // Polling chỉ để cập nhật giao diện; lỗi tạm thời sẽ được thử lại ở vòng sau.
       }
-    }, 4000);
+    }
 
-    return () => window.clearInterval(timer);
-  }, [importJobs]);
+    const timer = window.setInterval(refreshWarehouseInBackground, 4000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        refreshWarehouseInBackground();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [
+    selectedPeriod,
+    selectedFileType,
+    selectedBranch,
+    selectedStatus,
+    selectedKeyword,
+    selectedUploadedRange?.[0]?.valueOf(),
+    selectedUploadedRange?.[1]?.valueOf(),
+  ]);
 
   return (
     <Space orientation="vertical" size={20} className="page-stack">
