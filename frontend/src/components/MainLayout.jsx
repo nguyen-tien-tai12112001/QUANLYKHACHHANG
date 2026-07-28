@@ -46,6 +46,10 @@ const menuItems = [
     children: [
       { key: 'data-warehouse', icon: <DatabaseOutlined />, label: 'Kho dữ liệu' },
       { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
+      { key: 'data-sources', icon: <DatabaseOutlined />, label: 'Trạng thái nguồn' },
+      { key: 'data-quality', icon: <AuditOutlined />, label: 'Chất lượng dữ liệu' },
+      { key: 'data-mapping', icon: <BranchesOutlined />, label: 'Mapping 84 trường' },
+      { key: 'data-history', icon: <AuditOutlined />, label: 'Lịch sử các kỳ' },
     ],
   },
   {
@@ -69,7 +73,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
     ? 'executive'
     : ['c360-customers', 'reports'].includes(activeMenu)
       ? 'customers'
-      : ['data-warehouse', 'customer-processing'].includes(activeMenu)
+      : ['data-warehouse', 'customer-processing', 'data-sources', 'data-quality', 'data-mapping', 'data-history'].includes(activeMenu)
         ? 'data'
         : activeMenu.startsWith('admin-')
           ? 'admin'

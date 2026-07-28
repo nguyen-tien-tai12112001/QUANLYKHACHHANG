@@ -10,6 +10,7 @@ import CustomerReport from './pages/CustomerReport';
 import Login from './pages/Login';
 import SystemAdmin from './pages/SystemAdmin';
 import AuditLogs from './pages/AuditLogs';
+import DataGovernance from './pages/DataGovernance';
 import client from './api/client';
 import C360App from './c360/C360App';
 
@@ -80,6 +81,10 @@ function LegacyApp() {
     dashboard: <Dashboard />,
     'data-warehouse': <ImportData />,
     'customer-processing': <CustomerProcessing />,
+    'data-sources': <DataGovernance mode="sources" />,
+    'data-quality': <DataGovernance mode="quality" />,
+    'data-mapping': <DataGovernance mode="mapping" />,
+    'data-history': <DataGovernance mode="history" />,
     reports: <CustomerReport />,
     'admin-branches': <SystemAdmin section="branches" />,
     'admin-departments': <SystemAdmin section="departments" />,
