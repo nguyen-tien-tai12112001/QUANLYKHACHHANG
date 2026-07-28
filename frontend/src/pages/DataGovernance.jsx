@@ -3,6 +3,7 @@ import {
   AlertOutlined,
   CheckCircleFilled,
   ClockCircleOutlined,
+  CloseCircleFilled,
   DatabaseOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
@@ -21,6 +22,7 @@ import {
   Space,
   Table,
   Tag,
+  Tooltip,
   Typography,
   message,
 } from 'antd';
@@ -281,14 +283,34 @@ function sourceCell(files, sourceCode, branchCode, readiness) {
       ?.branch_readiness?.find((item) => item.branch_code === branchCode);
     if (branch) {
       return branch.is_ready
-        ? <Tag color="success">{branch.success_days}/{branch.expected_days}</Tag>
-        : <Tag color={branch.error_file_count ? 'error' : 'warning'}>{branch.success_days}/{branch.expected_days}</Tag>;
+        ? (
+          <Tooltip title={`Đủ ${branch.success_days}/${branch.expected_days} ngày`}>
+            <span className="matrix-state matrix-state--success">
+              <CheckCircleFilled />
+              <small>{branch.success_days}/{branch.expected_days}</small>
+            </span>
+          </Tooltip>
+        )
+        : (
+          <Tooltip title={`Thiếu: mới có ${branch.success_days}/${branch.expected_days} ngày`}>
+            <span className="matrix-state matrix-state--missing">
+              <CloseCircleFilled />
+              <small>{branch.success_days}/{branch.expected_days}</small>
+            </span>
+          </Tooltip>
+        );
     }
   }
-  if (errors.length) return <Tag color="error">{errors.length} lỗi</Tag>;
-  if (running.length) return <Tag color="processing">{running.length} đang chạy</Tag>;
-  if (successful.length) return <Tag color="success">{successful.length} file</Tag>;
-  return <Tag>Thiếu</Tag>;
+  if (errors.length) {
+    return <Tooltip title={`${errors.length} file lỗi`}><span className="matrix-state matrix-state--error"><CloseCircleFilled /></span></Tooltip>;
+  }
+  if (running.length) {
+    return <Tooltip title={`${running.length} file đang xử lý`}><span className="matrix-state matrix-state--running"><ClockCircleOutlined /></span></Tooltip>;
+  }
+  if (successful.length) {
+    return <Tooltip title={`Đã nhận ${successful.length} file thành công`}><span className="matrix-state matrix-state--success"><CheckCircleFilled /></span></Tooltip>;
+  }
+  return <Tooltip title="Chưa nhận được file"><span className="matrix-state matrix-state--missing"><CloseCircleFilled /></span></Tooltip>;
 }
 
 function ReadinessOverview({ data }) {
@@ -337,18 +359,22 @@ function ReadinessOverview({ data }) {
   }
 
   return (
-    <Card className="demo-section data-readiness-card">
-      <Row gutter={[20, 16]} align="middle">
-        <Col xs={24} md={7}>
-          <Text type="secondary">TRẠNG THÁI KỲ {periodLabel(data.periodKey)}</Text>
-          <div><Tag color={status.color} className="data-readiness-status">{status.label}</Tag></div>
-          <Text>{status.detail}</Text>
-        </Col>
-        <Col xs={12} sm={6} md={4}><Metric label="Chi nhánh" value={branches.length} note={branches.join(', ') || 'Chưa có'} color="#3567a8" icon={<DatabaseOutlined />} /></Col>
-        <Col xs={12} sm={6} md={4}><Metric label="File hiệu lực" value={activeFiles.length} note={`${errorFiles.length} file lỗi`} color="#218653" icon={<CheckCircleFilled />} /></Col>
-        <Col xs={12} sm={6} md={4}><Metric label="Còn thiếu" value={missingRequired.length} note="Nguồn/chi nhánh bắt buộc" color="#d6a033" icon={<AlertOutlined />} /></Col>
-        <Col xs={12} sm={6} md={5}><Metric label="Job cần xử lý" value={data.stalledJobs.length} note="Job import bị kẹt" color="#8f1438" icon={<ClockCircleOutlined />} /></Col>
-      </Row>
+    <Card className="demo-section data-readiness-card" bordered={false}>
+      <div className="readiness-summary">
+        <div className="readiness-summary__main">
+          <Text className="readiness-kicker">TRẠNG THÁI KỲ {periodLabel(data.periodKey)}</Text>
+          <div className="readiness-title">
+            <Tag color={status.color} className="data-readiness-status">{status.label}</Tag>
+          </div>
+          <Text type="secondary">{status.detail}</Text>
+        </div>
+        <div className="readiness-summary__stats">
+          <div className="readiness-stat"><span>Chi nhánh</span><strong>{branches.length}</strong><small>{branches.join(', ') || 'Chưa có dữ liệu'}</small></div>
+          <div className="readiness-stat readiness-stat--success"><span>File hiệu lực</span><strong>{activeFiles.length}</strong><small>{errorFiles.length ? `${errorFiles.length} file lỗi` : 'Không có file lỗi'}</small></div>
+          <div className="readiness-stat readiness-stat--warning"><span>Còn thiếu</span><strong>{missingRequired.length}</strong><small>Nguồn/chi nhánh bắt buộc</small></div>
+          <div className="readiness-stat readiness-stat--danger"><span>Job bị kẹt</span><strong>{data.stalledJobs.length}</strong><small>Cần kiểm tra hoặc chạy lại</small></div>
+        </div>
+      </div>
       {missingRequired.length ? (
         <Alert
           showIcon
@@ -385,8 +411,17 @@ function SourceBranchMatrix({ data }) {
     })),
   ];
   return (
-    <Card title="Ma trận nguồn theo chi nhánh" className="demo-table-card demo-section">
-      <Text type="secondary">Nhìn nhanh nguồn nào đã đủ, còn thiếu, đang chạy hoặc bị lỗi tại từng chi nhánh.</Text>
+    <Card
+      title={<div><Text strong className="matrix-title">Ma trận nguồn theo chi nhánh</Text><Text type="secondary" className="matrix-subtitle">Theo dõi độ đầy đủ của từng nguồn tại từng đơn vị</Text></div>}
+      className="demo-table-card demo-section source-matrix-card"
+      extra={(
+        <Space size={18} className="matrix-legend">
+          <span><CheckCircleFilled className="legend-success" /> Đã đủ</span>
+          <span><CloseCircleFilled className="legend-missing" /> Còn thiếu</span>
+          <span><ClockCircleOutlined className="legend-running" /> Đang xử lý</span>
+        </Space>
+      )}
+    >
       <Table
         rowKey="source_code"
         dataSource={rows}
@@ -394,7 +429,6 @@ function SourceBranchMatrix({ data }) {
         pagination={false}
         size="middle"
         scroll={{ x: 110 + branches.length * 125 }}
-        style={{ marginTop: 16 }}
       />
     </Card>
   );
@@ -482,8 +516,6 @@ function JobIssueCenter({ data }) {
 }
 
 function SourcesPage({ data }) {
-  const ready = data.sources.filter((item) => item.status === 'ready').length;
-  const issues = data.sources.filter((item) => !['ready', 'planned'].includes(item.status)).length;
   return (
     <div className="demo-page">
       <PageHeading
@@ -491,15 +523,8 @@ function SourcesPage({ data }) {
         description="Theo dõi trực tiếp số file, số dòng, phạm vi khách hàng và trạng thái từng nguồn đã import."
         extra={<PeriodActions data={data} />}
       />
-      <Row gutter={[16, 16]}>
-        <Col xs={24} md={8}><Metric label="Nguồn đã cấu hình" value={`${data.sources.length} nguồn`} note={`Kỳ ${periodLabel(data.periodKey)}`} color="#3567a8" icon={<DatabaseOutlined />} /></Col>
-        <Col xs={24} md={8}><Metric label="Nguồn sẵn sàng" value={`${ready}/${data.sources.length || 0}`} note="Có file thành công và có dữ liệu" color="#218653" icon={<CheckCircleFilled />} /></Col>
-        <Col xs={24} md={8}><Metric label="Nguồn cần xử lý" value={`${issues} nguồn`} note="Thiếu, lỗi hoặc chưa đầy đủ" color="#8f1438" icon={<AlertOutlined />} /></Col>
-      </Row>
       <ReadinessOverview data={data} />
       <SourceBranchMatrix data={data} />
-      <JobIssueCenter data={data} />
-      <Card className="demo-table-card demo-section"><SourceTable sources={data.sources} /></Card>
     </div>
   );
 }
