@@ -4,6 +4,7 @@ import {
   Card,
   Col,
   Empty,
+  Popover,
   Progress,
   Row,
   Select,
@@ -92,6 +93,34 @@ function requiredFileTags(row) {
       </Tooltip>
     );
   });
+}
+
+function ReadinessDetails({ row }) {
+  return (
+    <div className="processing-readiness-popover">
+      <div className="processing-readiness-popover__header">
+        <Text strong>Chi tiết kỳ {row.period_key}</Text>
+        <Tag color={row.is_fully_ready ? 'success' : 'warning'}>
+          {row.is_fully_ready ? 'Đủ dữ liệu' : `Thiếu ${row.missing_required_files?.length || 0} file`}
+        </Tag>
+      </div>
+      <div>
+        <Text type="secondary">File bắt buộc</Text>
+        <div className="processing-readiness-popover__tags">{requiredFileTags(row)}</div>
+      </div>
+      <div className="processing-readiness-popover__scope">
+        <span><Text type="secondary">Phạm vi chi nhánh</Text><strong>{row.ready_branch_count || 0}/{row.branch_count || 0} chi nhánh đủ</strong></span>
+        <span><Text type="secondary">Tổ hợp file</Text><strong>{row.available_matrix_count || 0}/{row.required_matrix_count || 0}</strong></span>
+      </div>
+      <Text type="secondary">{(row.branch_codes || []).join(', ') || 'Chưa xác định chi nhánh'}</Text>
+      {row.missing_required_files?.length ? (
+        <div className="processing-readiness-popover__missing">
+          <Text type="danger" strong>Còn thiếu:</Text>
+          <Text>{row.missing_required_files.map((item) => `${item.file_type}/${item.branch_code}`).join(', ')}</Text>
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function CustomerProcessing() {
@@ -271,43 +300,33 @@ function CustomerProcessing() {
       ),
     },
     {
-      title: 'File bắt buộc',
-      key: 'required',
-      render: (_, row) => <Space size={[4, 4]} wrap>{requiredFileTags(row)}</Space>,
-    },
-    {
-      title: 'Phạm vi chi nhánh',
-      key: 'branches',
-      width: 170,
-      render: (_, row) => (
-        <Space orientation="vertical" size={2}>
-          <Text strong>{row.ready_branch_count || 0}/{row.branch_count || 0} chi nhánh đủ file</Text>
-          <Text type="secondary" ellipsis={{ tooltip: (row.branch_codes || []).join(', ') }}>
-            {(row.branch_codes || []).join(', ') || 'Chưa xác định'}
-          </Text>
-        </Space>
-      ),
-    },
-    {
       title: 'Độ sẵn sàng',
       key: 'ready',
-      width: 210,
+      width: 340,
       render: (_, row) => (
-        <Space orientation="vertical" size={2} style={{ width: '100%' }}>
-          <Progress
-            percent={row.branch_readiness_percent || 0}
-            size="small"
-            status={row.is_fully_ready ? 'success' : 'active'}
-          />
-          <Text type="secondary">
-            {row.available_matrix_count || 0}/{row.required_matrix_count || 0} file bắt buộc
-          </Text>
-          {row.missing_required_files?.length ? (
-            <Tooltip title={row.missing_required_files.map((item) => `${item.file_type}/${item.branch_code}`).join(', ')}>
-              <Tag color="warning">Thiếu {row.missing_required_files.length} file</Tag>
-            </Tooltip>
-          ) : null}
-        </Space>
+        <Popover
+          placement="right"
+          mouseEnterDelay={0.15}
+          content={<ReadinessDetails row={row} />}
+        >
+          <div className="processing-readiness-cell">
+            <div className="processing-readiness-cell__top">
+              <Text strong>{row.branch_readiness_percent || 0}%</Text>
+              <Tag color={row.is_fully_ready ? 'success' : 'warning'}>
+                {row.is_fully_ready ? 'Sẵn sàng' : `Thiếu ${row.missing_required_files?.length || 0} file`}
+              </Tag>
+            </div>
+            <Progress
+              percent={row.branch_readiness_percent || 0}
+              size="small"
+              showInfo={false}
+              status={row.is_fully_ready ? 'success' : 'active'}
+            />
+            <Text type="secondary" className="processing-readiness-cell__hint">
+              {row.ready_branch_count || 0}/{row.branch_count || 0} chi nhánh · Di chuột để xem chi tiết
+            </Text>
+          </div>
+        </Popover>
       ),
     },
     {
@@ -327,39 +346,40 @@ function CustomerProcessing() {
     <Space orientation="vertical" size={18} className="page-stack">
       <div>
         <Title level={2}>Xử lý dữ liệu khách hàng</Title>
-        <Paragraph className="dashboard-description">
-          Đối chiếu dữ liệu theo kỳ, lấy DP01 làm dữ liệu nền và gom khách hàng theo MA_KH để một khách hàng dùng dịch vụ ở nhiều chi nhánh chỉ còn một hồ sơ tổng hợp.
-        </Paragraph>
       </div>
 
       <Row gutter={[12, 12]}>
         <Col xs={24} md={6}>
-          <Card size="small">
+          <Card className="processing-metric processing-metric--blue">
             <Statistic title="Kỳ dữ liệu" value={periods.length} prefix={<DatabaseOutlined />} />
+            <Text type="secondary">Số kỳ hiện có trong kho</Text>
           </Card>
         </Col>
         <Col xs={24} md={6}>
-          <Card size="small">
+          <Card className="processing-metric processing-metric--green">
             <Statistic
               title="Khách hàng đã xử lý"
               value={Number(selectedPeriodInfo?.profile_count || 0)}
               prefix={<FileDoneOutlined />}
               formatter={money}
             />
+            <Text type="secondary">Theo kỳ đang được chọn</Text>
           </Card>
         </Col>
         <Col xs={24} md={6}>
-          <Card size="small">
+          <Card className="processing-metric processing-metric--purple">
             <Statistic
               title="Job gần nhất"
               value={currentJob ? statusMeta[currentJob.status]?.text || currentJob.status : 'Chưa chạy'}
               prefix={<PlayCircleOutlined />}
             />
+            <Text type="secondary">Trạng thái xử lý nền</Text>
           </Card>
         </Col>
         <Col xs={24} md={6}>
-          <Card size="small">
+          <Card className="processing-metric processing-metric--gold">
             <Statistic title="File bổ sung" value={optionalFiles.length} prefix={<CloudUploadOutlined />} />
+            <Text type="secondary">File mapping và đối chiếu</Text>
           </Card>
         </Col>
       </Row>
@@ -390,7 +410,7 @@ function CustomerProcessing() {
           onRow={(row) => ({
             onClick: () => selectPeriod(row.period_key),
           })}
-          scroll={{ x: 1050 }}
+          scroll={{ x: 760 }}
           locale={{ emptyText: <Empty description="Chưa có kỳ dữ liệu trong kho" /> }}
         />
       </Card>
