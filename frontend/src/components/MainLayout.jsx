@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   ApartmentOutlined,
   AuditOutlined,
@@ -13,15 +13,17 @@ import {
   SettingOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
-import { Avatar, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd';
+import { Avatar, Badge, Breadcrumb, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd';
 
 import logoUrl from '../../favicon.jpg';
+import client from '../api/client';
+import { PAGE_NAVIGATION } from '../constants/navigation';
 
 const { Header, Sider, Content } = Layout;
 
-const menuItems = [
+const baseMenuItems = [
   {
-    key: 'executive',
+    key: 'overview',
     icon: <DashboardOutlined />,
     label: 'Tổng quan',
     children: [
@@ -67,16 +69,65 @@ const menuItems = [
 
 function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout }) {
   const [collapsed, setCollapsed] = useState(false);
+  const [sourceIssueCount, setSourceIssueCount] = useState(0);
+  const pageMeta = PAGE_NAVIGATION[activeMenu] || PAGE_NAVIGATION['c360-dashboard'];
+  const [openKeys, setOpenKeys] = useState(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('c360_open_menu_groups') || '[]');
+      return [...new Set([...(Array.isArray(stored) ? stored : []), pageMeta.parent])];
+    } catch {
+      return [pageMeta.parent];
+    }
+  });
   const siderWidth = collapsed ? 76 : 260;
-  const parentMenu = ['c360-dashboard', 'c360-insights', 'dashboard'].includes(activeMenu)
-    ? 'executive'
-    : ['c360-customers', 'reports'].includes(activeMenu)
-      ? 'customers'
-      : ['data-warehouse', 'customer-processing', 'data-sources', 'data-mapping', 'data-history'].includes(activeMenu)
-        ? 'data'
-        : activeMenu.startsWith('admin-')
-          ? 'admin'
-          : null;
+  const parentMenu = pageMeta.parent;
+  const menuItems = useMemo(() => baseMenuItems.map((group) => ({
+    ...group,
+    children: group.children?.map((item) => (
+      item.key === 'data-sources'
+        ? {
+          ...item,
+          label: (
+            <span className="menu-label-with-badge">
+              <span>Giám sát nguồn dữ liệu</span>
+              <Badge count={sourceIssueCount} size="small" overflowCount={99} />
+            </span>
+          ),
+        }
+        : item
+    )),
+  })), [sourceIssueCount]);
+
+  useEffect(() => {
+    setOpenKeys((current) => {
+      const next = [...new Set([...current, parentMenu])];
+      localStorage.setItem('c360_open_menu_groups', JSON.stringify(next));
+      return next;
+    });
+  }, [parentMenu]);
+
+  useEffect(() => {
+    let active = true;
+    async function loadSourceIssues() {
+      try {
+        const { data: periods } = await client.get('/imports/periods');
+        const latestPeriod = periods?.[0]?.period_key;
+        if (!latestPeriod) return;
+        const { data } = await client.get('/imports/source-readiness', {
+          params: { period_key: latestPeriod },
+        });
+        if (active) setSourceIssueCount((data?.sources || []).filter((item) => !item.is_ready).length);
+      } catch {
+        if (active) setSourceIssueCount(0);
+      }
+    }
+    loadSourceIssues();
+    const timer = window.setInterval(loadSourceIssues, 5 * 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   return (
     <Layout className="app-shell">
@@ -103,11 +154,15 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
           theme="dark"
           mode="inline"
           selectedKeys={[activeMenu]}
-          defaultOpenKeys={parentMenu && !collapsed ? [parentMenu] : []}
+          openKeys={collapsed ? [] : openKeys}
           items={menuItems}
           inlineCollapsed={collapsed}
+          onOpenChange={(keys) => {
+            setOpenKeys(keys);
+            localStorage.setItem('c360_open_menu_groups', JSON.stringify(keys));
+          }}
           onClick={({ key }) => {
-            if (['executive', 'customers', 'data', 'admin'].includes(key)) return;
+            if (['overview', 'customers', 'data', 'admin'].includes(key)) return;
             onMenuChange(key);
           }}
         />
@@ -124,7 +179,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
               />
             </Tooltip>
             <Typography.Title level={4} className="app-title">
-              C360
+              {pageMeta.title}
             </Typography.Title>
           </Space>
           <Space className="app-user" size={12}>
@@ -140,7 +195,16 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
             </Button>
           </Space>
         </Header>
-        <Content className="app-content">{children}</Content>
+        <Content className="app-content">
+          <Breadcrumb
+            className="app-breadcrumb"
+            items={[
+              { title: pageMeta.parentLabel },
+              { title: pageMeta.title },
+            ]}
+          />
+          {children}
+        </Content>
       </Layout>
     </Layout>
   );

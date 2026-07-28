@@ -14,9 +14,10 @@ import AuditLogs from './pages/AuditLogs';
 import DataGovernance from './pages/DataGovernance';
 import client from './api/client';
 import C360App from './c360/C360App';
+import { menuKeyFromPath, pathFromMenuKey } from './constants/navigation';
 
 function LegacyApp() {
-  const [activeMenu, setActiveMenu] = useState('c360-dashboard');
+  const [activeMenu, setActiveMenu] = useState(() => menuKeyFromPath(window.location.pathname));
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const raw = localStorage.getItem('c360_user');
@@ -36,7 +37,28 @@ function LegacyApp() {
     localStorage.removeItem('c360_user');
     setCurrentUser(null);
     setActiveMenu('c360-dashboard');
+    window.history.replaceState({}, '', pathFromMenuKey('c360-dashboard'));
   }
+
+  function handleMenuChange(menuKey) {
+    setActiveMenu(menuKey);
+    const nextPath = pathFromMenuKey(menuKey);
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState({ menuKey }, '', nextPath);
+    }
+  }
+
+  useEffect(() => {
+    const currentKey = menuKeyFromPath(window.location.pathname);
+    const canonicalPath = pathFromMenuKey(currentKey);
+    setActiveMenu(currentKey);
+    if (window.location.pathname !== canonicalPath) {
+      window.history.replaceState({ menuKey: currentKey }, '', canonicalPath);
+    }
+    const handlePopState = () => setActiveMenu(menuKeyFromPath(window.location.pathname));
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   useEffect(() => {
     if (!currentUser) return undefined;
@@ -100,7 +122,7 @@ function LegacyApp() {
   return (
     <AuthProvider>
       <GlobalApiLoading />
-      <MainLayout activeMenu={activeMenu} onMenuChange={setActiveMenu} currentUser={currentUser} onLogout={handleLogout}>
+      <MainLayout activeMenu={activeMenu} onMenuChange={handleMenuChange} currentUser={currentUser} onLogout={handleLogout}>
         {pages[activeMenu] || pages['c360-dashboard']}
       </MainLayout>
     </AuthProvider>

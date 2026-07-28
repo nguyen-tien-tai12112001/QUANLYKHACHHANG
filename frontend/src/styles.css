@@ -356,6 +356,41 @@ body {
   padding: 24px;
 }
 
+.app-breadcrumb {
+  margin-bottom: 18px;
+  color: #718095;
+  font-size: 13px;
+}
+
+.app-breadcrumb li:last-child {
+  color: #4b5d73;
+  font-weight: 600;
+}
+
+.menu-label-with-badge {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.menu-label-with-badge > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.app-sidebar .menu-label-with-badge .ant-badge-count {
+  color: #fff;
+  background: #d13f55;
+  box-shadow: 0 0 0 1px rgb(255 255 255 / 25%);
+}
+
+.app-sidebar .ant-menu-item-selected .menu-label-with-badge .ant-badge-count {
+  color: #fff;
+  background: #8f1438;
+}
+
 .app-user {
   margin-left: auto;
 }
