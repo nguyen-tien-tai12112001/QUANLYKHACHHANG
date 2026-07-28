@@ -4,6 +4,7 @@ import {
   CheckCircleFilled,
   ClockCircleOutlined,
   DatabaseOutlined,
+  PlayCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
 import {
@@ -21,6 +22,7 @@ import {
   Table,
   Tag,
   Typography,
+  message,
 } from 'antd';
 
 import client from '../api/client';
@@ -99,8 +101,12 @@ function useGovernanceData() {
   const [periods, setPeriods] = useState([]);
   const [periodKey, setPeriodKey] = useState('');
   const [sources, setSources] = useState([]);
+  const [files, setFiles] = useState([]);
+  const [readiness, setReadiness] = useState({ sources: [] });
+  const [stalledJobs, setStalledJobs] = useState([]);
   const [jobs, setJobs] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [recovering, setRecovering] = useState(false);
   const [error, setError] = useState('');
   const [reloadKey, setReloadKey] = useState(0);
 
@@ -131,13 +137,25 @@ function useGovernanceData() {
   useEffect(() => {
     if (!periodKey) {
       setSources([]);
+      setFiles([]);
+      setReadiness({ sources: [] });
+      setStalledJobs([]);
       return undefined;
     }
     let active = true;
     setLoading(true);
-    client.get('/imports/report-sources', { params: { period_key: periodKey } })
-      .then(({ data }) => {
-        if (active) setSources(Array.isArray(data) ? data : []);
+    Promise.all([
+      client.get('/imports/report-sources', { params: { period_key: periodKey } }),
+      client.get('/imports/source-readiness', { params: { period_key: periodKey } }),
+      client.get('/imports/files', { params: { period_key: periodKey } }),
+      client.get('/imports/jobs/stalled', { params: { period_key: periodKey } }),
+    ])
+      .then(([sourceResponse, readinessResponse, fileResponse, stalledResponse]) => {
+        if (!active) return;
+        setSources(Array.isArray(sourceResponse.data) ? sourceResponse.data : []);
+        setReadiness(readinessResponse.data || { sources: [] });
+        setFiles(Array.isArray(fileResponse.data) ? fileResponse.data : []);
+        setStalledJobs(Array.isArray(stalledResponse.data) ? stalledResponse.data : []);
       })
       .catch((requestError) => {
         if (active) setError(requestError.response?.data?.detail || requestError.message || 'Không tải được trạng thái nguồn');
@@ -148,14 +166,48 @@ function useGovernanceData() {
     return () => { active = false; };
   }, [periodKey, reloadKey]);
 
+  async function recoverStalledJobs() {
+    setRecovering(true);
+    try {
+      const { data } = await client.post('/imports/jobs/recover', null, {
+        params: { period_key: periodKey },
+      });
+      message.success(`Đã đưa ${data.queued_count || 0} job import về hàng chờ`);
+      setReloadKey((value) => value + 1);
+    } catch (requestError) {
+      message.error(requestError.response?.data?.detail || requestError.message);
+    } finally {
+      setRecovering(false);
+    }
+  }
+
+  async function recoverProcessingJob() {
+    setRecovering(true);
+    try {
+      await client.post(`/customer-processing/jobs/${periodKey}/recover`);
+      message.success(`Đã tạo lại job xử lý kỳ ${periodKey}`);
+      setReloadKey((value) => value + 1);
+    } catch (requestError) {
+      message.error(requestError.response?.data?.detail || requestError.message);
+    } finally {
+      setRecovering(false);
+    }
+  }
+
   return {
     periods,
     periodKey,
     setPeriodKey,
     sources,
+    files,
+    readiness,
+    stalledJobs,
     jobs,
     loading,
+    recovering,
     error,
+    recoverStalledJobs,
+    recoverProcessingJob,
     reload: () => setReloadKey((value) => value + 1),
   };
 }
@@ -216,6 +268,219 @@ function SourceTable({ sources }) {
   );
 }
 
+const REQUIRED_PROFILE_SOURCES = ['DP01', 'LN01', 'CN05', 'PF14'];
+
+function sourceCell(files, sourceCode, branchCode, readiness) {
+  const rows = files.filter((item) => item.file_type === sourceCode && item.branch_code === branchCode);
+  const successful = rows.filter((item) => item.status === 'success');
+  const errors = rows.filter((item) => item.status === 'error');
+  const running = rows.filter((item) => ['queued', 'processing'].includes(item.status));
+  if (sourceCode === 'FTPLN') {
+    const branch = readiness.sources
+      ?.find((item) => item.source_code === 'FTPLN')
+      ?.branch_readiness?.find((item) => item.branch_code === branchCode);
+    if (branch) {
+      return branch.is_ready
+        ? <Tag color="success">{branch.success_days}/{branch.expected_days}</Tag>
+        : <Tag color={branch.error_file_count ? 'error' : 'warning'}>{branch.success_days}/{branch.expected_days}</Tag>;
+    }
+  }
+  if (errors.length) return <Tag color="error">{errors.length} lỗi</Tag>;
+  if (running.length) return <Tag color="processing">{running.length} đang chạy</Tag>;
+  if (successful.length) return <Tag color="success">{successful.length} file</Tag>;
+  return <Tag>Thiếu</Tag>;
+}
+
+function ReadinessOverview({ data }) {
+  const period = data.periods.find((item) => item.period_key === data.periodKey);
+  const activeFiles = data.files.filter((item) => !['deleted', 'replaced', 'deleting'].includes(item.status));
+  const branches = [...new Set(activeFiles.map((item) => item.branch_code).filter(Boolean))].sort();
+  const missingRequired = REQUIRED_PROFILE_SOURCES.flatMap((sourceCode) => (
+    branches.filter((branchCode) => !activeFiles.some(
+      (item) => item.file_type === sourceCode && item.branch_code === branchCode && item.status === 'success',
+    )).map((branchCode) => `${sourceCode}/${branchCode}`)
+  ));
+  const errorFiles = activeFiles.filter((item) => item.status === 'error');
+  const runningFiles = activeFiles.filter((item) => ['queued', 'processing'].includes(item.status));
+  const processingJob = data.jobs.find(
+    (item) => item.period_key === data.periodKey && ['queued', 'processing'].includes(item.status),
+  );
+
+  let status = { color: 'warning', label: 'Đủ nguồn, chưa tổng hợp', detail: 'Có thể bắt đầu xử lý dữ liệu khách hàng.' };
+  if (!activeFiles.length || missingRequired.length) {
+    status = {
+      color: 'default',
+      label: 'Chưa đủ file',
+      detail: missingRequired.length
+        ? `Thiếu ${missingRequired.length} tổ hợp nguồn/chi nhánh bắt buộc.`
+        : 'Kỳ chưa có file dữ liệu.',
+    };
+  }
+  if (runningFiles.length || processingJob) {
+    status = { color: 'processing', label: 'Đang xử lý', detail: 'Có job import hoặc tổng hợp đang chạy.' };
+  }
+  if (errorFiles.length) {
+    status = { color: 'error', label: 'Có lỗi', detail: `${errorFiles.length} file cần kiểm tra.` };
+  }
+  if (data.stalledJobs.length) {
+    status = { color: 'error', label: 'Job bị kẹt', detail: `${data.stalledJobs.length} job cần chạy lại.` };
+  }
+  if (
+    !errorFiles.length
+    && !runningFiles.length
+    && !processingJob
+    && !data.stalledJobs.length
+    && !missingRequired.length
+    && Number(period?.profile_count || 0) > 0
+  ) {
+    status = { color: 'success', label: 'Sẵn sàng sử dụng', detail: `${numberLabel(period.profile_count)} hồ sơ đã tổng hợp.` };
+  }
+
+  return (
+    <Card className="demo-section data-readiness-card">
+      <Row gutter={[20, 16]} align="middle">
+        <Col xs={24} md={7}>
+          <Text type="secondary">TRẠNG THÁI KỲ {periodLabel(data.periodKey)}</Text>
+          <div><Tag color={status.color} className="data-readiness-status">{status.label}</Tag></div>
+          <Text>{status.detail}</Text>
+        </Col>
+        <Col xs={12} sm={6} md={4}><Metric label="Chi nhánh" value={branches.length} note={branches.join(', ') || 'Chưa có'} color="#3567a8" icon={<DatabaseOutlined />} /></Col>
+        <Col xs={12} sm={6} md={4}><Metric label="File hiệu lực" value={activeFiles.length} note={`${errorFiles.length} file lỗi`} color="#218653" icon={<CheckCircleFilled />} /></Col>
+        <Col xs={12} sm={6} md={4}><Metric label="Còn thiếu" value={missingRequired.length} note="Nguồn/chi nhánh bắt buộc" color="#d6a033" icon={<AlertOutlined />} /></Col>
+        <Col xs={12} sm={6} md={5}><Metric label="Job cần xử lý" value={data.stalledJobs.length} note="Job import bị kẹt" color="#8f1438" icon={<ClockCircleOutlined />} /></Col>
+      </Row>
+      {missingRequired.length ? (
+        <Alert
+          showIcon
+          type="warning"
+          message="Nguồn bắt buộc còn thiếu"
+          description={missingRequired.join(', ')}
+          style={{ marginTop: 16 }}
+        />
+      ) : null}
+    </Card>
+  );
+}
+
+function SourceBranchMatrix({ data }) {
+  const activeFiles = data.files.filter((item) => !['deleted', 'replaced', 'deleting'].includes(item.status));
+  const branches = [...new Set(activeFiles.map((item) => item.branch_code).filter(Boolean))].sort();
+  const sourceCodes = data.readiness.sources?.map((item) => item.source_code)
+    || [...new Set(activeFiles.map((item) => item.file_type))].sort();
+  const rows = sourceCodes.map((sourceCode) => ({ source_code: sourceCode }));
+  const columns = [
+    {
+      title: 'Nguồn',
+      dataIndex: 'source_code',
+      fixed: 'left',
+      width: 110,
+      render: (value) => <Tag color={REQUIRED_PROFILE_SOURCES.includes(value) ? 'blue' : 'purple'}>{value}</Tag>,
+    },
+    ...branches.map((branchCode) => ({
+      title: branchCode,
+      key: branchCode,
+      width: 125,
+      align: 'center',
+      render: (_, row) => sourceCell(activeFiles, row.source_code, branchCode, data.readiness),
+    })),
+  ];
+  return (
+    <Card title="Ma trận nguồn theo chi nhánh" className="demo-table-card demo-section">
+      <Text type="secondary">Nhìn nhanh nguồn nào đã đủ, còn thiếu, đang chạy hoặc bị lỗi tại từng chi nhánh.</Text>
+      <Table
+        rowKey="source_code"
+        dataSource={rows}
+        columns={columns}
+        pagination={false}
+        size="middle"
+        scroll={{ x: 110 + branches.length * 125 }}
+        style={{ marginTop: 16 }}
+      />
+    </Card>
+  );
+}
+
+function JobIssueCenter({ data }) {
+  const failedFiles = data.files
+    .filter((item) => item.status === 'error')
+    .map((item) => ({
+      key: `file-${item.id}`,
+      type: 'Import file',
+      name: item.original_filename,
+      status: 'error',
+      reason: item.error_message || 'Import file thất bại nhưng chưa ghi nhận chi tiết lỗi.',
+      time: item.finished_at || item.uploaded_at,
+    }));
+  const stalled = data.stalledJobs.map((item) => ({
+    key: `stalled-${item.id}`,
+    type: 'Job import',
+    name: item.original_filename,
+    status: 'stalled',
+    reason: item.stalled_reason,
+    time: item.started_at || item.uploaded_at,
+  }));
+  const failedProcessing = data.jobs
+    .filter((item) => item.period_key === data.periodKey && item.status === 'error')
+    .map((item) => ({
+      key: `processing-${item.id}`,
+      type: 'Tổng hợp KH',
+      name: `JOB-${item.id} · ${item.stage || 'Xử lý dữ liệu khách hàng'}`,
+      status: 'error',
+      reason: item.error_message || 'Job tổng hợp thất bại.',
+      time: item.finished_at || item.started_at,
+    }));
+  const rows = [...stalled, ...failedFiles, ...failedProcessing];
+  return (
+    <Card
+      title="Trung tâm lỗi và job"
+      className="demo-table-card demo-section"
+      extra={(
+        <Space>
+          {stalled.length ? (
+            <Button
+              danger
+              type="primary"
+              loading={data.recovering}
+              icon={<PlayCircleOutlined />}
+              onClick={data.recoverStalledJobs}
+            >
+              Chạy lại job import kẹt
+            </Button>
+          ) : null}
+          {failedProcessing.length ? (
+            <Button
+              loading={data.recovering}
+              icon={<ReloadOutlined />}
+              onClick={data.recoverProcessingJob}
+            >
+              Chạy lại tổng hợp
+            </Button>
+          ) : null}
+        </Space>
+      )}
+    >
+      <Table
+        rowKey="key"
+        dataSource={rows}
+        pagination={{ pageSize: 8, hideOnSinglePage: true }}
+        locale={{ emptyText: <Empty description="Không có lỗi hoặc job bị kẹt trong kỳ" /> }}
+        columns={[
+          { title: 'Loại', dataIndex: 'type', width: 130, render: (value) => <Tag>{value}</Tag> },
+          { title: 'File/Job', dataIndex: 'name', width: 320, ellipsis: true },
+          {
+            title: 'Trạng thái',
+            dataIndex: 'status',
+            width: 120,
+            render: (value) => <Tag color="error">{value === 'stalled' ? 'Bị kẹt' : 'Thất bại'}</Tag>,
+          },
+          { title: 'Lý do', dataIndex: 'reason' },
+          { title: 'Thời điểm', dataIndex: 'time', width: 175, render: dateTimeLabel },
+        ]}
+      />
+    </Card>
+  );
+}
+
 function SourcesPage({ data }) {
   const ready = data.sources.filter((item) => item.status === 'ready').length;
   const issues = data.sources.filter((item) => !['ready', 'planned'].includes(item.status)).length;
@@ -231,6 +496,9 @@ function SourcesPage({ data }) {
         <Col xs={24} md={8}><Metric label="Nguồn sẵn sàng" value={`${ready}/${data.sources.length || 0}`} note="Có file thành công và có dữ liệu" color="#218653" icon={<CheckCircleFilled />} /></Col>
         <Col xs={24} md={8}><Metric label="Nguồn cần xử lý" value={`${issues} nguồn`} note="Thiếu, lỗi hoặc chưa đầy đủ" color="#8f1438" icon={<AlertOutlined />} /></Col>
       </Row>
+      <ReadinessOverview data={data} />
+      <SourceBranchMatrix data={data} />
+      <JobIssueCenter data={data} />
       <Card className="demo-table-card demo-section"><SourceTable sources={data.sources} /></Card>
     </div>
   );

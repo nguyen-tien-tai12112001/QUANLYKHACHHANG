@@ -1065,6 +1065,23 @@ body {
   transform: translateY(-2px);
 }
 
+.data-readiness-card {
+  border-top: 4px solid #3567a8;
+}
+
+.data-readiness-card .demo-metric {
+  height: 100%;
+  box-shadow: none;
+  border-color: #edf0f4;
+}
+
+.data-readiness-status {
+  margin: 8px 0;
+  padding: 5px 12px;
+  font-size: 15px;
+  font-weight: 700;
+}
+
 .source-tile {
   min-height: 126px;
   padding: 16px;
