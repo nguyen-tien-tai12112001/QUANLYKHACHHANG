@@ -77,6 +77,127 @@ class ImportFile(Base):
     )
 
 
+class CifImportBatch(Base):
+    __tablename__ = "cif_import_batches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    original_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    stored_filename: Mapped[str] = mapped_column(String(255), nullable=False)
+    file_path: Mapped[str] = mapped_column(String(500), nullable=False)
+    content_sha256: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    file_size: Mapped[int] = mapped_column(BigInteger, default=0, nullable=False)
+    actual_format: Mapped[str] = mapped_column(String(20), default="xls", nullable=False)
+    branch_code: Mapped[str | None] = mapped_column(String(10), index=True)
+    sheet_name: Mapped[str | None] = mapped_column(String(255))
+    status: Mapped[str] = mapped_column(String(30), default="queued", index=True, nullable=False)
+    stage: Mapped[str | None] = mapped_column(String(255))
+    progress_percent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    total_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    processed_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    accepted_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    warning_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    rejected_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    new_customers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    new_identifiers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    updated_identifiers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    conflict_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    format_warning: Mapped[str | None] = mapped_column(Text)
+    error_message: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    uploaded_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (UniqueConstraint("content_sha256", name="uq_cif_import_batches_sha256"),)
+
+
+class CifCustomer(Base):
+    __tablename__ = "cif_customers"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    customer_core_code: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    customer_name: Mapped[str | None] = mapped_column(String(255), index=True)
+    customer_name_ascii: Mapped[str | None] = mapped_column(String(255))
+    customer_type: Mapped[str | None] = mapped_column(String(100), index=True)
+    customer_detail_type: Mapped[str | None] = mapped_column(String(100))
+    registration_number: Mapped[str | None] = mapped_column(String(100), index=True)
+    passport_number: Mapped[str | None] = mapped_column(String(100), index=True)
+    tax_number: Mapped[str | None] = mapped_column(String(100), index=True)
+    telephone: Mapped[str | None] = mapped_column(String(100))
+    full_address: Mapped[str | None] = mapped_column(Text)
+    nationality_code: Mapped[str | None] = mapped_column(String(20))
+    status: Mapped[str] = mapped_column(String(30), default="active", index=True, nullable=False)
+    branch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    identifier_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    first_import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("cif_import_batches.id"))
+    last_import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("cif_import_batches.id"))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+
+
+class CifCustomerIdentifier(Base):
+    __tablename__ = "cif_customer_identifiers"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("cif_customers.id"), index=True, nullable=False)
+    import_batch_id: Mapped[int] = mapped_column(ForeignKey("cif_import_batches.id"), index=True, nullable=False)
+    full_cif_code: Mapped[str] = mapped_column(String(32), unique=True, index=True, nullable=False)
+    branch_code: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
+    customer_core_code: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    source_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    customer_name: Mapped[str | None] = mapped_column(String(255))
+    customer_name_ascii: Mapped[str | None] = mapped_column(String(255))
+    short_name: Mapped[str | None] = mapped_column(String(255))
+    customer_type: Mapped[str | None] = mapped_column(String(100))
+    customer_detail_type: Mapped[str | None] = mapped_column(String(100))
+    registration_number: Mapped[str | None] = mapped_column(String(100), index=True)
+    passport_number: Mapped[str | None] = mapped_column(String(100), index=True)
+    driver_license_number: Mapped[str | None] = mapped_column(String(100))
+    tax_number: Mapped[str | None] = mapped_column(String(100), index=True)
+    telephone: Mapped[str | None] = mapped_column(String(100))
+    address_type: Mapped[str | None] = mapped_column(String(100))
+    full_address: Mapped[str | None] = mapped_column(Text)
+    province: Mapped[str | None] = mapped_column(String(100))
+    district: Mapped[str | None] = mapped_column(String(100))
+    commune_ward: Mapped[str | None] = mapped_column(String(100))
+    nationality_code: Mapped[str | None] = mapped_column(String(20))
+    source_status: Mapped[str | None] = mapped_column(String(100))
+    normalized_status: Mapped[str] = mapped_column(String(30), default="active", index=True, nullable=False)
+    operator_user: Mapped[str | None] = mapped_column(String(100))
+    raw_data: Mapped[dict | None] = mapped_column(JSON)
+    imported_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CifImportError(Base):
+    __tablename__ = "cif_import_errors"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    import_batch_id: Mapped[int] = mapped_column(ForeignKey("cif_import_batches.id"), index=True, nullable=False)
+    source_row_number: Mapped[int | None] = mapped_column(Integer)
+    full_cif_code: Mapped[str | None] = mapped_column(String(32), index=True)
+    severity: Mapped[str] = mapped_column(String(20), default="warning", index=True, nullable=False)
+    error_code: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    field_name: Mapped[str | None] = mapped_column(String(100))
+    raw_value: Mapped[str | None] = mapped_column(Text)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CifIdentityConflict(Base):
+    __tablename__ = "cif_identity_conflicts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("cif_import_batches.id"), index=True)
+    conflict_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
+    identity_value: Mapped[str | None] = mapped_column(String(255), index=True)
+    customer_ids: Mapped[list | None] = mapped_column(JSON)
+    full_cif_codes: Mapped[list | None] = mapped_column(JSON)
+    details: Mapped[dict | None] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True, nullable=False)
+    resolution_note: Mapped[str | None] = mapped_column(Text)
+    resolved_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
 class Customer(Base):
     __tablename__ = "customers"
 
