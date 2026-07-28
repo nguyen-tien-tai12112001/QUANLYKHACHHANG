@@ -12,6 +12,7 @@ import Login from './pages/Login';
 import SystemAdmin from './pages/SystemAdmin';
 import AuditLogs from './pages/AuditLogs';
 import DataGovernance from './pages/DataGovernance';
+import CifDataWarehouse from './pages/CifDataWarehouse';
 import client from './api/client';
 import C360App from './c360/C360App';
 import { menuKeyFromPath, pathFromMenuKey } from './constants/navigation';
@@ -103,6 +104,7 @@ function LegacyApp() {
     'c360-customers': <C360App embedded initialPage="customers" currentUser={currentUser} onLogout={handleLogout} />,
     dashboard: <Dashboard />,
     'data-warehouse': <ImportData />,
+    'data-cif': <CifDataWarehouse />,
     'customer-processing': <CustomerProcessing />,
     'data-sources': <DataGovernance mode="sources" />,
     'data-mapping': <DataGovernance mode="mapping" />,

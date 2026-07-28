@@ -47,6 +47,7 @@ const baseMenuItems = [
     label: 'Quản trị dữ liệu',
     children: [
       { key: 'data-warehouse', icon: <DatabaseOutlined />, label: 'Kho dữ liệu' },
+      { key: 'data-cif', icon: <TeamOutlined />, label: 'Kho dữ liệu CIF' },
       { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
       { key: 'data-sources', icon: <DatabaseOutlined />, label: 'Giám sát nguồn dữ liệu' },
       { key: 'data-mapping', icon: <BranchesOutlined />, label: 'Từ điển & mapping' },

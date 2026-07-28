@@ -5,6 +5,7 @@ export const PAGE_NAVIGATION = {
   'c360-customers': { path: '/customers', parent: 'customers', parentLabel: 'Quản lý khách hàng', title: 'Danh sách khách hàng' },
   reports: { path: '/customers/reports', parent: 'customers', parentLabel: 'Quản lý khách hàng', title: 'Báo cáo khách hàng' },
   'data-warehouse': { path: '/data/warehouse', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Kho dữ liệu' },
+  'data-cif': { path: '/data/cif', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Kho dữ liệu CIF' },
   'customer-processing': { path: '/data/customer-processing', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Xử lý dữ liệu KH' },
   'data-sources': { path: '/data/source-monitoring', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Giám sát nguồn dữ liệu' },
   'data-mapping': { path: '/data/dictionary', parent: 'data', parentLabel: 'Quản trị dữ liệu', title: 'Từ điển & mapping' },
