@@ -1,3 +1,4 @@
+import calendar
 import os
 import subprocess
 from datetime import date, datetime
@@ -26,6 +27,8 @@ from app.imports.importer import (
 from app.imports.summarizer import refresh_report_sources, summarize_period
 from app.models import (
     AuditLog,
+    BC06CustomerClassification,
+    BC29CustomerCreditRisk,
     CN05CustomerService,
     CustomerPeriodBranchDetail,
     CustomerPeriodExchangeRate,
@@ -34,9 +37,11 @@ from app.models import (
     CustomerProcessingJob,
     CustomerProcessingOptionalFile,
     DP01DepositAccount,
+    FTPLNDailyLoanFTP,
     ImportBatch,
     ImportFile,
     LN01Loan,
+    KH02CustomerTransaction,
     PF14AccountBalance,
     ReportSourceStatus,
     SupplementalBaoLanhRecord,
@@ -223,6 +228,10 @@ def delete_period_data(db: Session, period_key: str) -> dict:
         CN05CustomerService,
         LN01Loan,
         PF14AccountBalance,
+        BC06CustomerClassification,
+        BC29CustomerCreditRisk,
+        KH02CustomerTransaction,
+        FTPLNDailyLoanFTP,
         CustomerProcessingOptionalFile,
         CustomerProcessingJob,
         ImportFile,
@@ -252,7 +261,8 @@ def upload_import_file(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=compact_error_message(exc)) from exc
 
-    needs_reprocess = mark_period_needs_reprocess(db, import_file.period_key)
+    affects_profile = import_file.file_type in {"DP01", "LN01", "CN05", "PF14"}
+    needs_reprocess = mark_period_needs_reprocess(db, import_file.period_key) if affects_profile else False
     if needs_reprocess:
         db.commit()
 
@@ -267,7 +277,7 @@ def upload_import_file(
         "success_rows": import_file.success_rows,
         "error_rows": import_file.error_rows,
         "background": background,
-        "summary_required": True,
+        "summary_required": affects_profile,
         "needs_reprocess": needs_reprocess,
     }
 
@@ -313,6 +323,12 @@ def list_import_files(
                 "file_type",
                 "branch_code",
                 "period_key",
+                "period_start",
+                "period_end",
+                "business_date",
+                "filename_suffix",
+                "frequency",
+                "content_sha256",
                 "file_size",
                 "total_rows",
                 "success_rows",
@@ -384,10 +400,11 @@ def delete_import_file(
         raise HTTPException(status_code=409, detail="Không thể xóa vì kỳ dữ liệu đang có job import hoặc xử lý đang chạy")
 
     period_key = import_file.period_key
+    affects_profile = import_file.file_type in {"DP01", "LN01", "CN05", "PF14"}
     original_filename = import_file.original_filename
     was_processed = processed_customer_count(db, period_key) > 0
     delete_file_record_and_rows(db, import_file)
-    needs_reprocess = mark_period_needs_reprocess(db, period_key)
+    needs_reprocess = mark_period_needs_reprocess(db, period_key) if affects_profile else False
     refresh_report_sources(db, period_key)
     log_data_action(
         db,
@@ -464,6 +481,92 @@ def recover_jobs(period_key: str | None = Query(default=None)):
         "queued_count": queued_count,
         "message": "Đã đưa job import bị kẹt về hàng chờ xử lý lại",
     }
+
+
+@router.get("/source-readiness")
+def source_readiness(period_key: str = Query(...), db: Session = Depends(get_db)):
+    batch = db.query(ImportBatch).filter(ImportBatch.period_key == period_key).first()
+    if not batch:
+        raise HTTPException(status_code=404, detail="Không tìm thấy kỳ dữ liệu")
+
+    files = (
+        db.query(ImportFile)
+        .filter(
+            ImportFile.period_key == period_key,
+            ImportFile.status.notin_(["deleted", "replaced", "deleting"]),
+        )
+        .all()
+    )
+    source_rows = []
+    for source_code in ("DP01", "LN01", "CN05", "PF14", "BC06", "BC29", "KH02"):
+        source_files = [item for item in files if item.file_type == source_code]
+        success_files = [item for item in source_files if item.status == "success"]
+        source_rows.append({
+            "source_code": source_code,
+            "frequency": "MONTH_RANGE" if source_code == "KH02" else "PERIOD",
+            "expected_file_count": None,
+            "received_file_count": len(source_files),
+            "success_file_count": len(success_files),
+            "error_file_count": len([item for item in source_files if item.status == "error"]),
+            "is_ready": bool(success_files),
+            "branches": sorted({item.branch_code for item in success_files}),
+            "missing_dates": [],
+        })
+
+    ftpln_files = [item for item in files if item.file_type == "FTPLN"]
+    ftpln_branches = sorted({item.branch_code for item in ftpln_files})
+    expected_days = calendar.monthrange(batch.period_date.year, batch.period_date.month)[1]
+    expected_dates = {
+        date(batch.period_date.year, batch.period_date.month, day)
+        for day in range(1, expected_days + 1)
+    }
+    branch_readiness = []
+    for branch_code in ftpln_branches:
+        branch_files = [item for item in ftpln_files if item.branch_code == branch_code]
+        success_dates = {
+            item.business_date
+            for item in branch_files
+            if item.status == "success" and item.business_date is not None
+        }
+        duplicate_dates = sorted({
+            item.business_date.isoformat()
+            for item in branch_files
+            if item.business_date
+            and sum(
+                1
+                for candidate in branch_files
+                if candidate.business_date == item.business_date and candidate.status == "success"
+            ) > 1
+        })
+        missing_dates = sorted(expected_dates - success_dates)
+        error_count = len([item for item in branch_files if item.status == "error"])
+        branch_readiness.append({
+            "branch_code": branch_code,
+            "expected_days": expected_days,
+            "success_days": len(success_dates),
+            "missing_dates": [item.isoformat() for item in missing_dates],
+            "duplicate_dates": duplicate_dates,
+            "error_file_count": error_count,
+            "is_ready": len(success_dates) == expected_days and not duplicate_dates and error_count == 0,
+        })
+
+    source_rows.append({
+        "source_code": "FTPLN",
+        "frequency": "DAILY",
+        "expected_file_count": expected_days * len(ftpln_branches) if ftpln_branches else expected_days,
+        "received_file_count": len(ftpln_files),
+        "success_file_count": len([item for item in ftpln_files if item.status == "success"]),
+        "error_file_count": len([item for item in ftpln_files if item.status == "error"]),
+        "is_ready": bool(branch_readiness) and all(item["is_ready"] for item in branch_readiness),
+        "branches": ftpln_branches,
+        "missing_dates": sorted({
+            missing
+            for branch in branch_readiness
+            for missing in branch["missing_dates"]
+        }),
+        "branch_readiness": branch_readiness,
+    })
+    return {"period_key": period_key, "sources": source_rows}
 
 
 @router.get("/report-sources")

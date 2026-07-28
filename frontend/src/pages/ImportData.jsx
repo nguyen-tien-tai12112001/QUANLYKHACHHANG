@@ -47,16 +47,21 @@ const { RangePicker } = DatePicker;
 const { Paragraph, Text, Title } = Typography;
 
 const requiredTypes = ['DP01', 'LN01', 'CN05', 'PF14'];
+const supportedTypes = [...requiredTypes, 'BC06', 'BC29', 'KH02', 'FTPLN'];
 const typeColors = {
   DP01: 'gold',
   LN01: 'volcano',
   CN05: 'green',
   PF14: 'cyan',
+  BC06: 'purple',
+  BC29: 'red',
+  KH02: 'blue',
+  FTPLN: 'geekblue',
 };
 
 const fileTypeOptions = [
   { label: 'Tất cả', value: '' },
-  ...requiredTypes.map((type) => ({ label: type, value: type })),
+  ...supportedTypes.map((type) => ({ label: type, value: type })),
 ];
 
 const fileStatusOptions = [
@@ -91,21 +96,59 @@ function periodLabel(periodKey) {
 }
 
 function parseFilename(name) {
-  const match = /^(\d+)_(CN05|DP01|LN01|PF14)_(\d{8})\.(csv|xlsx)$/i.exec(name || '');
-  if (!match) {
-    return null;
+  const value = name || '';
+  const kh02 = /^(\d+)_(KH02)_(\d{8})(\d{8})\.(csv|xlsx)$/i.exec(value);
+  if (kh02) {
+    return {
+      branchCode: kh02[1],
+      fileType: 'KH02',
+      periodKey: kh02[4],
+      periodStart: kh02[3],
+      periodEnd: kh02[4],
+      ext: kh02[5].toLowerCase(),
+      identity: value.toLowerCase(),
+    };
   }
-  const periodKey = match[3];
+  const ftpln = /^(\d+)_(FTPLN)_(\d{8})\.(csv|xlsx)$/i.exec(value);
+  if (ftpln) {
+    const sourceDate = new Date(`${ftpln[3].slice(0, 4)}-${ftpln[3].slice(4, 6)}-${ftpln[3].slice(6, 8)}T00:00:00`);
+    if (Number.isNaN(sourceDate.getTime())) return null;
+    const monthEnd = new Date(sourceDate.getFullYear(), sourceDate.getMonth() + 1, 0);
+    const periodKey = `${monthEnd.getFullYear()}${String(monthEnd.getMonth() + 1).padStart(2, '0')}${String(monthEnd.getDate()).padStart(2, '0')}`;
+    return {
+      branchCode: ftpln[1],
+      fileType: 'FTPLN',
+      periodKey,
+      businessDate: ftpln[3],
+      ext: ftpln[4].toLowerCase(),
+      identity: value.toLowerCase(),
+    };
+  }
+  const bc06 = /^(\d+)_(BC06)_(\d{8})(_.+)?\.(csv|xlsx)$/i.exec(value);
+  if (bc06) {
+    return {
+      branchCode: bc06[1],
+      fileType: 'BC06',
+      periodKey: bc06[3],
+      suffix: bc06[4] || '',
+      ext: bc06[5].toLowerCase(),
+      identity: value.toLowerCase(),
+    };
+  }
+  const standard = /^(\d+)_(CN05|DP01|LN01|PF14|BC29)_(\d{8})\.(csv|xlsx)$/i.exec(value);
+  if (!standard) return null;
+  const periodKey = standard[3];
   const month = Number(periodKey.slice(4, 6));
   const day = Number(periodKey.slice(6, 8));
   if (month < 1 || month > 12 || day < 1 || day > 31) {
     return null;
   }
   return {
-    branchCode: match[1],
-    fileType: match[2].toUpperCase(),
+    branchCode: standard[1],
+    fileType: standard[2].toUpperCase(),
     periodKey,
-    ext: match[4].toLowerCase(),
+    ext: standard[4].toLowerCase(),
+    identity: value.toLowerCase(),
   };
 }
 
@@ -232,6 +275,7 @@ function ImportData() {
   const [fileList, setFileListState] = useState(warehouseSession.fileList);
   const [files, setFiles] = useState([]);
   const [periods, setPeriods] = useState([]);
+  const [readinessByPeriod, setReadinessByPeriod] = useState({});
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [loadingPeriods, setLoadingPeriods] = useState(false);
   const [uploading, setUploadingState] = useState(warehouseSession.uploading);
@@ -321,20 +365,21 @@ function ImportData() {
           (file) =>
             file.branch_code === meta.branchCode &&
             file.file_type === meta.fileType &&
-            file.period_key === meta.periodKey,
+            file.period_key === meta.periodKey &&
+            file.original_filename?.toLowerCase() === item.name.toLowerCase(),
         )
       : null;
     return { uid: item.uid, name: item.name, meta, size: item.size, duplicate };
   });
   const uploadKeyCounts = uploadPreviewBase.reduce((acc, item) => {
     if (item.meta) {
-      const key = `${item.meta.branchCode}_${item.meta.fileType}_${item.meta.periodKey}`;
+      const key = item.meta.identity;
       acc[key] = (acc[key] || 0) + 1;
     }
     return acc;
   }, {});
   const uploadPreview = uploadPreviewBase.map((item) => {
-    const uploadKey = item.meta ? `${item.meta.branchCode}_${item.meta.fileType}_${item.meta.periodKey}` : '';
+    const uploadKey = item.meta?.identity || '';
     return { ...item, uploadKey, duplicatedInBatch: Boolean(uploadKey && uploadKeyCounts[uploadKey] > 1) };
   });
   const selectedUploadSize = uploadPreview.reduce((sum, item) => sum + Number(item.size || 0), 0);
@@ -350,7 +395,7 @@ function ImportData() {
     {
       key: 'filename',
       ok: !hasInvalidName,
-      label: hasInvalidName ? 'Có file sai định dạng tên' : 'Tên file đúng chuẩn MACN_LOAI_yyyymmdd',
+      label: hasInvalidName ? 'Có file sai định dạng tên' : 'Tên file khớp quy tắc nguồn đã cấu hình',
     },
     {
       key: 'period',
@@ -360,7 +405,7 @@ function ImportData() {
     {
       key: 'batch-duplicate',
       ok: !hasDuplicateInBatch,
-      label: hasDuplicateInBatch ? 'Có file trùng chi nhánh, loại file và kỳ trong lượt chọn' : 'Không trùng file trong lượt chọn',
+      label: hasDuplicateInBatch ? 'Có file trùng tên trong lượt chọn' : 'Không trùng file trong lượt chọn',
     },
     {
       key: 'warehouse-duplicate',
@@ -412,7 +457,16 @@ function ImportData() {
     setLoadingPeriods(true);
     try {
       const { data } = await client.get('/imports/periods');
-      setPeriods(getArrayPayload(data));
+      const nextPeriods = getArrayPayload(data);
+      setPeriods(nextPeriods);
+      const readinessResponses = await Promise.allSettled(
+        nextPeriods.map((period) => client.get('/imports/source-readiness', { params: { period_key: period.period_key } })),
+      );
+      setReadinessByPeriod(Object.fromEntries(
+        readinessResponses.flatMap((result, index) => result.status === 'fulfilled'
+          ? [[nextPeriods[index].period_key, result.value.data]]
+          : []),
+      ));
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -851,7 +905,7 @@ function ImportData() {
             <CloudUploadOutlined />
           </p>
           <p className="ant-upload-text">Kéo thả nhiều file dữ liệu vào đây</p>
-          <p className="ant-upload-hint">Ví dụ: 2600_DP01_20260630.csv, 2600_LN01_20260630.csv, 2602_CN05_20260630.csv</p>
+          <p className="ant-upload-hint">Hỗ trợ DP01, LN01, CN05, PF14, BC06, BC29, KH02 và FTPLN theo quy tắc tên đã cấu hình</p>
         </Dragger>
 
         {uploadPreview.length ? (
@@ -1053,6 +1107,13 @@ function ImportData() {
                     {period.processed ? <Tag color="green">Đã xử lý {Number(period.processed_customer_count || 0).toLocaleString('vi-VN')} KH</Tag> : <Tag>Chưa xử lý</Tag>}
                     {period.needs_reprocess ? <Tag color="warning">Cần chạy lại xử lý</Tag> : null}
                     {period.running_job ? <Tag color="processing">Đang có job chạy</Tag> : null}
+                    {(() => {
+                      const ftpln = readinessByPeriod[period.period_key]?.sources?.find((item) => item.source_code === 'FTPLN');
+                      if (!ftpln?.received_file_count) return null;
+                      return ftpln.is_ready
+                        ? <Tag color="success">FTPLN đủ {ftpln.success_file_count}/{ftpln.expected_file_count} ngày-file</Tag>
+                        : <Tooltip title={`Thiếu: ${(ftpln.missing_dates || []).join(', ') || 'đang kiểm tra'}`}><Tag color="warning">FTPLN {ftpln.success_file_count}/{ftpln.expected_file_count} ngày-file</Tag></Tooltip>;
+                    })()}
                   </Space>
                   <Space wrap size={4}>
                     {(period.file_types || []).map((type) => (
@@ -1187,7 +1248,7 @@ function ImportData() {
                 <Space orientation="vertical" size={8}>
                   <Text strong>Kỳ dữ liệu: {deleteTarget.record.period_key} · {periodLabel(deleteTarget.record.period_key)}</Text>
                   <Text>
-                    Hành động này sẽ xóa toàn bộ file nguồn, dữ liệu chi tiết DP/LN/CN/PF, file bổ sung, trạng thái nguồn và kết quả xử lý của kỳ.
+                    Hành động này sẽ xóa toàn bộ file nguồn, dữ liệu chi tiết DP/LN/CN/PF/BC06/BC29/KH02/FTPLN, file bổ sung, trạng thái nguồn và kết quả xử lý của kỳ.
                   </Text>
                   {deleteTarget.record.processed ? (
                     <Tag color="warning">

@@ -1,5 +1,8 @@
 import shutil
 import threading
+import hashlib
+import json
+from uuid import uuid4
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -25,11 +28,15 @@ from app.imports.readers import DEFAULT_CHUNK_SIZE, iter_file_row_chunks
 from app.config import settings
 from app.database import SessionLocal
 from app.models import (
+    BC06CustomerClassification,
+    BC29CustomerCreditRisk,
     CN05CustomerService,
     Customer,
     DP01DepositAccount,
+    FTPLNDailyLoanFTP,
     ImportBatch,
     ImportFile,
+    KH02CustomerTransaction,
     LN01Loan,
     PF14AccountBalance,
 )
@@ -95,7 +102,16 @@ def copy_insert_mappings(db: Session, model, mappings: list[dict]) -> None:
 
 
 def delete_import_file_rows(db: Session, file_id: int) -> None:
-    for model in (DP01DepositAccount, CN05CustomerService, LN01Loan, PF14AccountBalance):
+    for model in (
+        DP01DepositAccount,
+        CN05CustomerService,
+        LN01Loan,
+        PF14AccountBalance,
+        BC06CustomerClassification,
+        BC29CustomerCreditRisk,
+        KH02CustomerTransaction,
+        FTPLNDailyLoanFTP,
+    ):
         db.execute(delete(model).where(model.import_file_id == file_id))
 
 
@@ -111,13 +127,19 @@ def get_or_create_batch(db: Session, meta: ImportFileMeta) -> ImportBatch:
     return batch
 
 
-def save_upload_file(upload_file: UploadFile, meta: ImportFileMeta) -> tuple[Path, int, str]:
+def save_upload_file(upload_file: UploadFile, meta: ImportFileMeta) -> tuple[Path, int, str, str]:
     UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    stored_filename = f"{meta.period_key}_{meta.branch_code}_{meta.file_type}_{upload_file.filename}"
+    stored_filename = (
+        f"{meta.period_key}_{meta.branch_code}_{meta.file_type}_{uuid4().hex[:12]}_{upload_file.filename}"
+    )
     file_path = UPLOAD_DIR / stored_filename
     with file_path.open("wb") as buffer:
         shutil.copyfileobj(upload_file.file, buffer, length=4 * 1024 * 1024)
-    return file_path, file_path.stat().st_size, stored_filename
+    digest = hashlib.sha256()
+    with file_path.open("rb") as source:
+        for block in iter(lambda: source.read(4 * 1024 * 1024), b""):
+            digest.update(block)
+    return file_path, file_path.stat().st_size, stored_filename, digest.hexdigest()
 
 
 def delete_uploaded_source_file(import_file: ImportFile) -> str | None:
@@ -164,7 +186,16 @@ def cleanup_after_success(db: Session, import_file: ImportFile) -> None:
         db.commit()
 
 
-def _create_import_file(db: Session, upload_file: UploadFile, meta: ImportFileMeta, batch: ImportBatch, file_path: Path, file_size: int, stored_filename: str) -> ImportFile:
+def _create_import_file(
+    db: Session,
+    upload_file: UploadFile,
+    meta: ImportFileMeta,
+    batch: ImportBatch,
+    file_path: Path,
+    file_size: int,
+    stored_filename: str,
+    content_sha256: str,
+) -> ImportFile:
     import_file = ImportFile(
         import_batch_id=batch.id,
         original_filename=upload_file.filename,
@@ -174,6 +205,12 @@ def _create_import_file(db: Session, upload_file: UploadFile, meta: ImportFileMe
         branch_code=meta.branch_code,
         period_key=meta.period_key,
         period_date=meta.period_date,
+        period_start=meta.period_start,
+        period_end=meta.period_end,
+        business_date=meta.business_date,
+        filename_suffix=meta.filename_suffix,
+        frequency=meta.frequency,
+        content_sha256=content_sha256,
         file_ext=meta.file_ext,
         file_size=file_size,
         status="processing",
@@ -183,6 +220,52 @@ def _create_import_file(db: Session, upload_file: UploadFile, meta: ImportFileMe
     db.commit()
     db.refresh(import_file)
     return import_file
+
+
+def ensure_unique_file_content(
+    db: Session,
+    meta: ImportFileMeta,
+    content_sha256: str,
+) -> None:
+    duplicate = (
+        db.query(ImportFile)
+        .filter(
+            ImportFile.branch_code == meta.branch_code,
+            ImportFile.file_type == meta.file_type,
+            ImportFile.period_key == meta.period_key,
+            ImportFile.content_sha256 == content_sha256,
+            ImportFile.status.notin_(["deleted", "replaced"]),
+        )
+        .first()
+    )
+    if duplicate:
+        raise ValueError(
+            f"Nội dung file đã tồn tại trong kho dưới tên {duplicate.original_filename}"
+        )
+
+
+def source_row_hash(raw: dict) -> str:
+    payload = json.dumps(json_safe_raw(raw), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def validate_source_identity(import_file: ImportFile, branch_code, source_date=None) -> None:
+    branch = clean_text(branch_code)
+    if branch and branch != import_file.branch_code:
+        raise ValueError(
+            f"Mã chi nhánh trong dữ liệu ({branch}) không khớp tên file ({import_file.branch_code})"
+        )
+    if source_date and import_file.file_type == "FTPLN" and source_date != import_file.business_date:
+        raise ValueError(
+            f"Ngày TRDT ({source_date}) không khớp ngày FTPLN trên tên file ({import_file.business_date})"
+        )
+    if source_date and import_file.file_type == "KH02":
+        if not import_file.period_start or not import_file.period_end:
+            raise ValueError("File KH02 thiếu metadata khoảng ngày")
+        if source_date < import_file.period_start or source_date > import_file.period_end:
+            raise ValueError(
+                f"Ngày TRDATE ({source_date}) nằm ngoài khoảng ngày trên tên file"
+            )
 
 
 def _upsert_customers_from_dp01(db: Session, rows: list[dict], period_key: str) -> None:
@@ -537,11 +620,190 @@ def _copy_pf14_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> 
     return len(mappings)
 
 
+def _import_bc06_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> int:
+    mappings = []
+    expected_month = import_file.period_key[:6]
+    for raw in rows:
+        branch_code = clean_text(raw.get("MA_CHI_NHANH")) or import_file.branch_code
+        validate_source_identity(import_file, branch_code)
+        classification_month = clean_text(raw.get("THANG_PHAN_LOAI"))
+        if classification_month and classification_month != expected_month:
+            raise ValueError(
+                f"THANG_PHAN_LOAI {classification_month} không khớp kỳ {expected_month} trên tên file"
+            )
+        mappings.append({
+            "import_file_id": import_file.id,
+            "import_batch_id": import_file.import_batch_id,
+            "period_key": import_file.period_key,
+            "period_date": import_file.period_date,
+            "branch_code": branch_code,
+            "branch_name": clean_text(raw.get("TEN_CHI_NHANH")),
+            "customer_code": clean_customer_code(raw.get("MA_KHACH_HANG")),
+            "customer_name": clean_text(raw.get("TEN_KHACH_HANG")),
+            "customer_type": clean_text(raw.get("LOAI_KHACH_HANG")),
+            "classification_month": classification_month,
+            "deposit_benefit_branch": parse_decimal(raw.get("LOI_ICH_TG_TAI_CN")),
+            "loan_benefit_branch": parse_decimal(raw.get("LOI_ICH_TV_TAI_CN")),
+            "service_benefit_branch": parse_decimal(raw.get("LOI_ICH_DV_TAI_CN")),
+            "term_deposit_avg_branch": parse_decimal(raw.get("SDBQ_TGCKH_CN")),
+            "demand_deposit_avg_branch": parse_decimal(raw.get("SDBQ_TGKKH_CN")),
+            "loan_avg_balance": parse_decimal(raw.get("SDBQ_TV")),
+            "benefit_score_branch": parse_decimal(raw.get("DIEM_LOI_ICH_CN")),
+            "balance_score_branch": parse_decimal(raw.get("DIEM_SDBQ_CN")),
+            "qualitative_score_branch": parse_decimal(raw.get("DIEM_DINH_TINH_CN")),
+            "customer_score_branch": parse_decimal(raw.get("DIEM_KH_CN")),
+            "additional_criteria_branch": clean_text(raw.get("TIEU_CHI_BS_CN")),
+            "segment_branch": clean_text(raw.get("NHOM_TAI_CN")),
+            "rank_branch": clean_text(raw.get("HANG_TAI_CN")),
+            "market_segment_branch": clean_text(raw.get("NHOM_TT_CN")),
+            "market_rank_branch": clean_text(raw.get("HANG_TT_CN")),
+            "additional_criteria_system": clean_text(raw.get("TIEU_CHI_BS_AGR")),
+            "segment_system": clean_text(raw.get("NHOM_AGR")),
+            "rank_system": clean_text(raw.get("HANG_AGR")),
+            "market_segment_system": clean_text(raw.get("NHOM_TT_AGR")),
+            "market_rank_system": clean_text(raw.get("HANG_TT_AGR")),
+            "adjustment_unit": clean_text(raw.get("DON_VI_DIEU_CHINH")),
+            "managing_unit": clean_text(raw.get("DON_VI_DAU_MOI")),
+            "raw_data": json_safe_raw(raw),
+        })
+    bulk_insert_in_chunks(db, BC06CustomerClassification, mappings)
+    return len(mappings)
+
+
+def _import_bc29_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> int:
+    mappings = []
+    for raw in rows:
+        branch_code = clean_text(raw.get("MA_CN")) or import_file.branch_code
+        validate_source_identity(import_file, branch_code)
+        mappings.append({
+            "import_file_id": import_file.id,
+            "import_batch_id": import_file.import_batch_id,
+            "period_key": import_file.period_key,
+            "period_date": import_file.period_date,
+            "branch_code": branch_code,
+            "customer_code": clean_customer_code(raw.get("MA_KH")),
+            "customer_name": clean_text(raw.get("TEN_KH")),
+            "debt_group": clean_text(raw.get("NHOM_NO")),
+            "total_outstanding": parse_decimal(raw.get("TONG_DN")),
+            "provision_base_amount": parse_decimal(raw.get("TONG_DN_PHAI_TRICH")),
+            "period_provision_amount": parse_decimal(raw.get("SO_TRICH_LAP_TRONG_KY")),
+            "classification": clean_text(raw.get("XEP_LOAI")),
+            "total_collateral_deductible_value": parse_decimal(raw.get("TONG_GTKT_TSDB")),
+            "total_collateral_value": parse_decimal(raw.get("TONG_TSDB")),
+            "real_estate_collateral": parse_decimal(raw.get("BDS")),
+            "movable_asset_collateral": parse_decimal(raw.get("DS")),
+            "valuable_paper_collateral": parse_decimal(raw.get("GTCG")),
+            "other_collateral": parse_decimal(raw.get("KHAC")),
+            "principal_overdue_days": parse_int(raw.get("SO_NGAY_QHG")),
+            "interest_overdue_days": parse_int(raw.get("SO_NGAY_QHL")),
+            "risk_handling_date": parse_yyyymmdd(raw.get("NGAY_XLRR")),
+            "accrued_interest": parse_decimal(raw.get("LAI_DU_THU")),
+            "off_balance_outstanding": parse_decimal(raw.get("DN_NGOAI_BANG")),
+            "credit_outstanding": parse_decimal(raw.get("DN_TIN_DUNG")),
+            "overdraft_outstanding": parse_decimal(raw.get("DN_THAU_CHI")),
+            "handled_risk_amount": parse_decimal(raw.get("SO_TIEN_DA_XLRR")),
+            "employee_code": clean_text(raw.get("MA_NHAN_VIEN")),
+            "employee_unit": clean_text(raw.get("DON_VI_CONG_TAC")),
+            "raw_data": json_safe_raw(raw),
+        })
+    bulk_insert_in_chunks(db, BC29CustomerCreditRisk, mappings)
+    return len(mappings)
+
+
+def _import_kh02_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> int:
+    mappings = []
+    for raw in rows:
+        transaction_date = parse_yyyymmdd(raw.get("TRDATE"))
+        if not transaction_date:
+            raise ValueError(f"TRDATE không hợp lệ: {raw.get('TRDATE')}")
+        branch_code = clean_text(raw.get("TRBRCD")) or import_file.branch_code
+        validate_source_identity(import_file, branch_code, transaction_date)
+        mappings.append({
+            "import_file_id": import_file.id,
+            "import_batch_id": import_file.import_batch_id,
+            "period_key": import_file.period_key,
+            "transaction_date": transaction_date,
+            "branch_code": branch_code,
+            "customer_code": clean_customer_code(raw.get("CUSTSEQ")),
+            "customer_name": clean_text(raw.get("CUSTNAME")),
+            "transaction_user": clean_text(raw.get("USERHT")),
+            "daily_sequence": clean_text(raw.get("DYSEQ")),
+            "daily_transaction_sequence": clean_text(raw.get("DYTRSEQ")),
+            "account_code": clean_text(raw.get("ACCTCD")),
+            "business_code": clean_text(raw.get("BUSCD")),
+            "unit_business_code": clean_text(raw.get("UNITBUSCD")),
+            "transaction_code": clean_text(raw.get("TRCD")),
+            "transaction_reference_type": clean_text(raw.get("TRREF")),
+            "transaction_sequence": clean_text(raw.get("TRSEQ")),
+            "transaction_counterparty_code": clean_text(raw.get("TRCTCD")),
+            "credit_officer_code": clean_text(raw.get("CBTD")),
+            "debit_amount": parse_decimal(raw.get("DRAMT")),
+            "credit_amount": parse_decimal(raw.get("CRAMT")),
+            "source_row_hash": source_row_hash(raw),
+            "raw_data": json_safe_raw(raw),
+        })
+    bulk_insert_in_chunks(db, KH02CustomerTransaction, mappings)
+    return len(mappings)
+
+
+def _import_ftpln_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> int:
+    mappings = []
+    for raw in rows:
+        business_date = parse_yyyymmdd(raw.get("TRDT"))
+        if not business_date:
+            raise ValueError(f"TRDT không hợp lệ: {raw.get('TRDT')}")
+        branch_code = clean_text(raw.get("BRCD")) or import_file.branch_code
+        validate_source_identity(import_file, branch_code, business_date)
+        mappings.append({
+            "import_file_id": import_file.id,
+            "import_batch_id": import_file.import_batch_id,
+            "period_key": import_file.period_key,
+            "business_date": business_date,
+            "branch_code": branch_code,
+            "parent_branch_code": clean_text(raw.get("PRNTBRCD")),
+            "business_code": clean_text(raw.get("BUSCD")),
+            "unit_business_code": clean_text(raw.get("UNTBUSCD")),
+            "credit_contract_number": clean_text(raw.get("SO_HDTD")),
+            "transaction_reference": clean_text(raw.get("TRREF")),
+            "transaction_sequence": clean_text(raw.get("TRSEQ")),
+            "reference_number": clean_text(raw.get("REFNO")),
+            "account_code": clean_text(raw.get("NACCTCD")),
+            "ftp_code": clean_text(raw.get("FTPCD")),
+            "customer_code": clean_customer_code(raw.get("CUSTSEQ")),
+            "customer_name": clean_text(raw.get("CUSTNM")),
+            "customer_type": clean_text(raw.get("CUSTTP")),
+            "term_type_code": clean_text(raw.get("TIMETPCD")),
+            "customer_segment": clean_text(raw.get("PLKH")),
+            "ftp_rate": parse_decimal(raw.get("FTP")),
+            "interest_rate": parse_decimal(raw.get("INTRT")),
+            "ftp_adjustment": parse_decimal(raw.get("MUCFTPDC")),
+            "opening_date": parse_yyyymmdd(raw.get("OPNDT")),
+            "maturity_date": parse_yyyymmdd(raw.get("MATDT")),
+            "currency_code": clean_text(raw.get("CCY")),
+            "ledger_balance": parse_decimal(raw.get("LDRBAL")),
+            "capital_price_amount": parse_decimal(raw.get("CPAMT")),
+            "accumulated_capital_price": parse_decimal(raw.get("CPLKAMT")),
+            "economic_sector_code": clean_text(raw.get("ECONO_SECT")),
+            "udp_code": clean_text(raw.get("UDP")),
+            "transaction_counterparty_code": clean_text(raw.get("TRCTCD")),
+            "credit_officer_code": clean_text(raw.get("CBTD")),
+            "final_acquisition_code": clean_text(raw.get("AQCCDFIN")),
+            "final_rank": clean_text(raw.get("HANGFINAL")),
+            "raw_data": json_safe_raw(raw),
+        })
+    bulk_insert_in_chunks(db, FTPLNDailyLoanFTP, mappings)
+    return len(mappings)
+
+
 COPY_CHUNK_HANDLERS = {
     "DP01": _copy_dp01_chunk,
     "CN05": _copy_cn05_chunk,
     "LN01": _copy_ln01_chunk,
     "PF14": _copy_pf14_chunk,
+    "BC06": _import_bc06_chunk,
+    "BC29": _import_bc29_chunk,
+    "KH02": _import_kh02_chunk,
+    "FTPLN": _import_ftpln_chunk,
 }
 
 
@@ -565,7 +827,7 @@ def import_file_with_copy_chunks(db: Session, import_file: ImportFile) -> int:
 def import_uploaded_file(db: Session, upload_file: UploadFile, replace_existing: bool = False) -> ImportFile:
     meta = parse_import_filename(upload_file.filename)
     batch = get_or_create_batch(db, meta)
-    file_path, file_size, stored_filename = save_upload_file(upload_file, meta)
+    file_path, file_size, stored_filename, content_sha256 = save_upload_file(upload_file, meta)
 
     if replace_existing:
         existing = (
@@ -585,7 +847,15 @@ def import_uploaded_file(db: Session, upload_file: UploadFile, replace_existing:
             db.flush()
 
     try:
-        import_file = _create_import_file(db, upload_file, meta, batch, file_path, file_size, stored_filename)
+        ensure_unique_file_content(db, meta, content_sha256)
+    except Exception:
+        file_path.unlink(missing_ok=True)
+        raise
+
+    try:
+        import_file = _create_import_file(
+            db, upload_file, meta, batch, file_path, file_size, stored_filename, content_sha256
+        )
     except IntegrityError as exc:
         db.rollback()
         raise ValueError("File này đã được import. Nếu muốn import lại, hãy bật replace_existing.") from exc
@@ -619,7 +889,7 @@ def import_uploaded_file(db: Session, upload_file: UploadFile, replace_existing:
 def queue_uploaded_file(db: Session, upload_file: UploadFile, replace_existing: bool = False) -> ImportFile:
     meta = parse_import_filename(upload_file.filename)
     batch = get_or_create_batch(db, meta)
-    file_path, file_size, stored_filename = save_upload_file(upload_file, meta)
+    file_path, file_size, stored_filename, content_sha256 = save_upload_file(upload_file, meta)
 
     if replace_existing:
         existing = (
@@ -638,7 +908,15 @@ def queue_uploaded_file(db: Session, upload_file: UploadFile, replace_existing: 
             db.delete(existing)
             db.flush()
 
-    import_file = _create_import_file(db, upload_file, meta, batch, file_path, file_size, stored_filename)
+    try:
+        ensure_unique_file_content(db, meta, content_sha256)
+    except Exception:
+        file_path.unlink(missing_ok=True)
+        raise
+
+    import_file = _create_import_file(
+        db, upload_file, meta, batch, file_path, file_size, stored_filename, content_sha256
+    )
     import_file.status = "queued"
     import_file.started_at = None
     import_file.finished_at = None

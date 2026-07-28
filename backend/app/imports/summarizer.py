@@ -1,13 +1,19 @@
+import calendar
+
 from sqlalchemy import delete, distinct, func, text
 from sqlalchemy.orm import Session
 
 from app.customer_processing import apply_transfer_inflow_to_summaries
 from app.models import (
+    BC06CustomerClassification,
+    BC29CustomerCreditRisk,
     CN05CustomerService,
     CustomerPeriodSummary,
     DP01DepositAccount,
+    FTPLNDailyLoanFTP,
     ImportBatch,
     ImportFile,
+    KH02CustomerTransaction,
     LN01Loan,
     PF14AccountBalance,
     ReportSourceStatus,
@@ -64,6 +70,38 @@ SOURCE_CONFIGS = [
         ],
     },
     {
+        "code": "BC06",
+        "name": "Phân loại và lợi ích khách hàng",
+        "table": "bc06_customer_classifications",
+        "model": BC06CustomerClassification,
+        "customer_field": "customer_code",
+        "fields": ["MA_KHACH_HANG", "NHOM_TAI_CN", "HANG_TAI_CN", "LOI_ICH_TG_TAI_CN", "LOI_ICH_TV_TAI_CN", "LOI_ICH_DV_TAI_CN"],
+    },
+    {
+        "code": "BC29",
+        "name": "Nợ xấu, XLRR và tài sản bảo đảm",
+        "table": "bc29_customer_credit_risks",
+        "model": BC29CustomerCreditRisk,
+        "customer_field": "customer_code",
+        "fields": ["MA_KH", "NHOM_NO", "TONG_DN", "SO_TRICH_LAP_TRONG_KY", "SO_TIEN_DA_XLRR"],
+    },
+    {
+        "code": "KH02",
+        "name": "Giao dịch khách hàng theo tháng",
+        "table": "kh02_customer_transactions",
+        "model": KH02CustomerTransaction,
+        "customer_field": "customer_code",
+        "fields": ["TRDATE", "CUSTSEQ", "ACCTCD", "BUSCD", "TRCD", "DRAMT", "CRAMT"],
+    },
+    {
+        "code": "FTPLN",
+        "name": "FTP khoản vay hằng ngày",
+        "table": "ftpln_daily_loan_ftp",
+        "model": FTPLNDailyLoanFTP,
+        "customer_field": "customer_code",
+        "fields": ["TRDT", "CUSTSEQ", "FTPCD", "FTP", "LDRBAL", "CPAMT", "CPLKAMT"],
+    },
+    {
         "code": "MANUAL",
         "name": "Dữ liệu bổ sung",
         "table": None,
@@ -105,9 +143,10 @@ def refresh_report_sources(db: Session, period_key: str) -> None:
         model = config["model"]
         if model is not None:
             row_count = db.query(func.count(model.id)).filter(model.period_key == period_key).scalar() or 0
+            customer_column = getattr(model, config.get("customer_field", "ma_kh_chuan"))
             customer_count = (
-                db.query(func.count(distinct(model.ma_kh_chuan)))
-                .filter(model.period_key == period_key, model.ma_kh_chuan.isnot(None))
+                db.query(func.count(distinct(customer_column)))
+                .filter(model.period_key == period_key, customer_column.isnot(None))
                 .scalar()
                 or 0
             )
@@ -115,6 +154,28 @@ def refresh_report_sources(db: Session, period_key: str) -> None:
         if source_code == "MANUAL":
             status = "planned"
             message = "Nguồn bổ sung thủ công sẽ cấu hình ở giai đoạn sau."
+        elif source_code == "FTPLN" and success_files:
+            branch_codes = {file.branch_code for file in success_files}
+            expected_days = (
+                calendar.monthrange(period_date.year, period_date.month)[1]
+                if period_date
+                else 0
+            )
+            successful_day_keys = {
+                (file.branch_code, file.business_date)
+                for file in success_files
+                if file.business_date is not None
+            }
+            expected_count = expected_days * len(branch_codes)
+            if not error_files and expected_count > 0 and len(successful_day_keys) == expected_count:
+                status = "ready"
+                message = f"Đã đủ {expected_days}/{expected_days} ngày cho {len(branch_codes)} chi nhánh."
+            else:
+                status = "partial"
+                message = (
+                    f"Mới có {len(successful_day_keys)}/{expected_count or expected_days} "
+                    "file-ngày FTPLN thành công; chưa sẵn sàng đối chiếu tháng."
+                )
         elif waiting_files:
             status = "processing"
             message = "Đang có file chờ xử lý hoặc đang xử lý."
