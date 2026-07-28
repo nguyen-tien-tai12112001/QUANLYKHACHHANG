@@ -637,6 +637,60 @@ body {
   color: var(--muted);
 }
 
+.warehouse-metric {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid transparent;
+  min-height: 112px;
+}
+
+.warehouse-metric::after {
+  position: absolute;
+  right: -22px;
+  bottom: -30px;
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: 0.08;
+  content: "";
+}
+
+.warehouse-metric--blue {
+  color: #2563a8;
+  border-color: #c9ddf4;
+  background: linear-gradient(135deg, #f7fbff, #eaf4ff);
+}
+
+.warehouse-metric--green {
+  color: #218653;
+  border-color: #c8ead7;
+  background: linear-gradient(135deg, #f7fff9, #e9f8ef);
+}
+
+.warehouse-metric--purple {
+  color: #6f42a8;
+  border-color: #dfd0f2;
+  background: linear-gradient(135deg, #fcf9ff, #f2eafd);
+}
+
+.warehouse-metric--gold {
+  color: #a56b08;
+  border-color: #f0ddb3;
+  background: linear-gradient(135deg, #fffdf7, #fff4d8);
+}
+
+.warehouse-metric--red {
+  color: #a72b3f;
+  border-color: #f0cbd2;
+  background: linear-gradient(135deg, #fffafb, #fcecef);
+}
+
+.warehouse-metric .ant-statistic-content,
+.warehouse-metric .ant-statistic-content-prefix {
+  color: currentColor;
+}
+
 .status-card {
   min-height: 150px;
 }
@@ -695,6 +749,37 @@ body {
   border-color: #ead6dc;
   background: #ffffff;
   overflow: hidden;
+}
+
+.warehouse-filter-collapse {
+  overflow: hidden;
+  border: 1px solid #e1e8f0;
+  border-radius: 14px;
+  background: #fff;
+}
+
+.warehouse-filter-collapse > .ant-collapse-item > .ant-collapse-header {
+  align-items: center;
+  padding: 16px 20px;
+  background: linear-gradient(90deg, #f8fafc, #fff);
+}
+
+.warehouse-filter-collapse .ant-collapse-content-box {
+  padding: 18px 20px 8px;
+}
+
+.warehouse-filter-collapse .ant-form-item {
+  margin-bottom: 12px;
+}
+
+.warehouse-stalled-card {
+  border-color: #f0b8c2;
+  background: #fffafb;
+}
+
+.warehouse-stalled-card .ant-card-head {
+  color: #a72b3f;
+  background: #fff1f3;
 }
 
 .warehouse-filter-card .ant-card-head {
@@ -970,6 +1055,14 @@ body {
   border-color: var(--agri-red);
   box-shadow: 0 10px 24px rgba(143, 20, 56, 0.12);
   transform: translateY(-1px);
+}
+
+.period-tile--selected,
+.period-tile--selected:hover {
+  border-color: #8f1438;
+  background: linear-gradient(145deg, #fff, #fff0f4);
+  box-shadow: 0 0 0 3px rgb(143 20 56 / 12%), 0 12px 28px rgb(143 20 56 / 14%);
+  transform: translateY(-2px);
 }
 
 .source-tile {

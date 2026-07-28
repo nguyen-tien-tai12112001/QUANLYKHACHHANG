@@ -1,7 +1,7 @@
 import calendar
 import os
 import subprocess
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from urllib.parse import unquote
@@ -354,7 +354,42 @@ def list_periods(db: Session = Depends(get_db)):
         ImportFile.branch_code,
         ImportFile.file_size,
         ImportFile.status,
+        ImportFile.business_date,
     ).all()
+    latest_success_counts = {}
+    success_jobs = (
+        db.query(
+            CustomerProcessingJob.period_key,
+            CustomerProcessingJob.total_customers,
+            CustomerProcessingJob.processed_customers,
+        )
+        .filter(CustomerProcessingJob.status == "success")
+        .order_by(desc(CustomerProcessingJob.created_at))
+        .all()
+    )
+    for job_period, total_customers, processed_customers in success_jobs:
+        latest_success_counts.setdefault(
+            job_period,
+            int(processed_customers or total_customers or 0),
+        )
+    running_import_periods = {
+        row[0]
+        for row in db.query(ImportFile.period_key)
+        .filter(ImportFile.status.in_(RUNNING_IMPORT_STATUSES))
+        .distinct()
+        .all()
+    }
+    running_processing_periods = {
+        row[0]
+        for row in db.query(CustomerProcessingJob.period_key)
+        .filter(CustomerProcessingJob.status.in_(RUNNING_PROCESSING_STATUSES))
+        .distinct()
+        .all()
+    }
+    comparison_period_keys = sorted(
+        (key for key, count in latest_success_counts.items() if count > 0),
+        reverse=True,
+    )[:6]
     files_by_period = {}
     for file in files:
         files_by_period.setdefault(file.period_key, []).append(file)
@@ -365,7 +400,16 @@ def list_periods(db: Session = Depends(get_db)):
         active_files = [file for file in period_files if file.status not in {"deleted", "replaced", "deleting"}]
         file_types = sorted({file.file_type for file in active_files})
         branches = sorted({file.branch_code for file in active_files})
-        processed_count = processed_customer_count(db, item.period_key)
+        processed_count = latest_success_counts.get(item.period_key, 0)
+        ftpln_files = [file for file in active_files if file.file_type == "FTPLN"]
+        ftpln_branches = {file.branch_code for file in ftpln_files}
+        expected_days = calendar.monthrange(item.period_date.year, item.period_date.month)[1]
+        ftpln_success_keys = {
+            (file.branch_code, file.business_date)
+            for file in ftpln_files
+            if file.status == "success" and file.business_date is not None
+        }
+        ftpln_expected_count = expected_days * len(ftpln_branches) if ftpln_branches else 0
         payload = serialize_model(item, ["id", "period_key", "period_date", "status", "description", "note", "created_at"])
         payload.update(
             {
@@ -377,8 +421,13 @@ def list_periods(db: Session = Depends(get_db)):
                 "processed": processed_count > 0,
                 "processed_customer_count": processed_count,
                 "needs_reprocess": item.status == "needs_reprocess",
-                "running_job": has_running_period_jobs(db, item.period_key),
-                "comparison_periods": comparison_periods_for_delete_warning(db, item.period_key) if processed_count > 0 else [],
+                "running_job": item.period_key in running_import_periods or item.period_key in running_processing_periods,
+                "comparison_periods": [key for key in comparison_period_keys if key != item.period_key] if processed_count > 0 else [],
+                "ftpln_readiness": {
+                    "success_file_count": len(ftpln_success_keys),
+                    "expected_file_count": ftpln_expected_count,
+                    "is_ready": bool(ftpln_expected_count) and len(ftpln_success_keys) == ftpln_expected_count,
+                },
             }
         )
         result.append(payload)
@@ -481,6 +530,43 @@ def recover_jobs(period_key: str | None = Query(default=None)):
         "queued_count": queued_count,
         "message": "Đã đưa job import bị kẹt về hàng chờ xử lý lại",
     }
+
+
+@router.get("/jobs/stalled")
+def list_stalled_jobs(
+    period_key: str | None = Query(default=None),
+    stale_minutes: int = Query(default=15, ge=5, le=1440),
+    db: Session = Depends(get_db),
+):
+    threshold = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
+    query = db.query(ImportFile).filter(
+        or_(
+            (ImportFile.status == "processing") & (ImportFile.started_at < threshold),
+            (ImportFile.status == "queued") & (ImportFile.uploaded_at < threshold),
+        )
+    )
+    if period_key:
+        query = query.filter(ImportFile.period_key == period_key)
+    rows = query.order_by(ImportFile.uploaded_at).all()
+    return [
+        {
+            "id": item.id,
+            "original_filename": item.original_filename,
+            "file_type": item.file_type,
+            "branch_code": item.branch_code,
+            "period_key": item.period_key,
+            "status": item.status,
+            "started_at": serialize_value(item.started_at),
+            "uploaded_at": serialize_value(item.uploaded_at),
+            "error_message": item.error_message,
+            "stalled_reason": item.error_message or (
+                f"Đang xử lý quá {stale_minutes} phút nhưng chưa hoàn tất"
+                if item.status == "processing"
+                else f"Đã chờ quá {stale_minutes} phút nhưng worker chưa nhận"
+            ),
+        }
+        for item in rows
+    ]
 
 
 @router.get("/source-readiness")

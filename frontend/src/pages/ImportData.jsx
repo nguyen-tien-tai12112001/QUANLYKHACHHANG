@@ -4,6 +4,7 @@ import {
   Card,
   Checkbox,
   Col,
+  Collapse,
   DatePicker,
   Empty,
   Form,
@@ -275,13 +276,12 @@ function ImportData() {
   const [fileList, setFileListState] = useState(warehouseSession.fileList);
   const [files, setFiles] = useState([]);
   const [periods, setPeriods] = useState([]);
-  const [readinessByPeriod, setReadinessByPeriod] = useState({});
+  const [stalledJobs, setStalledJobs] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [loadingPeriods, setLoadingPeriods] = useState(false);
   const [uploading, setUploadingState] = useState(warehouseSession.uploading);
   const [importJobs, setImportJobsState] = useState(warehouseSession.importJobs);
   const [resultOpen, setResultOpenState] = useState(warehouseSession.resultOpen);
-  const [summarizing, setSummarizing] = useState(false);
   const [recoveringJobs, setRecoveringJobs] = useState(false);
   const [deletingIds, setDeletingIds] = useState([]);
   const [deletingPeriods, setDeletingPeriods] = useState([]);
@@ -457,16 +457,7 @@ function ImportData() {
     setLoadingPeriods(true);
     try {
       const { data } = await client.get('/imports/periods');
-      const nextPeriods = getArrayPayload(data);
-      setPeriods(nextPeriods);
-      const readinessResponses = await Promise.allSettled(
-        nextPeriods.map((period) => client.get('/imports/source-readiness', { params: { period_key: period.period_key } })),
-      );
-      setReadinessByPeriod(Object.fromEntries(
-        readinessResponses.flatMap((result, index) => result.status === 'fulfilled'
-          ? [[nextPeriods[index].period_key, result.value.data]]
-          : []),
-      ));
+      setPeriods(getArrayPayload(data));
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -474,8 +465,20 @@ function ImportData() {
     }
   }
 
+  async function loadStalledJobs() {
+    try {
+      const periodKey = form.getFieldValue('period_key');
+      const { data } = await client.get('/imports/jobs/stalled', {
+        params: periodKey ? { period_key: periodKey } : {},
+      });
+      setStalledJobs(getArrayPayload(data));
+    } catch {
+      setStalledJobs([]);
+    }
+  }
+
   async function refreshAll() {
-    await Promise.all([loadFiles(), loadPeriods()]);
+    await Promise.all([loadFiles(), loadPeriods(), loadStalledJobs()]);
   }
 
   function updateJob(uid, patch) {
@@ -603,23 +606,6 @@ function ImportData() {
       } else {
         setDeletingIds((ids) => ids.filter((id) => id !== targetId));
       }
-    }
-  }
-
-  async function summarizeSelectedPeriod() {
-    const periodKey = form.getFieldValue('period_key');
-    if (!periodKey) {
-      message.warning('Chọn một kỳ dữ liệu trước khi tổng hợp');
-      return;
-    }
-    setSummarizing(true);
-    try {
-      const { data } = await client.post(`/imports/summarize/${periodKey}`, null, { timeout: 30 * 60 * 1000 });
-      message.success(`Đã tổng hợp ${data.summary_rows || 0} khách hàng cho kỳ ${periodKey}`);
-    } catch (error) {
-      message.error(error.response?.data?.detail || error.message);
-    } finally {
-      setSummarizing(false);
     }
   }
 
@@ -800,6 +786,7 @@ function ImportData() {
   useEffect(() => {
     const timer = window.setTimeout(() => {
       loadFiles();
+      loadStalledJobs();
     }, 450);
     return () => window.clearTimeout(timer);
   }, [JSON.stringify(filterValues || {})]);
@@ -863,37 +850,34 @@ function ImportData() {
         <div>
           <Tag color="gold">Kho dữ liệu theo kỳ</Tag>
           <Title level={2}>Quản trị file dữ liệu khách hàng</Title>
-          <Paragraph>
-            Kỳ dữ liệu được tự động trích từ tên file. Khi chọn nhiều file, toàn bộ file phải cùng một ngày chốt,
-            ví dụ 20260630 là kỳ Tháng 6/2026.
-          </Paragraph>
+
         </div>
         <DatabaseOutlined className="brand-panel-icon" />
       </section>
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={8} xl={5}>
-          <Card className="metric-card">
+          <Card className="metric-card warehouse-metric warehouse-metric--blue">
             <Statistic title="Kỳ dữ liệu" value={periods.length} prefix={<FolderOpenOutlined />} loading={loadingPeriods} />
           </Card>
         </Col>
         <Col xs={24} md={8} xl={5}>
-          <Card className="metric-card">
+          <Card className="metric-card warehouse-metric warehouse-metric--green">
             <Statistic title="File đang dùng" value={activeFiles.length} prefix={<FileDoneOutlined />} loading={loadingFiles} />
           </Card>
         </Col>
         <Col xs={24} md={8} xl={5}>
-          <Card className="metric-card">
+          <Card className="metric-card warehouse-metric warehouse-metric--purple">
             <Statistic title="Chi nhánh" value={branchCount} prefix={<BankOutlined />} loading={loadingFiles} />
           </Card>
         </Col>
         <Col xs={24} md={8} xl={5}>
-          <Card className="metric-card">
+          <Card className="metric-card warehouse-metric warehouse-metric--gold">
             <Statistic title="Tổng dung lượng" value={formatBytes(totalActiveSize)} prefix={<DatabaseOutlined />} loading={loadingFiles} />
           </Card>
         </Col>
         <Col xs={24} md={8} xl={4}>
-          <Card className="metric-card">
+          <Card className="metric-card warehouse-metric warehouse-metric--red">
             <Statistic title="Lịch sử xóa/thay thế" value={deletedFiles.length} prefix={<HistoryOutlined />} loading={loadingFiles} />
           </Card>
         </Col>
@@ -970,9 +954,12 @@ function ImportData() {
         <ImportJobTimeline jobs={importJobs} />
       </Card>
 
-      <Card
-        title={
-          <Space size={12} className="warehouse-filter-title">
+      <Collapse
+        className="warehouse-filter-collapse"
+        items={[{
+          key: 'filters',
+          label: (
+            <Space size={12} className="warehouse-filter-title">
             <span className="warehouse-filter-title-icon">
               <FilterOutlined />
             </span>
@@ -980,11 +967,10 @@ function ImportData() {
               <Text strong>Bộ lọc kho dữ liệu</Text>
               <Text type="secondary">Tìm file theo kỳ, chi nhánh, trạng thái và thời gian upload</Text>
             </Space>
-          </Space>
-        }
-        className="warehouse-filter-card"
-      >
-        <Form form={form} layout="vertical" initialValues={{ period_key: '', file_type: '', branch_code: '', status: '' }}>
+            </Space>
+          ),
+          children: (
+            <Form form={form} layout="vertical" initialValues={{ period_key: '', file_type: '', branch_code: '', status: '' }}>
           <div className="warehouse-filter-grid">
             <div className="warehouse-filter-main">
               <Form.Item label="Tìm kiếm file" name="keyword">
@@ -1034,9 +1020,6 @@ function ImportData() {
 
           <div className="warehouse-filter-toolbar">
             <Space wrap>
-              <Button type="primary" size="large" icon={<SearchOutlined />} onClick={loadFiles}>
-                Lọc dữ liệu
-              </Button>
               <Button
                 size="large"
                 icon={<ReloadOutlined />}
@@ -1045,24 +1028,36 @@ function ImportData() {
                   refreshAll();
                 }}
               >
-                Tải lại kho
-              </Button>
-              <Button size="large" loading={recoveringJobs} icon={<ReloadOutlined />} onClick={recoverStalledJobs}>
-                Khôi phục job kẹt
+                Xóa bộ lọc
               </Button>
             </Space>
-            <Button
-              size="large"
-              icon={<DatabaseOutlined />}
-              loading={summarizing}
-              disabled={!selectedPeriod}
-              onClick={summarizeSelectedPeriod}
-            >
-              Tổng hợp kỳ
-            </Button>
           </div>
-        </Form>
-      </Card>
+            </Form>
+          ),
+        }]}
+      />
+
+      {stalledJobs.length ? (
+        <Card
+          className="warehouse-stalled-card"
+          title={<Space><ExclamationCircleOutlined /> Job import đang bị kẹt ({stalledJobs.length})</Space>}
+          extra={<Button type="primary" danger loading={recoveringJobs} icon={<ReloadOutlined />} onClick={recoverStalledJobs}>Chạy lại job kẹt</Button>}
+        >
+          <Table
+            size="small"
+            rowKey="id"
+            pagination={false}
+            dataSource={stalledJobs}
+            columns={[
+              { title: 'File', dataIndex: 'original_filename' },
+              { title: 'Kỳ', dataIndex: 'period_key', width: 100 },
+              { title: 'Nguồn', dataIndex: 'file_type', width: 90, render: fileTypeTag },
+              { title: 'Trạng thái', dataIndex: 'status', width: 120, render: statusTag },
+              { title: 'Lý do nhận diện kẹt', dataIndex: 'stalled_reason' },
+            ]}
+          />
+        </Card>
+      ) : null}
 
       <Card title="Các kỳ dữ liệu">
         <Row gutter={[12, 12]}>
@@ -1072,15 +1067,21 @@ function ImportData() {
                 <div
                   role="button"
                   tabIndex={0}
-                  className="period-tile"
+                  className={`period-tile${selectedPeriod === period.period_key ? ' period-tile--selected' : ''}`}
                   onClick={() => {
                     form.setFieldsValue({ period_key: period.period_key, file_type: '' });
-                    setTimeout(loadFiles, 0);
+                    setTimeout(() => {
+                      loadFiles();
+                      loadStalledJobs();
+                    }, 0);
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter') {
                       form.setFieldsValue({ period_key: period.period_key, file_type: '' });
-                      setTimeout(loadFiles, 0);
+                      setTimeout(() => {
+                        loadFiles();
+                        loadStalledJobs();
+                      }, 0);
                     }
                   }}
                 >
@@ -1108,8 +1109,8 @@ function ImportData() {
                     {period.needs_reprocess ? <Tag color="warning">Cần chạy lại xử lý</Tag> : null}
                     {period.running_job ? <Tag color="processing">Đang có job chạy</Tag> : null}
                     {(() => {
-                      const ftpln = readinessByPeriod[period.period_key]?.sources?.find((item) => item.source_code === 'FTPLN');
-                      if (!ftpln?.received_file_count) return null;
+                      const ftpln = period.ftpln_readiness;
+                      if (!ftpln?.expected_file_count) return null;
                       return ftpln.is_ready
                         ? <Tag color="success">FTPLN đủ {ftpln.success_file_count}/{ftpln.expected_file_count} ngày-file</Tag>
                         : <Tooltip title={`Thiếu: ${(ftpln.missing_dates || []).join(', ') || 'đang kiểm tra'}`}><Tag color="warning">FTPLN {ftpln.success_file_count}/{ftpln.expected_file_count} ngày-file</Tag></Tooltip>;
@@ -1123,7 +1124,7 @@ function ImportData() {
                     ))}
                   </Space>
                   <Space wrap size={4}>
-                    {(period.branches || []).slice(0, 5).map((branch) => (
+                    {(period.branches || []).map((branch) => (
                       <Tag key={branch}>{branch}</Tag>
                     ))}
                   </Space>
