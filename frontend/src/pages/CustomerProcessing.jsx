@@ -276,17 +276,37 @@ function CustomerProcessing() {
       render: (_, row) => <Space size={[4, 4]} wrap>{requiredFileTags(row)}</Space>,
     },
     {
+      title: 'Phạm vi chi nhánh',
+      key: 'branches',
+      width: 170,
+      render: (_, row) => (
+        <Space orientation="vertical" size={2}>
+          <Text strong>{row.ready_branch_count || 0}/{row.branch_count || 0} chi nhánh đủ file</Text>
+          <Text type="secondary" ellipsis={{ tooltip: (row.branch_codes || []).join(', ') }}>
+            {(row.branch_codes || []).join(', ') || 'Chưa xác định'}
+          </Text>
+        </Space>
+      ),
+    },
+    {
       title: 'Độ sẵn sàng',
       key: 'ready',
-      width: 180,
+      width: 210,
       render: (_, row) => (
         <Space orientation="vertical" size={2} style={{ width: '100%' }}>
           <Progress
-            percent={Math.round((row.available_required_file_count / row.required_file_count) * 100)}
+            percent={row.branch_readiness_percent || 0}
             size="small"
-            status={row.is_ready ? 'success' : 'active'}
+            status={row.is_fully_ready ? 'success' : 'active'}
           />
-          <Text type="secondary">{row.available_required_file_count}/{row.required_file_count} nhóm file</Text>
+          <Text type="secondary">
+            {row.available_matrix_count || 0}/{row.required_matrix_count || 0} file bắt buộc
+          </Text>
+          {row.missing_required_files?.length ? (
+            <Tooltip title={row.missing_required_files.map((item) => `${item.file_type}/${item.branch_code}`).join(', ')}>
+              <Tag color="warning">Thiếu {row.missing_required_files.length} file</Tag>
+            </Tooltip>
+          ) : null}
         </Space>
       ),
     },
@@ -370,6 +390,7 @@ function CustomerProcessing() {
           onRow={(row) => ({
             onClick: () => selectPeriod(row.period_key),
           })}
+          scroll={{ x: 1050 }}
           locale={{ emptyText: <Empty description="Chưa có kỳ dữ liệu trong kho" /> }}
         />
       </Card>

@@ -7,7 +7,17 @@ const client = axios.create({
   timeout: 600000,
 });
 
+function emitLoading(delta) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('c360:api-loading', { detail: { delta } }));
+  }
+}
+
 client.interceptors.request.use((config) => {
+  if (!config.hideGlobalLoading) {
+    config.__tracksGlobalLoading = true;
+    emitLoading(1);
+  }
   const token = getRegisteredAccessToken();
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
@@ -25,11 +35,18 @@ client.interceptors.request.use((config) => {
   }
 
   return config;
+}, (error) => {
+  if (error.config?.__tracksGlobalLoading) emitLoading(-1);
+  return Promise.reject(error);
 });
 
 client.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    if (response.config?.__tracksGlobalLoading) emitLoading(-1);
+    return response;
+  },
   (error) => {
+    if (error.config?.__tracksGlobalLoading) emitLoading(-1);
     if (error.response?.status === 401) {
       notifyUnauthorized();
     }

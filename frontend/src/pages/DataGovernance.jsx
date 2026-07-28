@@ -20,6 +20,7 @@ import {
   Select,
   Skeleton,
   Space,
+  Switch,
   Table,
   Tag,
   Tooltip,
@@ -389,11 +390,28 @@ function ReadinessOverview({ data }) {
 }
 
 function SourceBranchMatrix({ data }) {
+  const [onlyMissing, setOnlyMissing] = useState(false);
   const activeFiles = data.files.filter((item) => !['deleted', 'replaced', 'deleting'].includes(item.status));
   const branches = [...new Set(activeFiles.map((item) => item.branch_code).filter(Boolean))].sort();
   const sourceCodes = data.readiness.sources?.map((item) => item.source_code)
     || [...new Set(activeFiles.map((item) => item.file_type))].sort();
-  const rows = sourceCodes.map((sourceCode) => ({ source_code: sourceCode }));
+  function isSourceReady(sourceCode, branchCode) {
+    if (sourceCode === 'FTPLN') {
+      return Boolean(data.readiness.sources
+        ?.find((item) => item.source_code === 'FTPLN')
+        ?.branch_readiness?.find((item) => item.branch_code === branchCode)?.is_ready);
+    }
+    return activeFiles.some(
+      (item) => item.file_type === sourceCode && item.branch_code === branchCode && item.status === 'success',
+    );
+  }
+  const branchReadyCounts = Object.fromEntries(branches.map((branchCode) => [
+    branchCode,
+    sourceCodes.filter((sourceCode) => isSourceReady(sourceCode, branchCode)).length,
+  ]));
+  const rows = sourceCodes
+    .filter((sourceCode) => !onlyMissing || branches.some((branchCode) => !isSourceReady(sourceCode, branchCode)))
+    .map((sourceCode) => ({ source_code: sourceCode }));
   const columns = [
     {
       title: 'Nguồn',
@@ -408,6 +426,12 @@ function SourceBranchMatrix({ data }) {
       width: 125,
       align: 'center',
       render: (_, row) => sourceCell(activeFiles, row.source_code, branchCode, data.readiness),
+      onHeaderCell: () => ({
+        className: branchReadyCounts[branchCode] < sourceCodes.length ? 'matrix-column--incomplete' : '',
+      }),
+      onCell: () => ({
+        className: branchReadyCounts[branchCode] < sourceCodes.length ? 'matrix-column--incomplete' : '',
+      }),
     })),
   ];
   return (
@@ -415,10 +439,13 @@ function SourceBranchMatrix({ data }) {
       title={<div><Text strong className="matrix-title">Ma trận nguồn theo chi nhánh</Text><Text type="secondary" className="matrix-subtitle">Theo dõi độ đầy đủ của từng nguồn tại từng đơn vị</Text></div>}
       className="demo-table-card demo-section source-matrix-card"
       extra={(
-        <Space size={18} className="matrix-legend">
-          <span><CheckCircleFilled className="legend-success" /> Đã đủ</span>
-          <span><CloseCircleFilled className="legend-missing" /> Còn thiếu</span>
-          <span><ClockCircleOutlined className="legend-running" /> Đang xử lý</span>
+        <Space size={18} className="matrix-toolbar">
+          <Space size={8}><Switch size="small" checked={onlyMissing} onChange={setOnlyMissing} /><Text>Chỉ hiện nguồn còn thiếu</Text></Space>
+          <Space size={14} className="matrix-legend">
+            <span><CheckCircleFilled className="legend-success" /> Đã đủ</span>
+            <span><CloseCircleFilled className="legend-missing" /> Còn thiếu</span>
+            <span><ClockCircleOutlined className="legend-running" /> Đang xử lý</span>
+          </Space>
         </Space>
       )}
     >
@@ -429,6 +456,23 @@ function SourceBranchMatrix({ data }) {
         pagination={false}
         size="middle"
         scroll={{ x: 110 + branches.length * 125 }}
+        summary={() => (
+          <Table.Summary fixed>
+            <Table.Summary.Row className="matrix-summary-row">
+              <Table.Summary.Cell index={0}><Text strong>Tổng nguồn đã đủ</Text></Table.Summary.Cell>
+              {branches.map((branchCode, index) => (
+                <Table.Summary.Cell
+                  key={branchCode}
+                  index={index + 1}
+                  align="center"
+                  className={branchReadyCounts[branchCode] < sourceCodes.length ? 'matrix-column--incomplete' : ''}
+                >
+                  <Text strong>{branchReadyCounts[branchCode]}/{sourceCodes.length}</Text>
+                </Table.Summary.Cell>
+              ))}
+            </Table.Summary.Row>
+          </Table.Summary>
+        )}
       />
     </Card>
   );

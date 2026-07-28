@@ -3,6 +3,7 @@ import { notification } from 'antd';
 
 import { AuthProvider } from './auth';
 import MainLayout from './components/MainLayout';
+import GlobalApiLoading from './components/GlobalApiLoading';
 import Dashboard from './pages/Dashboard';
 import ImportData from './pages/ImportData';
 import CustomerProcessing from './pages/CustomerProcessing';
@@ -82,7 +83,6 @@ function LegacyApp() {
     'data-warehouse': <ImportData />,
     'customer-processing': <CustomerProcessing />,
     'data-sources': <DataGovernance mode="sources" />,
-    'data-quality': <DataGovernance mode="quality" />,
     'data-mapping': <DataGovernance mode="mapping" />,
     'data-history': <DataGovernance mode="history" />,
     reports: <CustomerReport />,
@@ -99,6 +99,7 @@ function LegacyApp() {
 
   return (
     <AuthProvider>
+      <GlobalApiLoading />
       <MainLayout activeMenu={activeMenu} onMenuChange={setActiveMenu} currentUser={currentUser} onLogout={handleLogout}>
         {pages[activeMenu] || pages['c360-dashboard']}
       </MainLayout>

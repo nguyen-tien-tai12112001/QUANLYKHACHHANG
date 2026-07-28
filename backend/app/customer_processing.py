@@ -1007,6 +1007,29 @@ def get_period_file_summary(db: Session, period_key: str) -> dict:
         or 0
     )
     available_required = sum(1 for file_type in REQUIRED_FILE_TYPES if success_by_type[file_type] > 0)
+    branch_codes = sorted({
+        item.branch_code
+        for item in files
+        if item.file_type in REQUIRED_FILE_TYPES and item.branch_code
+    })
+    successful_pairs = {
+        (item.file_type, item.branch_code)
+        for item in files
+        if item.file_type in REQUIRED_FILE_TYPES and item.branch_code and item.status == "success"
+    }
+    missing_required_files = [
+        {"file_type": file_type, "branch_code": branch_code}
+        for branch_code in branch_codes
+        for file_type in REQUIRED_FILE_TYPES
+        if (file_type, branch_code) not in successful_pairs
+    ]
+    required_matrix_count = len(REQUIRED_FILE_TYPES) * len(branch_codes)
+    available_matrix_count = required_matrix_count - len(missing_required_files)
+    ready_branch_count = sum(
+        1
+        for branch_code in branch_codes
+        if all((file_type, branch_code) in successful_pairs for file_type in REQUIRED_FILE_TYPES)
+    )
     return {
         "success_by_type": success_by_type,
         "error_by_type": error_by_type,
@@ -1016,6 +1039,18 @@ def get_period_file_summary(db: Session, period_key: str) -> dict:
         "total_file_count": len(files),
         "optional_file_count": optional_count,
         "is_ready": available_required == len(REQUIRED_FILE_TYPES),
+        "branch_codes": branch_codes,
+        "branch_count": len(branch_codes),
+        "ready_branch_count": ready_branch_count,
+        "required_matrix_count": required_matrix_count,
+        "available_matrix_count": available_matrix_count,
+        "branch_readiness_percent": (
+            round(available_matrix_count * 100 / required_matrix_count)
+            if required_matrix_count
+            else 0
+        ),
+        "missing_required_files": missing_required_files,
+        "is_fully_ready": bool(branch_codes) and not missing_required_files,
     }
 
 
