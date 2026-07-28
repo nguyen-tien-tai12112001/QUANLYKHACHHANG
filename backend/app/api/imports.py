@@ -291,6 +291,7 @@ def list_import_files(
     keyword: str | None = None,
     uploaded_from: str | None = None,
     uploaded_to: str | None = None,
+    compact: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     query = db.query(ImportFile)
@@ -314,32 +315,48 @@ def list_import_files(
         query = query.filter(ImportFile.uploaded_at <= to_value)
 
     files = query.order_by(desc(ImportFile.uploaded_at)).all()
+    fields = [
+        "id",
+        "original_filename",
+        "file_type",
+        "branch_code",
+        "period_key",
+        "business_date",
+        "total_rows",
+        "success_rows",
+        "error_rows",
+        "status",
+        "error_message",
+        "started_at",
+        "finished_at",
+        "uploaded_at",
+    ] if compact else [
+        "id",
+        "original_filename",
+        "file_type",
+        "branch_code",
+        "period_key",
+        "period_start",
+        "period_end",
+        "business_date",
+        "filename_suffix",
+        "frequency",
+        "content_sha256",
+        "file_size",
+        "total_rows",
+        "success_rows",
+        "error_rows",
+        "status",
+        "error_message",
+        "started_at",
+        "finished_at",
+        "duration_seconds",
+        "uploaded_at",
+    ]
     return [
         serialize_model(
             item,
-            [
-                "id",
-                "original_filename",
-                "file_type",
-                "branch_code",
-                "period_key",
-                "period_start",
-                "period_end",
-                "business_date",
-                "filename_suffix",
-                "frequency",
-                "content_sha256",
-                "file_size",
-                "total_rows",
-                "success_rows",
-                "error_rows",
-                "status",
-                "error_message",
-                "started_at",
-                "finished_at",
-                "duration_seconds",
-                "uploaded_at",
-            ],
+            fields,
         )
         for item in files
     ]
@@ -410,6 +427,28 @@ def list_periods(db: Session = Depends(get_db)):
             if file.status == "success" and file.business_date is not None
         }
         ftpln_expected_count = expected_days * len(ftpln_branches) if ftpln_branches else 0
+        expected_dates = {
+            date(item.period_date.year, item.period_date.month, day)
+            for day in range(1, expected_days + 1)
+        }
+        ftpln_branch_readiness = []
+        for branch_code in sorted(ftpln_branches):
+            success_dates = {
+                file.business_date
+                for file in ftpln_files
+                if file.branch_code == branch_code
+                and file.status == "success"
+                and file.business_date is not None
+            }
+            missing_dates = sorted(expected_dates - success_dates)
+            ftpln_branch_readiness.append(
+                {
+                    "branch_code": branch_code,
+                    "success_days": len(success_dates),
+                    "expected_days": expected_days,
+                    "missing_dates": [value.isoformat() for value in missing_dates],
+                }
+            )
         payload = serialize_model(item, ["id", "period_key", "period_date", "status", "description", "note", "created_at"])
         payload.update(
             {
@@ -427,6 +466,14 @@ def list_periods(db: Session = Depends(get_db)):
                     "success_file_count": len(ftpln_success_keys),
                     "expected_file_count": ftpln_expected_count,
                     "is_ready": bool(ftpln_expected_count) and len(ftpln_success_keys) == ftpln_expected_count,
+                    "missing_dates": sorted(
+                        {
+                            missing
+                            for branch in ftpln_branch_readiness
+                            for missing in branch["missing_dates"]
+                        }
+                    ),
+                    "branch_readiness": ftpln_branch_readiness,
                 },
             }
         )
@@ -454,7 +501,7 @@ def delete_import_file(
     was_processed = processed_customer_count(db, period_key) > 0
     delete_file_record_and_rows(db, import_file)
     needs_reprocess = mark_period_needs_reprocess(db, period_key) if affects_profile else False
-    refresh_report_sources(db, period_key)
+    refresh_report_sources(db, period_key, refresh_customer_counts=False)
     log_data_action(
         db,
         request,
@@ -657,14 +704,21 @@ def source_readiness(period_key: str = Query(...), db: Session = Depends(get_db)
 
 @router.get("/report-sources")
 def list_report_sources(period_key: str = Query(...), db: Session = Depends(get_db)):
-    refresh_report_sources(db, period_key)
-    db.commit()
     rows = (
         db.query(ReportSourceStatus)
         .filter(ReportSourceStatus.period_key == period_key)
         .order_by(ReportSourceStatus.source_code)
         .all()
     )
+    if not rows:
+        refresh_report_sources(db, period_key)
+        db.commit()
+        rows = (
+            db.query(ReportSourceStatus)
+            .filter(ReportSourceStatus.period_key == period_key)
+            .order_by(ReportSourceStatus.source_code)
+            .all()
+        )
     fields = [
         "period_key",
         "period_date",

@@ -186,6 +186,20 @@ def cleanup_after_success(db: Session, import_file: ImportFile) -> None:
         db.commit()
 
 
+def refresh_source_status_cache(db: Session, period_key: str) -> None:
+    from app.imports.summarizer import refresh_report_sources
+
+    try:
+        refresh_report_sources(
+            db,
+            period_key,
+            refresh_customer_counts=False,
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+
+
 def _create_import_file(
     db: Session,
     upload_file: UploadFile,
@@ -871,6 +885,7 @@ def import_uploaded_file(db: Session, upload_file: UploadFile, replace_existing:
         import_file.duration_seconds = max(1, int((now - import_file.started_at).total_seconds())) if import_file.started_at else 0
         db.commit()
         cleanup_after_success(db, import_file)
+        refresh_source_status_cache(db, import_file.period_key)
         db.refresh(import_file)
         return import_file
     except Exception as exc:
@@ -883,6 +898,7 @@ def import_uploaded_file(db: Session, upload_file: UploadFile, replace_existing:
         import_file.duration_seconds = max(1, int((now - import_file.started_at).total_seconds())) if import_file.started_at else 0
         db.add(import_file)
         db.commit()
+        refresh_source_status_cache(db, import_file.period_key)
         raise
 
 
@@ -922,6 +938,7 @@ def queue_uploaded_file(db: Session, upload_file: UploadFile, replace_existing: 
     import_file.finished_at = None
     import_file.duration_seconds = 0
     db.commit()
+    refresh_source_status_cache(db, import_file.period_key)
     db.refresh(import_file)
     return import_file
 
@@ -968,6 +985,7 @@ def process_import_file(import_file_id: int) -> None:
         import_file.duration_seconds = max(1, int((now - import_file.started_at).total_seconds())) if import_file.started_at else 0
         db.commit()
         cleanup_after_success(db, import_file)
+        refresh_source_status_cache(db, import_file.period_key)
     except Exception as exc:
         db.rollback()
         import_file = db.query(ImportFile).filter(ImportFile.id == import_file_id).first()
@@ -979,6 +997,7 @@ def process_import_file(import_file_id: int) -> None:
             import_file.finished_at = now
             import_file.duration_seconds = max(1, int((now - import_file.started_at).total_seconds())) if import_file.started_at else 0
             db.commit()
+            refresh_source_status_cache(db, import_file.period_key)
     finally:
         db.close()
 

@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.customer_processing import (
     REQUIRED_FILE_TYPES,
+    build_period_file_summary,
     create_processing_job,
     get_period_file_summary,
     process_customer_period,
@@ -23,6 +24,7 @@ from app.models import (
     CustomerPeriodProfile,
     CustomerProcessingJob,
     CustomerProcessingOptionalFile,
+    ImportFile,
     ImportBatch,
     OrgBranch,
     OrgDepartment,
@@ -484,20 +486,41 @@ def _apply_branch_finance_to_payloads(
 @router.get("/periods")
 def list_processing_periods(db: Session = Depends(get_db)):
     batches = db.query(ImportBatch).order_by(desc(ImportBatch.period_key)).all()
+    period_files: dict[str, list[ImportFile]] = {}
+    files = (
+        db.query(ImportFile)
+        .filter(ImportFile.status.notin_(["deleted", "replaced"]))
+        .all()
+    )
+    for item in files:
+        period_files.setdefault(item.period_key, []).append(item)
+    optional_counts = dict(
+        db.query(
+            CustomerProcessingOptionalFile.period_key,
+            func.count(CustomerProcessingOptionalFile.id),
+        )
+        .group_by(CustomerProcessingOptionalFile.period_key)
+        .all()
+    )
+    latest_jobs = {}
+    latest_success_counts = {}
+    all_jobs = db.query(CustomerProcessingJob).order_by(desc(CustomerProcessingJob.created_at)).all()
+    for item in all_jobs:
+        latest_jobs.setdefault(item.period_key, item)
+        if item.status == "success":
+            latest_success_counts.setdefault(
+                item.period_key,
+                int(item.processed_customers or item.total_customers or 0),
+            )
+
     result = []
     for batch in batches:
-        summary = get_period_file_summary(db, batch.period_key)
-        last_job = (
-            db.query(CustomerProcessingJob)
-            .filter(CustomerProcessingJob.period_key == batch.period_key)
-            .order_by(desc(CustomerProcessingJob.created_at))
-            .first()
+        summary = build_period_file_summary(
+            period_files.get(batch.period_key, []),
+            int(optional_counts.get(batch.period_key, 0) or 0),
         )
-        profile_count = (
-            db.query(CustomerPeriodProfile)
-            .filter(CustomerPeriodProfile.period_key == batch.period_key)
-            .count()
-        )
+        last_job = latest_jobs.get(batch.period_key)
+        profile_count = latest_success_counts.get(batch.period_key, 0)
         payload = serialize_model(batch, ["id", "period_key", "period_date", "status", "description", "created_at"])
         payload.update(
             {

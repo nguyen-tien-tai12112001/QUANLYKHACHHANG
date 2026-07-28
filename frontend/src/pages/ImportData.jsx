@@ -96,6 +96,11 @@ function periodLabel(periodKey) {
   return `Tháng ${month}/${year}`;
 }
 
+function sourceDateLabel(value) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+  return match ? `${match[3]}/${match[2]}/${match[1]}` : value;
+}
+
 function parseFilename(name) {
   const value = name || '';
   const kh02 = /^(\d+)_(KH02)_(\d{8})(\d{8})\.(csv|xlsx)$/i.exec(value);
@@ -1165,7 +1170,14 @@ function ImportData() {
                       if (!ftpln?.expected_file_count) return null;
                       return ftpln.is_ready
                         ? <Tag color="success">FTPLN đủ {ftpln.success_file_count}/{ftpln.expected_file_count} ngày-file</Tag>
-                        : <Tooltip title={`Thiếu: ${(ftpln.missing_dates || []).join(', ') || 'đang kiểm tra'}`}><Tag color="warning">FTPLN {ftpln.success_file_count}/{ftpln.expected_file_count} ngày-file</Tag></Tooltip>;
+                        : (
+                          <Tooltip title={`Thiếu ngày: ${(ftpln.missing_dates || []).map(sourceDateLabel).join(', ') || 'đang kiểm tra'}`}>
+                            <Tag color="warning">
+                              FTPLN {ftpln.success_file_count}/{ftpln.expected_file_count} ngày-file
+                              {ftpln.missing_dates?.length === 1 ? ` · thiếu ${sourceDateLabel(ftpln.missing_dates[0])}` : ''}
+                            </Tag>
+                          </Tooltip>
+                        );
                     })()}
                   </Space>
                   <Space wrap size={4}>

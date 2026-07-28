@@ -984,8 +984,7 @@ def active_import_files_query(db: Session, period_key: str):
     )
 
 
-def get_period_file_summary(db: Session, period_key: str) -> dict:
-    files = active_import_files_query(db, period_key).all()
+def build_period_file_summary(files: list[ImportFile], optional_count: int = 0) -> dict:
     success_by_type = {file_type: 0 for file_type in REQUIRED_FILE_TYPES}
     error_by_type = {file_type: 0 for file_type in REQUIRED_FILE_TYPES}
     processing_by_type = {file_type: 0 for file_type in REQUIRED_FILE_TYPES}
@@ -1000,12 +999,6 @@ def get_period_file_summary(db: Session, period_key: str) -> dict:
         elif item.status in {"queued", "processing", "deleting"}:
             processing_by_type[item.file_type] += 1
 
-    optional_count = (
-        db.query(func.count(CustomerProcessingOptionalFile.id))
-        .filter(CustomerProcessingOptionalFile.period_key == period_key)
-        .scalar()
-        or 0
-    )
     available_required = sum(1 for file_type in REQUIRED_FILE_TYPES if success_by_type[file_type] > 0)
     branch_codes = sorted({
         item.branch_code
@@ -1052,6 +1045,17 @@ def get_period_file_summary(db: Session, period_key: str) -> dict:
         "missing_required_files": missing_required_files,
         "is_fully_ready": bool(branch_codes) and not missing_required_files,
     }
+
+
+def get_period_file_summary(db: Session, period_key: str) -> dict:
+    files = active_import_files_query(db, period_key).all()
+    optional_count = (
+        db.query(func.count(CustomerProcessingOptionalFile.id))
+        .filter(CustomerProcessingOptionalFile.period_key == period_key)
+        .scalar()
+        or 0
+    )
+    return build_period_file_summary(files, int(optional_count))
 
 
 def update_job(db: Session, job: CustomerProcessingJob, status: str, stage: str, progress: int) -> None:

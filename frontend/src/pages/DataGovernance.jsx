@@ -58,6 +58,13 @@ function dateTimeLabel(value) {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleString('vi-VN');
 }
 
+function sourceDateLabel(value, short = false) {
+  if (!value) return '—';
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (!match) return value;
+  return short ? `${match[3]}/${match[2]}` : `${match[3]}/${match[2]}/${match[1]}`;
+}
+
 function numberLabel(value) {
   return Number(value || 0).toLocaleString('vi-VN');
 }
@@ -150,7 +157,7 @@ function useGovernanceData() {
     Promise.all([
       client.get('/imports/report-sources', { params: { period_key: periodKey } }),
       client.get('/imports/source-readiness', { params: { period_key: periodKey } }),
-      client.get('/imports/files', { params: { period_key: periodKey } }),
+      client.get('/imports/files', { params: { period_key: periodKey, compact: true } }),
       client.get('/imports/jobs/stalled', { params: { period_key: periodKey } }),
     ])
       .then(([sourceResponse, readinessResponse, fileResponse, stalledResponse]) => {
@@ -283,6 +290,13 @@ function sourceCell(files, sourceCode, branchCode, readiness) {
       ?.find((item) => item.source_code === 'FTPLN')
       ?.branch_readiness?.find((item) => item.branch_code === branchCode);
     if (branch) {
+      const missingDates = branch.missing_dates || [];
+      const duplicateDates = branch.duplicate_dates || [];
+      const issueDetails = [
+        missingDates.length ? `Thiếu ngày: ${missingDates.map((value) => sourceDateLabel(value)).join(', ')}` : '',
+        duplicateDates.length ? `Trùng ngày: ${duplicateDates.map((value) => sourceDateLabel(value)).join(', ')}` : '',
+        branch.error_file_count ? `${branch.error_file_count} file lỗi` : '',
+      ].filter(Boolean);
       return branch.is_ready
         ? (
           <Tooltip title={`Đủ ${branch.success_days}/${branch.expected_days} ngày`}>
@@ -293,10 +307,14 @@ function sourceCell(files, sourceCode, branchCode, readiness) {
           </Tooltip>
         )
         : (
-          <Tooltip title={`Thiếu: mới có ${branch.success_days}/${branch.expected_days} ngày`}>
+          <Tooltip title={issueDetails.join(' · ') || `Mới có ${branch.success_days}/${branch.expected_days} ngày`}>
             <span className="matrix-state matrix-state--missing">
               <CloseCircleFilled />
-              <small>{branch.success_days}/{branch.expected_days}</small>
+              <small>
+                {missingDates.length === 1
+                  ? `Thiếu ${sourceDateLabel(missingDates[0], true)}`
+                  : `Thiếu ${missingDates.length || Math.max(0, branch.expected_days - branch.success_days)} ngày`}
+              </small>
             </span>
           </Tooltip>
         );

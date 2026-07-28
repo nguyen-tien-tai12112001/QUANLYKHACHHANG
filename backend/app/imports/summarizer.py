@@ -117,32 +117,39 @@ SOURCE_CONFIGS = [
 ]
 
 
-def refresh_report_sources(db: Session, period_key: str) -> None:
+def refresh_report_sources(
+    db: Session,
+    period_key: str,
+    *,
+    refresh_customer_counts: bool = True,
+) -> None:
+    existing_customer_counts = dict(
+        db.query(
+            ReportSourceStatus.source_code,
+            ReportSourceStatus.customer_count,
+        )
+        .filter(ReportSourceStatus.period_key == period_key)
+        .all()
+    )
     db.execute(delete(ReportSourceStatus).where(ReportSourceStatus.period_key == period_key))
 
     batch = db.query(ImportBatch).filter(ImportBatch.period_key == period_key).first()
     period_date = batch.period_date if batch else None
+    period_files = db.query(ImportFile).filter(ImportFile.period_key == period_key).all()
     source_rows = []
 
     for config in SOURCE_CONFIGS:
         source_code = config["code"]
-        files = (
-            db.query(ImportFile)
-            .filter(ImportFile.period_key == period_key, ImportFile.file_type == source_code)
-            .all()
-            if source_code != "MANUAL"
-            else []
-        )
+        files = [item for item in period_files if item.file_type == source_code] if source_code != "MANUAL" else []
         active_files = [file for file in files if file.status not in {"deleted", "replaced"}]
         success_files = [file for file in active_files if file.status == "success"]
         error_files = [file for file in active_files if file.status == "error"]
         waiting_files = [file for file in active_files if file.status in {"queued", "processing", "deleting"}]
 
-        row_count = 0
-        customer_count = 0
+        row_count = sum(int(file.success_rows or 0) for file in success_files)
+        customer_count = int(existing_customer_counts.get(source_code, 0) or 0)
         model = config["model"]
-        if model is not None:
-            row_count = db.query(func.count(model.id)).filter(model.period_key == period_key).scalar() or 0
+        if model is not None and refresh_customer_counts:
             customer_column = getattr(model, config.get("customer_field", "ma_kh_chuan"))
             customer_count = (
                 db.query(func.count(distinct(customer_column)))
