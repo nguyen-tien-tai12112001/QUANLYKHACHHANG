@@ -1,7 +1,7 @@
 # Phân tích cột dữ liệu nguồn và Kho CIF
 
-> Phiên bản phân tích: 28/07/2026  
-> Phạm vi: DP01, CN05, LN01, PF14, BC06, BC29, KH02, FTPLN và CIF  
+> Phiên bản phân tích: 28/07/2026
+> Phạm vi: DP01, CN05, LN01, PF14, BC06, BC29, KH02, FTPLN và CIF
 > Căn cứ: file mẫu trong `documents/`, code importer hiện tại và dữ liệu đang có trong PostgreSQL.
 
 ## 1. Mục đích và cách đọc
