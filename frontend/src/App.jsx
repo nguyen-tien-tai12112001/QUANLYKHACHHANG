@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
-import { Spin, notification } from 'antd';
+import { useEffect, useState } from 'react';
+import { notification } from 'antd';
 
 import { AuthProvider } from './auth';
 import MainLayout from './components/MainLayout';
@@ -11,45 +11,10 @@ import Login from './pages/Login';
 import SystemAdmin from './pages/SystemAdmin';
 import AuditLogs from './pages/AuditLogs';
 import client from './api/client';
-
-const DemoApp = lazy(() => import('./demo/DemoApp'));
-const C360App = lazy(() => import('./c360/C360App'));
-
-function readStoredUser() {
-  try {
-    const raw = localStorage.getItem('c360_user');
-    return raw ? JSON.parse(raw) : null;
-  } catch {
-    localStorage.removeItem('c360_user');
-    return null;
-  }
-}
-
-function C360Route() {
-  const [currentUser, setCurrentUser] = useState(readStoredUser);
-
-  function handleLogin(user) {
-    localStorage.setItem('c360_user', JSON.stringify(user));
-    setCurrentUser(user);
-  }
-
-  function handleLogout() {
-    localStorage.removeItem('c360_user');
-    setCurrentUser(null);
-  }
-
-  if (!currentUser) return <Login onLogin={handleLogin} />;
-  return (
-    <AuthProvider>
-      <Suspense fallback={<div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><Spin size="large" /></div>}>
-        <C360App currentUser={currentUser} onLogout={handleLogout} />
-      </Suspense>
-    </AuthProvider>
-  );
-}
+import C360App from './c360/C360App';
 
 function LegacyApp() {
-  const [activeMenu, setActiveMenu] = useState('dashboard');
+  const [activeMenu, setActiveMenu] = useState('c360-dashboard');
   const [currentUser, setCurrentUser] = useState(() => {
     try {
       const raw = localStorage.getItem('c360_user');
@@ -68,7 +33,7 @@ function LegacyApp() {
   function handleLogout() {
     localStorage.removeItem('c360_user');
     setCurrentUser(null);
-    setActiveMenu('dashboard');
+    setActiveMenu('c360-dashboard');
   }
 
   useEffect(() => {
@@ -109,6 +74,9 @@ function LegacyApp() {
   }, [currentUser]);
 
   const pages = {
+    'c360-dashboard': <C360App embedded initialPage="dashboard" currentUser={currentUser} onLogout={handleLogout} />,
+    'c360-insights': <C360App embedded initialPage="insights" currentUser={currentUser} onLogout={handleLogout} />,
+    'c360-customers': <C360App embedded initialPage="customers" currentUser={currentUser} onLogout={handleLogout} />,
     dashboard: <Dashboard />,
     'data-warehouse': <ImportData />,
     'customer-processing': <CustomerProcessing />,
@@ -127,22 +95,15 @@ function LegacyApp() {
   return (
     <AuthProvider>
       <MainLayout activeMenu={activeMenu} onMenuChange={setActiveMenu} currentUser={currentUser} onLogout={handleLogout}>
-        {pages[activeMenu] || <Dashboard />}
+        {pages[activeMenu] || pages['c360-dashboard']}
       </MainLayout>
     </AuthProvider>
   );
 }
 
 function App() {
-  if (window.location.pathname.startsWith('/c360')) {
-    return <C360Route />;
-  }
-  if (window.location.pathname.startsWith('/demo')) {
-    return (
-      <Suspense fallback={<div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center' }}><Spin size="large" /></div>}>
-        <DemoApp />
-      </Suspense>
-    );
+  if (window.location.pathname.startsWith('/c360') || window.location.pathname.startsWith('/demo')) {
+    window.history.replaceState({}, '', '/');
   }
   return <LegacyApp />;
 }

@@ -42,6 +42,10 @@
   margin: 80px auto;
 }
 
+.c360-embedded-content {
+  padding-top: 20px;
+}
+
 .c360-real-metric {
   height: 100%;
   cursor: pointer;
@@ -149,6 +153,58 @@
   margin: 0;
 }
 
+.c360-group-cards {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.c360-group-cards button {
+  display: grid;
+  min-height: 142px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 12px;
+  padding: 16px;
+  border: 1px solid #eadfd9;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  text-align: left;
+  transition: border-color .2s ease, box-shadow .2s ease, transform .2s ease;
+}
+
+.c360-group-cards button:hover,
+.c360-group-cards button.is-active {
+  border-color: #9f3150;
+  box-shadow: 0 5px 16px rgba(83, 34, 45, .09);
+  transform: translateY(-1px);
+}
+
+.c360-group-cards button.is-active {
+  background: #fff8fa;
+}
+
+.c360-group-cards button > span {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.c360-group-cards button > span > .anticon {
+  color: #8f1438;
+}
+
+.c360-group-cards button > strong {
+  color: #8f1438;
+  font-size: 25px;
+}
+
+.c360-group-cards button > small {
+  grid-column: 1 / -1;
+  color: var(--demo-muted);
+  line-height: 1.45;
+}
+
 @media (max-width: 900px) {
   .c360-global-filter {
     position: static;
@@ -163,6 +219,10 @@
   .c360-officer-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+
+  .c360-group-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 
 @media (max-width: 760px) {
@@ -172,6 +232,10 @@
   }
 
   .c360-officer-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .c360-group-cards {
     grid-template-columns: 1fr;
   }
 }

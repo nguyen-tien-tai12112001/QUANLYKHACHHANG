@@ -11,7 +11,6 @@ import {
   MenuUnfoldOutlined,
   SafetyCertificateOutlined,
   SettingOutlined,
-  SwapOutlined,
   TeamOutlined,
 } from '@ant-design/icons';
 import { Avatar, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd';
@@ -21,10 +20,34 @@ import logoUrl from '../../favicon.jpg';
 const { Header, Sider, Content } = Layout;
 
 const menuItems = [
-  { key: 'dashboard', icon: <DashboardOutlined />, label: 'Dashboard' },
-  { key: 'data-warehouse', icon: <DatabaseOutlined />, label: 'Kho dữ liệu' },
-  { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
-  { key: 'reports', icon: <BarChartOutlined />, label: 'Báo cáo' },
+  {
+    key: 'executive',
+    icon: <DashboardOutlined />,
+    label: 'Điều hành',
+    children: [
+      { key: 'c360-dashboard', icon: <DashboardOutlined />, label: 'Tổng quan C360' },
+      { key: 'c360-insights', icon: <BarChartOutlined />, label: 'Cảnh báo & phân nhóm' },
+      { key: 'dashboard', icon: <BarChartOutlined />, label: 'Dashboard nghiệp vụ' },
+    ],
+  },
+  {
+    key: 'customers',
+    icon: <TeamOutlined />,
+    label: 'Khách hàng',
+    children: [
+      { key: 'c360-customers', icon: <TeamOutlined />, label: 'Danh sách C360' },
+      { key: 'reports', icon: <BarChartOutlined />, label: 'Báo cáo khách hàng' },
+    ],
+  },
+  {
+    key: 'data',
+    icon: <DatabaseOutlined />,
+    label: 'Dữ liệu',
+    children: [
+      { key: 'data-warehouse', icon: <DatabaseOutlined />, label: 'Kho dữ liệu' },
+      { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
+    ],
+  },
   {
     key: 'admin',
     icon: <SettingOutlined />,
@@ -42,6 +65,15 @@ const menuItems = [
 function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout }) {
   const [collapsed, setCollapsed] = useState(false);
   const siderWidth = collapsed ? 76 : 260;
+  const parentMenu = ['c360-dashboard', 'c360-insights', 'dashboard'].includes(activeMenu)
+    ? 'executive'
+    : ['c360-customers', 'reports'].includes(activeMenu)
+      ? 'customers'
+      : ['data-warehouse', 'customer-processing'].includes(activeMenu)
+        ? 'data'
+        : activeMenu.startsWith('admin-')
+          ? 'admin'
+          : null;
 
   return (
     <Layout className="app-shell">
@@ -68,10 +100,13 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
           theme="dark"
           mode="inline"
           selectedKeys={[activeMenu]}
-          defaultOpenKeys={activeMenu.startsWith('admin-') && !collapsed ? ['admin'] : []}
+          defaultOpenKeys={parentMenu && !collapsed ? [parentMenu] : []}
           items={menuItems}
           inlineCollapsed={collapsed}
-          onClick={({ key }) => onMenuChange(key === 'admin' ? 'admin-branches' : key)}
+          onClick={({ key }) => {
+            if (['executive', 'customers', 'data', 'admin'].includes(key)) return;
+            onMenuChange(key);
+          }}
         />
       </Sider>
       <Layout className="app-main" style={{ marginLeft: siderWidth }}>
@@ -90,9 +125,6 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
             </Typography.Title>
           </Space>
           <Space className="app-user" size={12}>
-            <Button icon={<SwapOutlined />} onClick={() => { window.location.href = '/c360'; }}>
-              Giao diện C360 mới
-            </Button>
             <Avatar className="app-user-avatar">{currentUser?.full_name?.charAt(0) || 'C'}</Avatar>
             <span>
               <Typography.Text strong>{currentUser?.full_name}</Typography.Text>

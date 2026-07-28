@@ -313,8 +313,91 @@ function RealCustomerList({ context, onOpenCustomer }) {
   );
 }
 
-export default function C360App({ currentUser, onLogout }) {
-  const [page, setPage] = useState('dashboard');
+function RealInsightsPage({ context, onOpenCustomer }) {
+  const { periodKey, branchCode, pgdCode, refreshKey } = context;
+  const [groups, setGroups] = useState([]);
+  const [selectedGroup, setSelectedGroup] = useState('large_deposit');
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  const load = useCallback(async () => {
+    if (!periodKey) return;
+    setLoading(true);
+    setError('');
+    try {
+      const params = { period_key: periodKey, branch_code: branchCode || undefined, pgd_code: pgdCode || undefined };
+      const [groupRes, profileRes] = await Promise.all([
+        client.get('/customer-processing/profile-groups', { params }),
+        client.get('/customer-processing/profiles', {
+          params: {
+            ...params,
+            group_key: selectedGroup,
+            page,
+            page_size: PAGE_SIZE,
+            include_total: true,
+            sort_by: selectedGroup === 'large_loan' ? 'so_du_tien_vay' : 'so_du_tien_gui',
+            sort_dir: 'desc',
+          },
+        }),
+      ]);
+      setGroups(groupRes.data?.groups || []);
+      setRows(profileRes.data?.items || []);
+      setTotal(Number(profileRes.data?.total || 0));
+    } catch (requestError) {
+      setError(requestError.response?.data?.detail || requestError.message || 'Không tải được dữ liệu phân nhóm');
+    } finally {
+      setLoading(false);
+    }
+  }, [branchCode, page, periodKey, pgdCode, refreshKey, selectedGroup]);
+
+  useEffect(() => { load(); }, [load]);
+  useEffect(() => { setPage(1); }, [branchCode, periodKey, pgdCode, selectedGroup]);
+
+  if (error) return <ErrorState error={error} onRetry={load} />;
+  return (
+    <div className="demo-page">
+      <div className="demo-page-heading">
+        <div><Text className="demo-eyebrow">PHÂN NHÓM TỪ DATABASE</Text><Title level={2}>Cảnh báo và nhóm khách hàng trọng điểm</Title><Text type="secondary">Các nhóm được backend tính trực tiếp theo kỳ và phạm vi dữ liệu đang chọn</Text></div>
+        <Tag color="success">DỮ LIỆU THẬT</Tag>
+      </div>
+      <div className="c360-group-cards">
+        {groups.map((group) => (
+          <button type="button" className={selectedGroup === group.key ? 'is-active' : ''} key={group.key} onClick={() => setSelectedGroup(group.key)}>
+            <span><BarChartOutlined /><Text strong>{group.label}</Text></span>
+            <strong>{Number(group.count || 0).toLocaleString('vi-VN')}</strong>
+            <small>{group.description}</small>
+          </button>
+        ))}
+      </div>
+      <Card className="demo-table-card demo-section">
+        <Table
+          loading={loading}
+          rowKey="id"
+          dataSource={rows}
+          onRow={(row) => ({ onClick: () => onOpenCustomer(row) })}
+          rowClassName="demo-clickable-row"
+          pagination={{ current: page, pageSize: PAGE_SIZE, total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: setPage }}
+          scroll={{ x: 1050 }}
+          columns={[
+            { title: 'Khách hàng', dataIndex: 'ten_kh', width: 260, render: (value, row) => <div><Text strong>{value || 'Chưa có tên'}</Text><br /><Text type="secondary">{row.ma_kh} · {row.loai_khach_hang || 'Chưa phân loại'}</Text></div> },
+            { title: 'Chi nhánh chính', dataIndex: 'primary_branch_code', width: 130, render: (value) => value || '—' },
+            { title: 'Cán bộ', dataIndex: 'ten_can_bo', width: 180, render: (value, row) => value || row.ma_cb || '—' },
+            { title: 'Tiền gửi CKH', dataIndex: 'so_du_tien_gui', align: 'right', width: 150, render: compactMoney },
+            { title: 'TGTT bình quân', dataIndex: 'so_du_tgtt_binh_quan', align: 'right', width: 150, render: compactMoney },
+            { title: 'Dư nợ', dataIndex: 'so_du_tien_vay', align: 'right', width: 150, render: compactMoney },
+            { title: 'Số chi nhánh', dataIndex: 'branch_count', align: 'center', width: 110 },
+          ]}
+        />
+      </Card>
+    </div>
+  );
+}
+
+export default function C360App({ currentUser, onLogout, embedded = false, initialPage = 'dashboard' }) {
+  const [page, setPage] = useState(initialPage);
   const [collapsed, setCollapsed] = useState(false);
   const [periods, setPeriods] = useState([]);
   const [periodKey, setPeriodKey] = useState('');
@@ -326,6 +409,10 @@ export default function C360App({ currentUser, onLogout }) {
   const [bootError, setBootError] = useState('');
   const [bootLoading, setBootLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    setPage(initialPage);
+  }, [initialPage]);
 
   const loadBootstrap = useCallback(async () => {
     setBootLoading(true);
@@ -361,7 +448,9 @@ export default function C360App({ currentUser, onLogout }) {
   const context = { periods, periodKey, branchCode, pgdCode, refreshKey };
   const content = page === 'customers'
     ? <RealCustomerList context={context} onOpenCustomer={setSelectedCustomer} />
-    : <RealDashboard context={context} onOpenCustomer={setSelectedCustomer} onGoCustomers={() => setPage('customers')} />;
+    : page === 'insights'
+      ? <RealInsightsPage context={context} onOpenCustomer={setSelectedCustomer} />
+      : <RealDashboard context={context} onOpenCustomer={setSelectedCustomer} onGoCustomers={() => setPage('customers')} />;
 
   function changeBranch(value) {
     const requested = value === 'all' ? null : value;
@@ -371,12 +460,31 @@ export default function C360App({ currentUser, onLogout }) {
     setPgdCode(resolved.filterPgd);
   }
 
+  const workspace = (
+    <>
+      <div className="c360-global-filter demo-no-print">
+        <Select loading={bootLoading} value={periodKey || undefined} placeholder="Chọn kỳ" onChange={setPeriodKey} options={periods.map((item) => ({ value: item.period_key, label: `Kỳ ${periodLabel(item.period_key)}` }))} />
+        <Select value={branchCode || 'all'} onChange={changeBranch} disabled={!initialScope.canChangeBranch && !initialScope.canViewProvince} options={[...(initialScope.canViewProvince ? [{ value: 'all', label: 'Toàn tỉnh' }] : []), ...branchOptions.map((value) => ({ value, label: `Chi nhánh ${value}` }))]} />
+        <Select allowClear value={pgdCode || undefined} placeholder="Tất cả PGD" onChange={(value) => setPgdCode(value || null)} disabled={!initialScope.canChangePgd && !initialScope.canViewProvince} options={(filterOptions.pgd_options || []).map((item) => ({ value: typeof item === 'string' ? item : item.value, label: typeof item === 'string' ? item : item.label }))} />
+        <Button icon={<ReloadOutlined />} onClick={() => setRefreshKey((value) => value + 1)}>Làm mới</Button>
+        <span><CheckCircleFilled /> API dữ liệu thật</span>
+      </div>
+      <div className={embedded ? 'c360-embedded-content' : 'demo-content'}>
+        {bootError ? <ErrorState error={bootError} onRetry={loadBootstrap} /> : bootLoading || !periodKey ? <Skeleton active paragraph={{ rows: 12 }} /> : content}
+      </div>
+      <CustomerModal customer={selectedCustomer} periodKey={periodKey} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
+    </>
+  );
+
+  if (embedded) return workspace;
+
   return (
     <Layout className="demo-shell c360-real-shell">
       <Sider width={270} collapsedWidth={76} collapsed={collapsed} trigger={null} className="demo-sidebar">
         <div className="demo-logo"><img src={logoUrl} alt="C360" />{!collapsed && <div><strong>C360</strong><small>Dữ liệu thật</small></div>}</div>
         <Menu theme="dark" mode="inline" selectedKeys={[page]} items={[
           { key: 'dashboard', icon: <DashboardOutlined />, label: 'Tổng quan điều hành' },
+          { key: 'insights', icon: <BarChartOutlined />, label: 'Cảnh báo & phân nhóm' },
           { key: 'customers', icon: <TeamOutlined />, label: 'Khách hàng C360' },
         ]} onClick={({ key }) => setPage(key)} />
         {!collapsed && <div className="demo-sidebar-note"><Tag color="success">LIVE</Tag><span>Kết nối API/database<br />Không sử dụng dữ liệu giả</span></div>}
@@ -393,18 +501,8 @@ export default function C360App({ currentUser, onLogout }) {
             <Button type="text" icon={<LogoutOutlined />} onClick={onLogout} />
           </Space>
         </Header>
-        <div className="c360-global-filter demo-no-print">
-          <Select loading={bootLoading} value={periodKey || undefined} placeholder="Chọn kỳ" onChange={setPeriodKey} options={periods.map((item) => ({ value: item.period_key, label: `Kỳ ${periodLabel(item.period_key)}` }))} />
-          <Select value={branchCode || 'all'} onChange={changeBranch} disabled={!initialScope.canChangeBranch && !initialScope.canViewProvince} options={[...(initialScope.canViewProvince ? [{ value: 'all', label: 'Toàn tỉnh' }] : []), ...branchOptions.map((value) => ({ value, label: `Chi nhánh ${value}` }))]} />
-          <Select allowClear value={pgdCode || undefined} placeholder="Tất cả PGD" onChange={(value) => setPgdCode(value || null)} disabled={!initialScope.canChangePgd && !initialScope.canViewProvince} options={(filterOptions.pgd_options || []).map((item) => ({ value: typeof item === 'string' ? item : item.value, label: typeof item === 'string' ? item : item.label }))} />
-          <Button icon={<ReloadOutlined />} onClick={() => setRefreshKey((value) => value + 1)}>Làm mới</Button>
-          <span><CheckCircleFilled /> API dữ liệu thật</span>
-        </div>
-        <Content className="demo-content">
-          {bootError ? <ErrorState error={bootError} onRetry={loadBootstrap} /> : bootLoading || !periodKey ? <Skeleton active paragraph={{ rows: 12 }} /> : content}
-        </Content>
+        <Content>{workspace}</Content>
       </Layout>
-      <CustomerModal customer={selectedCustomer} periodKey={periodKey} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
     </Layout>
   );
 }
