@@ -42,7 +42,7 @@ const menuItems = [
   {
     key: 'data',
     icon: <DatabaseOutlined />,
-    label: 'Dữ liệu',
+    label: 'Quản trị dữ liệu',
     children: [
       { key: 'data-warehouse', icon: <DatabaseOutlined />, label: 'Kho dữ liệu' },
       { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
