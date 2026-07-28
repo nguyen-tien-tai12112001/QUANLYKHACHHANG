@@ -192,11 +192,37 @@ def list_cif_customers(
         .limit(page_size)
         .all()
     )
+    customer_ids = [item.id for item in rows]
+    identifiers_by_customer: dict[int, list[CifCustomerIdentifier]] = {}
+    if customer_ids:
+        page_identifiers = (
+            db.query(CifCustomerIdentifier)
+            .filter(CifCustomerIdentifier.customer_id.in_(customer_ids))
+            .order_by(
+                CifCustomerIdentifier.customer_id,
+                CifCustomerIdentifier.branch_code,
+                CifCustomerIdentifier.full_cif_code,
+            )
+            .all()
+        )
+        for identifier in page_identifiers:
+            identifiers_by_customer.setdefault(identifier.customer_id, []).append(identifier)
+
     return {
         "items": [
             {
                 "id": item.id,
                 "customer_core_code": item.customer_core_code,
+                "branch_codes": sorted(
+                    {
+                        identifier.branch_code
+                        for identifier in identifiers_by_customer.get(item.id, [])
+                    }
+                ),
+                "full_cif_codes": [
+                    identifier.full_cif_code
+                    for identifier in identifiers_by_customer.get(item.id, [])
+                ],
                 "customer_name": item.customer_name,
                 "customer_type": item.customer_type,
                 "registration_number": item.registration_number,

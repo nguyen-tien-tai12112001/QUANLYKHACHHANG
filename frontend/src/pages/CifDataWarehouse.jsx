@@ -244,14 +244,15 @@ function CustomerListTab() {
           onRow={(row) => ({ onClick: () => openDetail(row) })}
           rowClassName="demo-clickable-row"
           pagination={{ current: page, pageSize: 20, total, showSizeChanger: false, onChange: setPage, showTotal: (value) => `${Number(value).toLocaleString('vi-VN')} khách hàng` }}
-          scroll={{ x: 1050 }}
+          sticky
+          scroll={{ x: 1250, y: 420 }}
           columns={[
             { title: 'Mã KH lõi', dataIndex: 'customer_core_code', width: 150, fixed: 'left', render: (value) => <Text code>{value}</Text> },
             { title: 'Khách hàng', dataIndex: 'customer_name', width: 240, ellipsis: true, render: (value, row) => <div><Text strong>{value || 'Chưa có tên'}</Text><br /><Text type="secondary">{row.customer_type || 'Chưa phân loại'}</Text></div> },
             { title: 'Giấy tờ', dataIndex: 'registration_number', width: 150, render: (value, row) => value || row.tax_number || '—' },
             { title: 'Điện thoại', dataIndex: 'telephone', width: 145, render: (value) => value || '—' },
-            { title: 'Chi nhánh', dataIndex: 'branch_count', width: 100, align: 'center' },
-            { title: 'Mã CIF', dataIndex: 'identifier_count', width: 90, align: 'center' },
+            { title: 'Mã chi nhánh', dataIndex: 'branch_codes', width: 135, render: (values) => <Space size={[4, 4]} wrap>{(values || []).map((value) => <Tag color="blue" key={value}>{value}</Tag>)}</Space> },
+            { title: 'Mã CIF đầy đủ', dataIndex: 'full_cif_codes', width: 190, render: (values) => <Space orientation="vertical" size={2}>{(values || []).map((value) => <Text code key={value}>{value}</Text>)}</Space> },
             { title: 'Trạng thái', dataIndex: 'status', width: 125, render: (value) => <Tag color={value === 'active' ? 'success' : value === 'invalid' ? 'error' : 'warning'}>{value}</Tag> },
           ]}
           locale={{ emptyText: <Empty description="Chưa có dữ liệu CIF" /> }}
