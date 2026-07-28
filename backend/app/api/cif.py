@@ -15,6 +15,7 @@ from app.models import (
     CifCustomerIdentifier,
     CifIdentityConflict,
     CifImportBatch,
+    CifImportError,
 )
 
 
@@ -40,6 +41,10 @@ def batch_payload(item: CifImportBatch) -> dict:
         "new_customers": item.new_customers,
         "new_identifiers": item.new_identifiers,
         "updated_identifiers": item.updated_identifiers,
+        "unchanged_identifiers": item.unchanged_identifiers,
+        "duplicate_rows": item.duplicate_rows,
+        "multi_branch_identifiers": item.multi_branch_identifiers,
+        "review_rows": item.review_rows,
         "conflict_count": item.conflict_count,
         "format_warning": item.format_warning,
         "error_message": item.error_message,
@@ -155,6 +160,63 @@ def get_cif_import(batch_id: int, db: Session = Depends(get_db)):
     if not item:
         raise HTTPException(status_code=404, detail="Không tìm thấy lần import CIF")
     return batch_payload(item)
+
+
+@router.get("/imports/{batch_id}/issues")
+def get_cif_import_issues(
+    batch_id: int,
+    limit: int = Query(default=200, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    batch_exists = db.query(CifImportBatch.id).filter(CifImportBatch.id == batch_id).first()
+    if not batch_exists:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lần import CIF")
+    rows = (
+        db.query(CifImportError)
+        .filter(CifImportError.import_batch_id == batch_id)
+        .order_by(CifImportError.source_row_number, CifImportError.id)
+        .limit(limit)
+        .all()
+    )
+    issues = [
+        {
+            "id": f"error-{item.id}",
+            "source_row_number": item.source_row_number,
+            "full_cif_code": item.full_cif_code,
+            "severity": item.severity,
+            "error_code": item.error_code,
+            "field_name": item.field_name,
+            "raw_value": item.raw_value,
+            "message": item.message,
+        }
+        for item in rows
+    ]
+    conflicts = (
+        db.query(CifIdentityConflict)
+        .filter(CifIdentityConflict.import_batch_id == batch_id)
+        .order_by(CifIdentityConflict.id)
+        .limit(limit)
+        .all()
+    )
+    for item in conflicts:
+        details = item.details or {}
+        issues.append(
+            {
+                "id": f"conflict-{item.id}",
+                "source_row_number": details.get("source_row_number"),
+                "full_cif_code": (item.full_cif_codes or [None])[0],
+                "severity": "warning",
+                "error_code": item.conflict_type,
+                "field_name": None,
+                "raw_value": item.identity_value,
+                "message": (
+                    "Thông tin định danh của cùng mã khách hàng lõi không khớp"
+                    if item.conflict_type == "core_identity_mismatch"
+                    else "Giấy tờ định danh đang gắn với nhiều mã khách hàng"
+                ),
+            }
+        )
+    return issues[:limit]
 
 
 @router.get("/customers")

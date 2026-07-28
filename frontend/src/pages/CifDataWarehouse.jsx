@@ -325,6 +325,9 @@ function ReconciliationTab() {
 function HistoryTab() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [selectedBatch, setSelectedBatch] = useState(null);
+  const [issues, setIssues] = useState([]);
+  const [issuesLoading, setIssuesLoading] = useState(false);
   useEffect(() => {
     let active = true;
     async function load() {
@@ -344,29 +347,93 @@ function HistoryTab() {
       window.clearInterval(timer);
     };
   }, []);
+  async function openImportResult(row) {
+    setSelectedBatch(row);
+    setIssuesLoading(true);
+    try {
+      const { data } = await client.get(`/cif/imports/${row.id}/issues`);
+      setIssues(data || []);
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    } finally {
+      setIssuesLoading(false);
+    }
+  }
   return (
-    <Card title="Lịch sử cập nhật kho CIF" className="cif-panel">
-      <Table
-        loading={loading}
-        rowKey="id"
-        dataSource={rows}
-        pagination={false}
-        scroll={{ x: 1150 }}
-        columns={[
-          { title: 'File CIF', dataIndex: 'original_filename', width: 220, fixed: 'left' },
-          { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100, render: (value) => value ? <Tag color="blue">{value}</Tag> : '—' },
-          { title: 'Tổng dòng', dataIndex: 'total_rows', width: 120 },
-          { title: 'Chấp nhận', dataIndex: 'accepted_rows', width: 110 },
-          { title: 'KH mới', dataIndex: 'new_customers', width: 100 },
-          { title: 'Mã CIF mới', dataIndex: 'new_identifiers', width: 110 },
-          { title: 'Cảnh báo', dataIndex: 'warning_rows', width: 100 },
-          { title: 'Xung đột', dataIndex: 'conflict_count', width: 100 },
-          { title: 'Tiến độ', dataIndex: 'progress_percent', width: 160, render: (value, row) => <Progress percent={Number(value || 0)} size="small" status={row.status === 'error' ? 'exception' : row.status === 'success' ? 'success' : 'active'} /> },
-          { title: 'Trạng thái', dataIndex: 'status', width: 130, render: (value) => <Tag color={value === 'success' ? 'success' : value === 'error' ? 'error' : 'processing'}>{value}</Tag> },
-        ]}
-        locale={{ emptyText: <Empty description="Chưa có lần import CIF nào" /> }}
-      />
-    </Card>
+    <>
+      <Card title="Lịch sử cập nhật kho CIF" className="cif-panel">
+        <Table
+          loading={loading}
+          rowKey="id"
+          dataSource={rows}
+          pagination={false}
+          scroll={{ x: 1650 }}
+          columns={[
+            { title: 'File CIF', dataIndex: 'original_filename', width: 220, fixed: 'left' },
+            { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100, render: (value) => value ? <Tag color="blue">{value}</Tag> : '—' },
+            { title: 'Tổng dòng', dataIndex: 'total_rows', width: 100 },
+            { title: 'CIF mới', dataIndex: 'new_identifiers', width: 90 },
+            { title: 'Cập nhật', dataIndex: 'updated_identifiers', width: 90, render: (value) => <Tag color={value ? 'processing' : 'default'}>{value || 0}</Tag> },
+            { title: 'Không đổi', dataIndex: 'unchanged_identifiers', width: 100 },
+            { title: 'Trùng file', dataIndex: 'duplicate_rows', width: 100, render: (value) => <Tag color={value ? 'error' : 'default'}>{value || 0}</Tag> },
+            { title: 'Đa chi nhánh', dataIndex: 'multi_branch_identifiers', width: 115, render: (value) => <Tag color={value ? 'cyan' : 'default'}>{value || 0}</Tag> },
+            { title: 'Cần đối chiếu', dataIndex: 'review_rows', width: 125, render: (value) => <Tag color={value ? 'warning' : 'default'}>{value || 0}</Tag> },
+            { title: 'Bị loại', dataIndex: 'rejected_rows', width: 85 },
+            { title: 'Tiến độ', dataIndex: 'progress_percent', width: 160, render: (value, row) => <Progress percent={Number(value || 0)} size="small" status={row.status === 'error' ? 'exception' : row.status === 'success' ? 'success' : 'active'} /> },
+            { title: 'Trạng thái', dataIndex: 'status', width: 120, render: (value) => <Tag color={value === 'success' ? 'success' : value === 'error' ? 'error' : 'processing'}>{value}</Tag> },
+            { title: '', key: 'action', width: 90, fixed: 'right', render: (_, row) => <Button size="small" onClick={() => openImportResult(row)}>Chi tiết</Button> },
+          ]}
+          locale={{ emptyText: <Empty description="Chưa có lần import CIF nào" /> }}
+        />
+      </Card>
+      <Drawer
+        title={`Kết quả import ${selectedBatch?.original_filename || ''}`}
+        width={820}
+        open={Boolean(selectedBatch)}
+        onClose={() => { setSelectedBatch(null); setIssues([]); }}
+      >
+        {selectedBatch ? (
+          <Space orientation="vertical" size={18} style={{ width: '100%' }}>
+            <Row gutter={[10, 10]}>
+              {[
+                ['CIF mới', selectedBatch.new_identifiers, 'blue'],
+                ['Cập nhật', selectedBatch.updated_identifiers, 'processing'],
+                ['Không thay đổi', selectedBatch.unchanged_identifiers, 'default'],
+                ['Trùng trong file', selectedBatch.duplicate_rows, 'error'],
+                ['Đa chi nhánh', selectedBatch.multi_branch_identifiers, 'cyan'],
+                ['Cần đối chiếu', selectedBatch.review_rows, 'warning'],
+              ].map(([label, value, color]) => (
+                <Col xs={12} md={8} key={label}>
+                  <Card size="small"><Statistic title={label} value={value || 0} valueStyle={{ color: color === 'error' ? '#cf1322' : undefined }} /></Card>
+                </Col>
+              ))}
+            </Row>
+            <Alert
+              showIcon
+              type={selectedBatch.duplicate_rows || selectedBatch.review_rows ? 'warning' : 'success'}
+              message={selectedBatch.duplicate_rows || selectedBatch.review_rows ? 'Có dữ liệu cần kiểm tra' : 'Không phát hiện mã khách hàng trùng hoặc xung đột'}
+              description="Mã CIF trùng trong cùng file bị loại; mã khách hàng lõi ở chi nhánh khác được gộp; thông tin định danh mâu thuẫn được chuyển sang đối chiếu."
+            />
+            <Table
+              size="small"
+              loading={issuesLoading}
+              rowKey="id"
+              dataSource={issues}
+              pagination={{ pageSize: 10, hideOnSinglePage: true }}
+              scroll={{ x: 720 }}
+              columns={[
+                { title: 'Dòng', dataIndex: 'source_row_number', width: 70 },
+                { title: 'Mã CIF', dataIndex: 'full_cif_code', width: 150, render: (value) => value ? <Text code>{value}</Text> : '—' },
+                { title: 'Mức độ', dataIndex: 'severity', width: 100, render: (value) => <Tag color={value === 'error' ? 'error' : 'warning'}>{value}</Tag> },
+                { title: 'Loại', dataIndex: 'error_code', width: 160 },
+                { title: 'Nội dung', dataIndex: 'message' },
+              ]}
+              locale={{ emptyText: <Empty description="Không có lỗi chi tiết" /> }}
+            />
+          </Space>
+        ) : null}
+      </Drawer>
+    </>
   );
 }
 

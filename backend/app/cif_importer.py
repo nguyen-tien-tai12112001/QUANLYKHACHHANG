@@ -34,6 +34,33 @@ STATUS_MAP = {
     "không hợp lệ": "invalid",
     "không xác nhận": "unverified",
 }
+IDENTIFIER_COMPARE_FIELDS = (
+    "customer_name",
+    "customer_name_ascii",
+    "short_name",
+    "customer_type",
+    "customer_detail_type",
+    "registration_number",
+    "passport_number",
+    "driver_license_number",
+    "tax_number",
+    "telephone",
+    "address_type",
+    "full_address",
+    "province",
+    "district",
+    "commune_ward",
+    "nationality_code",
+    "source_status",
+    "normalized_status",
+    "operator_user",
+    "raw_data",
+)
+MASTER_IDENTITY_FIELDS = (
+    "registration_number",
+    "passport_number",
+    "tax_number",
+)
 
 
 def clean(value) -> str:
@@ -200,6 +227,30 @@ def import_cif_file(file_path: str | Path, original_filename: str | None = None)
             db.add(batch)
         db.commit()
         db.refresh(batch)
+        db.query(CifImportError).filter(CifImportError.import_batch_id == batch.id).delete(
+            synchronize_session=False
+        )
+        db.query(CifIdentityConflict).filter(
+            CifIdentityConflict.import_batch_id == batch.id,
+            CifIdentityConflict.conflict_type == "core_identity_mismatch",
+            CifIdentityConflict.status == "pending",
+        ).delete(synchronize_session=False)
+        for field in (
+            "processed_rows",
+            "accepted_rows",
+            "warning_rows",
+            "rejected_rows",
+            "new_customers",
+            "new_identifiers",
+            "updated_identifiers",
+            "unchanged_identifiers",
+            "duplicate_rows",
+            "multi_branch_identifiers",
+            "review_rows",
+            "conflict_count",
+        ):
+            setattr(batch, field, 0)
+        db.commit()
 
         workbook = xlrd.open_workbook(str(path), on_demand=True)
         if not workbook.sheet_names():
@@ -345,19 +396,88 @@ def import_cif_file(file_path: str | Path, original_filename: str | None = None)
         for group in chunked(full_codes):
             for identifier in db.query(CifCustomerIdentifier).filter(CifCustomerIdentifier.full_cif_code.in_(group)).all():
                 identifier_by_code[identifier.full_cif_code] = identifier
+        branches_by_customer: dict[int, set[str]] = {}
+        customer_ids = [customer.id for customer in customer_by_core.values()]
+        for group in chunked(customer_ids):
+            branch_rows = (
+                db.query(
+                    CifCustomerIdentifier.customer_id,
+                    CifCustomerIdentifier.branch_code,
+                )
+                .filter(CifCustomerIdentifier.customer_id.in_(group))
+                .all()
+            )
+            for customer_id, branch_code in branch_rows:
+                branches_by_customer.setdefault(customer_id, set()).add(branch_code)
+
         insert_mappings = []
         updated_identifiers = 0
+        unchanged_identifiers = 0
+        multi_branch_identifiers = 0
+        review_source_rows: set[int] = set()
+        profile_conflicts = []
+        existing_profile_conflicts = {
+            value
+            for (value,) in (
+                db.query(CifIdentityConflict.identity_value)
+                .filter(
+                    CifIdentityConflict.conflict_type == "core_identity_mismatch",
+                    CifIdentityConflict.status == "pending",
+                )
+                .all()
+            )
+        }
         for row in parsed_rows:
             customer = customer_by_core[row["customer_core_code"]]
             identifier = identifier_by_code.get(row["full_cif_code"])
             payload = {key: value for key, value in row.items() if key != "has_warning"}
             payload.update({"customer_id": customer.id, "import_batch_id": batch.id})
             if identifier:
-                for key, value in payload.items():
-                    setattr(identifier, key, value)
-                updated_identifiers += 1
+                changed_fields = [
+                    key
+                    for key in IDENTIFIER_COMPARE_FIELDS
+                    if getattr(identifier, key) != payload.get(key)
+                ]
+                if changed_fields:
+                    for key, value in payload.items():
+                        setattr(identifier, key, value)
+                    updated_identifiers += 1
+                else:
+                    unchanged_identifiers += 1
             else:
                 insert_mappings.append(payload)
+                known_branches = branches_by_customer.setdefault(customer.id, set())
+                if known_branches and row["branch_code"] not in known_branches:
+                    multi_branch_identifiers += 1
+                known_branches.add(row["branch_code"])
+
+            differences = {
+                field: {
+                    "master": getattr(customer, field),
+                    "source": row[field],
+                }
+                for field in MASTER_IDENTITY_FIELDS
+                if getattr(customer, field) and row[field] and getattr(customer, field) != row[field]
+            }
+            if differences:
+                review_source_rows.add(row["source_row_number"])
+                if row["customer_core_code"] not in existing_profile_conflicts:
+                    profile_conflicts.append(
+                        {
+                            "import_batch_id": batch.id,
+                            "conflict_type": "core_identity_mismatch",
+                            "identity_value": row["customer_core_code"],
+                            "customer_ids": [customer.id],
+                            "full_cif_codes": [row["full_cif_code"]],
+                            "details": {
+                                "source_row_number": row["source_row_number"],
+                                "branch_code": row["branch_code"],
+                                "differences": differences,
+                            },
+                            "status": "pending",
+                        }
+                    )
+                    existing_profile_conflicts.add(row["customer_core_code"])
             customer.last_import_batch_id = batch.id
             if not customer.customer_name and row["customer_name"]:
                 customer.customer_name = row["customer_name"]
@@ -373,9 +493,18 @@ def import_cif_file(file_path: str | Path, original_filename: str | None = None)
         batch.progress_percent = 85
         db.commit()
         _refresh_customer_counts(db)
-        conflict_count = _refresh_registration_conflicts(db, batch.id)
+        registration_conflict_count = _refresh_registration_conflicts(db, batch.id)
+        if profile_conflicts:
+            db.bulk_insert_mappings(CifIdentityConflict, profile_conflicts)
         warning_rows = len({item["source_row_number"] for item in errors if item["severity"] == "warning"})
         rejected_rows = total_rows - len(parsed_rows)
+        duplicate_rows = len(
+            {
+                item["source_row_number"]
+                for item in errors
+                if item["error_code"] == "duplicate_cif_in_file"
+            }
+        )
         batch.processed_rows = total_rows
         batch.accepted_rows = len(parsed_rows)
         batch.warning_rows = warning_rows
@@ -383,7 +512,11 @@ def import_cif_file(file_path: str | Path, original_filename: str | None = None)
         batch.new_customers = len(new_customer_mappings)
         batch.new_identifiers = len(insert_mappings)
         batch.updated_identifiers = updated_identifiers
-        batch.conflict_count = conflict_count
+        batch.unchanged_identifiers = unchanged_identifiers
+        batch.duplicate_rows = duplicate_rows
+        batch.multi_branch_identifiers = multi_branch_identifiers
+        batch.review_rows = len(review_source_rows)
+        batch.conflict_count = registration_conflict_count + len(profile_conflicts)
         batch.status = "success"
         batch.stage = "Hoàn thành"
         batch.progress_percent = 100
