@@ -278,7 +278,18 @@ function SourceTable({ sources }) {
   );
 }
 
-const REQUIRED_PROFILE_SOURCES = ['DP01', 'LN01', 'CN05', 'PF14'];
+const REQUIRED_PROFILE_SOURCES = ['DP01', 'LN01', 'CN05', 'PF10', 'PF14', 'BC06', 'BC29', 'KH02', 'FTPLN'];
+
+function isRequiredSourceReady(files, readiness, sourceCode, branchCode) {
+  if (sourceCode === 'FTPLN') {
+    return Boolean(readiness.sources
+      ?.find((item) => item.source_code === 'FTPLN')
+      ?.branch_readiness?.find((item) => item.branch_code === branchCode)?.is_ready);
+  }
+  return files.some(
+    (item) => item.file_type === sourceCode && item.branch_code === branchCode && item.status === 'success',
+  );
+}
 
 function sourceCell(files, sourceCode, branchCode, readiness) {
   const rows = files.filter((item) => item.file_type === sourceCode && item.branch_code === branchCode);
@@ -337,9 +348,9 @@ function ReadinessOverview({ data }) {
   const activeFiles = data.files.filter((item) => !['deleted', 'replaced', 'deleting'].includes(item.status));
   const branches = [...new Set(activeFiles.map((item) => item.branch_code).filter(Boolean))].sort();
   const missingRequired = REQUIRED_PROFILE_SOURCES.flatMap((sourceCode) => (
-    branches.filter((branchCode) => !activeFiles.some(
-      (item) => item.file_type === sourceCode && item.branch_code === branchCode && item.status === 'success',
-    )).map((branchCode) => `${sourceCode}/${branchCode}`)
+    branches.filter(
+      (branchCode) => !isRequiredSourceReady(activeFiles, data.readiness, sourceCode, branchCode),
+    ).map((branchCode) => `${sourceCode}/${branchCode}`)
   ));
   const errorFiles = activeFiles.filter((item) => item.status === 'error');
   const runningFiles = activeFiles.filter((item) => ['queued', 'processing'].includes(item.status));
@@ -414,14 +425,7 @@ function SourceBranchMatrix({ data }) {
   const sourceCodes = data.readiness.sources?.map((item) => item.source_code)
     || [...new Set(activeFiles.map((item) => item.file_type))].sort();
   function isSourceReady(sourceCode, branchCode) {
-    if (sourceCode === 'FTPLN') {
-      return Boolean(data.readiness.sources
-        ?.find((item) => item.source_code === 'FTPLN')
-        ?.branch_readiness?.find((item) => item.branch_code === branchCode)?.is_ready);
-    }
-    return activeFiles.some(
-      (item) => item.file_type === sourceCode && item.branch_code === branchCode && item.status === 'success',
-    );
+    return isRequiredSourceReady(activeFiles, data.readiness, sourceCode, branchCode);
   }
   const branchReadyCounts = Object.fromEntries(branches.map((branchCode) => [
     branchCode,
@@ -716,14 +720,14 @@ function MappingPage({ data }) {
 
   const statusOptions = [
     { value: 'all', label: 'Tất cả trạng thái' },
-    { value: 'has_data', label: 'Đang có dữ liệu' },
+    { value: 'has_data', label: 'Đã có dữ liệu' },
     { value: 'no_data', label: 'Đã mapping, chưa có dữ liệu' },
     { value: 'mapped', label: 'Đã mapping, chưa có hồ sơ kỳ' },
     { value: 'not_implemented', label: 'Chưa triển khai' },
   ];
   const runtimeStatusTag = (value) => {
-    if (value === 'has_data') return <Tag color="success">Đang có dữ liệu</Tag>;
-    if (value === 'no_data') return <Tag color="warning">Mapping chưa có dữ liệu</Tag>;
+    if (value === 'has_data') return <Tag color="success">Đã có dữ liệu</Tag>;
+    if (value === 'no_data') return <Tag color="warning">Đã có logic, chưa phát sinh</Tag>;
     if (value === 'mapped') return <Tag color="processing">Đã mapping</Tag>;
     return <Tag>Chưa triển khai</Tag>;
   };
@@ -771,7 +775,7 @@ function MappingPage({ data }) {
       <Row gutter={[16, 16]}>
         <Col xs={24} md={6}><Metric label="Tổng trường theo dõi" value={fieldDictionary.length} note={`${fieldGroups.length} nhóm nghiệp vụ`} color="#3567a8" icon={<DatabaseOutlined />} /></Col>
         <Col xs={24} md={6}><Metric label="Đã có mapping thật" value={`${implementedCount}/${fieldDictionary.length}`} note="Có cột đích trong Profile" color="#7254a3" icon={<CheckCircleFilled />} /></Col>
-        <Col xs={24} md={6}><Metric label="Đang có dữ liệu" value={`${availableCount} trường`} note={`Kỳ ${periodLabel(data.periodKey)}`} color="#218653" icon={<CheckCircleFilled />} /></Col>
+        <Col xs={24} md={6}><Metric label="Đã có dữ liệu" value={`${availableCount} trường`} note={`Kỳ ${periodLabel(data.periodKey)}`} color="#218653" icon={<CheckCircleFilled />} /></Col>
         <Col xs={24} md={6}><Metric label="Chưa triển khai" value={`${pendingCount} trường`} note="Chưa có cột đích/công thức chạy thật" color="#8f1438" icon={<AlertOutlined />} /></Col>
       </Row>
       <Card className="demo-filter-card demo-section">

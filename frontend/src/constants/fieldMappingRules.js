@@ -66,16 +66,40 @@ const implemented = {
     reconciliation: 'Đối chiếu tổng số dư bình quân PF14 theo MA_KH/chi nhánh và từng loại tiền.',
   },
   DUNO_NHTT: {
-    profileField: 'so_du_tien_vay',
-    actualSource: 'LN01',
-    calculation: 'Hiện tại là tổng SUM(DU_NO) tất cả khoản vay của MA_KH; chưa tách riêng hoàn toàn dư nợ ngắn hạn thông thường.',
-    reconciliation: 'Đối chiếu tổng dư nợ LN01 theo MA_KH/chi nhánh; cần tách LOAN_TYPE nếu dùng đúng chỉ tiêu DUNO_NHTT.',
+    profileField: 'du_no_ngan_han',
+    actualSource: 'PF10',
+    calculation: 'SUM(EOMBAL) theo mã KH lõi và các chi nhánh với LNTYPE = 100.',
+    reconciliation: 'Chỉ đưa vào Profile khi mã KH lõi có trong DP01 của kỳ; chi tiết giữ theo TRBRCD và ACCTNO.',
+  },
+  DUNO_NHTTBQ: {
+    profileField: 'du_no_ngan_han_bq',
+    actualSource: 'PF10',
+    calculation: 'SUM(AVGBAL) theo mã KH lõi và các chi nhánh với LNTYPE = 100.',
+    reconciliation: 'Đối chiếu tổng các LDS PF10 theo khách hàng, chi nhánh và loại vay 100.',
+  },
+  DUNO_TDHTT: {
+    profileField: 'du_no_trung_dai_han',
+    actualSource: 'PF10',
+    calculation: 'SUM(EOMBAL) với LNTYPE thuộc 110 hoặc 120.',
+    reconciliation: 'Gộp trung hạn và dài hạn ở chỉ tiêu tổng, vẫn giữ mã 110/120 tại chi tiết LDS.',
+  },
+  DUNO_TDHTTBQ: {
+    profileField: 'du_no_trung_dai_han_bq',
+    actualSource: 'PF10',
+    calculation: 'SUM(AVGBAL) với LNTYPE thuộc 110 hoặc 120.',
+    reconciliation: 'Đối chiếu tổng bình quân theo từng chi nhánh trước khi cộng toàn khách hàng.',
   },
   DUNO_TC: {
-    profileField: 'thau_chi',
-    actualSource: 'LN01',
-    calculation: 'Hiện lưu cờ 1/0 khi LOAN_TYPE là thấu chi, chưa lưu số dư thấu chi riêng.',
-    reconciliation: 'Đối chiếu LOAN_TYPE trong LN01; chưa đủ để thay thế chỉ tiêu số tiền DUNO_TC.',
+    profileField: 'du_no_thau_chi',
+    actualSource: 'PF10',
+    calculation: 'SUM(EOMBAL) với LNTYPE = 241.',
+    reconciliation: 'Đối chiếu các LDS thấu chi PF10 theo mã KH lõi và chi nhánh.',
+  },
+  DUNO_TCBQ: {
+    profileField: 'du_no_thau_chi_bq',
+    actualSource: 'PF10',
+    calculation: 'SUM(AVGBAL) với LNTYPE = 241.',
+    reconciliation: 'Đối chiếu bình quân các LDS thấu chi PF10 theo mã KH lõi và chi nhánh.',
   },
   TKSODEP: {
     profileField: 'tk_so_dep',
@@ -131,6 +155,48 @@ const implemented = {
     calculation: 'MAX(CASE WHEN THE_TIN_DUNG_QUOC_TE > 0 THEN 1 ELSE 0 END).',
     reconciliation: 'Đối chiếu số lượng thẻ tín dụng quốc tế trong CN05.',
   },
+  SODU_TKTT: {
+    profileField: 'pf14_account_balances.monthlyendbalance',
+    actualSource: 'PF14',
+    calculation: 'SUM(MONTHLYENDBALANCE × tỷ giá) theo mã KH lõi với MONTERM = 0; chi tiết được khai thác tại tab Tiền gửi.',
+    reconciliation: 'Đối chiếu từng ACCOUNTNO, TRBRCD, CUSTSEQ và CCY của PF14; tổng chi tiết phải bằng số dư TKTT của khách hàng.',
+  },
+  SODU_TGCKHBQ: {
+    profileField: 'pf14_account_balances.averagebalance',
+    actualSource: 'PF14',
+    calculation: 'SUM(AVERAGEBALANCE × tỷ giá) theo mã KH lõi với MONTERM > 0.',
+    reconciliation: 'Đối chiếu số dư bình quân từng tài khoản PF14 có kỳ hạn trước khi cộng theo khách hàng và chi nhánh.',
+  },
+  PHAN_LOAIKH: {
+    profileField: 'bc06_customer_classifications.segment_branch',
+    actualSource: 'BC06',
+    calculation: 'Lấy SEGMENT_BRANCH theo mã khách hàng và chi nhánh tại kỳ; lịch sử phân khúc được giữ theo từng kỳ BC06.',
+    reconciliation: 'Đối chiếu CUSTOMER_CODE, BRANCH_CODE và CLASSIFICATION_MONTH của BC06; không ghi đè phân khúc giữa các chi nhánh.',
+  },
+  DUNO_XAU: {
+    profileField: 'bc29_customer_credit_risks.total_outstanding',
+    actualSource: 'BC29',
+    calculation: 'SUM(TOTAL_OUTSTANDING) theo khách hàng với DEBT_GROUP thuộc 3, 4 hoặc 5.',
+    reconciliation: 'Đối chiếu tổng dư nợ BC29 theo CUSTOMER_CODE/BRANCH_CODE và nhóm nợ; kỳ không có nhóm 3-5 được ghi nhận là không phát sinh.',
+  },
+  DUNO_XLRR: {
+    profileField: 'bc29_customer_credit_risks.handled_risk_amount',
+    actualSource: 'BC29',
+    calculation: 'SUM(HANDLED_RISK_AMOUNT) theo mã khách hàng và chi nhánh trong kỳ.',
+    reconciliation: 'Đối chiếu CUSTOMER_CODE, ngày xử lý rủi ro và số tiền xử lý tại BC29 trước khi cộng toàn khách hàng.',
+  },
+  DPRR_TT: {
+    profileField: 'bc29_customer_credit_risks.period_provision_amount',
+    actualSource: 'BC29',
+    calculation: 'SUM(PERIOD_PROVISION_AMOUNT) theo mã khách hàng và chi nhánh trong kỳ.',
+    reconciliation: 'Đối chiếu số dự phòng kỳ với dư nợ, nhóm nợ và giá trị tài sản bảo đảm được khấu trừ trong BC29.',
+  },
+  LOATHANTAI: {
+    profileField: 'loa_bien_dong_so_du',
+    actualSource: 'CN05',
+    calculation: 'MAX(CASE WHEN LOA_BIEN_DONG_SO_DU > 0 THEN 1 ELSE 0 END) theo mã khách hàng và chi nhánh.',
+    reconciliation: 'Đối chiếu cờ sử dụng loa biến động số dư trong CN05; không suy diễn từ Agribank Plus hoặc SMS.',
+  },
 };
 
 export function mappingRuleFor(field) {
@@ -141,4 +207,3 @@ export function mappingRuleFor(field) {
     reconciliation: 'Chưa triển khai đối chiếu tự động; cần chốt nguồn, khóa nối và quy tắc nghiệp vụ trước khi đưa vào Profile.',
   };
 }
-

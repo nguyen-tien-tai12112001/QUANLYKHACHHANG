@@ -6,7 +6,7 @@ from time import monotonic
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from sqlalchemy import and_, asc, desc, func, or_, text
+from sqlalchemy import and_, asc, case, desc, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.customer_processing import (
@@ -19,19 +19,37 @@ from app.customer_processing import (
 )
 from app.database import get_db
 from app.models import (
+    BC06CustomerClassification,
+    BC29CustomerCreditRisk,
     CustomerPeriodBranchDetail,
     CustomerPeriodExchangeRate,
     CustomerPeriodProfile,
     CustomerProcessingJob,
     CustomerProcessingOptionalFile,
+    DP01DepositAccount,
     ImportFile,
     ImportBatch,
+    LN01Loan,
     OrgBranch,
     OrgDepartment,
+    PF10LoanProfitability,
+    PF14AccountBalance,
+    SystemUser,
 )
 
 
 router = APIRouter(prefix="/api/customer-processing", tags=["customer-processing"])
+PF10_LOAN_TYPE_GROUPS = {
+    "short_term": {"100"},
+    "medium_long_term": {"110", "120"},
+    "overdraft": {"241"},
+}
+PF10_LOAN_TYPE_LABELS = {
+    "100": "Ngắn hạn",
+    "110": "Trung hạn",
+    "120": "Dài hạn",
+    "241": "Thấu chi",
+}
 
 PROFILE_DICTIONARY_FIELD_MAP = {
     "MCN": "primary_branch_code",
@@ -45,8 +63,12 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "DS_TKTT": "doanh_so_chuyen_tien_ve_tk",
     "SODU_TGCKH": "so_du_tien_gui",
     "SODU_TKTTBQ": "so_du_tgtt_binh_quan",
-    "DUNO_NHTT": "so_du_tien_vay",
-    "DUNO_TC": "thau_chi",
+    "DUNO_NHTT": "du_no_ngan_han",
+    "DUNO_NHTTBQ": "du_no_ngan_han_bq",
+    "DUNO_TDHTT": "du_no_trung_dai_han",
+    "DUNO_TDHTTBQ": "du_no_trung_dai_han_bq",
+    "DUNO_TC": "du_no_thau_chi",
+    "DUNO_TCBQ": "du_no_thau_chi_bq",
     "TKSODEP": "tk_so_dep",
     "AGRIBANKPLUS": "agribank_plus",
     "OTT": "tin_nhan_ott",
@@ -56,7 +78,56 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "THE_GNND": "the_ghi_no_noi_dia",
     "THE_LOCVIET": "the_td_loc_viet",
     "THE_TDQT": "the_td_quoc_te",
+    "LOATHANTAI": "loa_bien_dong_so_du",
 }
+
+
+def _source_dictionary_coverage(db: Session, period_key: str) -> dict[str, tuple[str, int]]:
+    """Độ phủ các chỉ tiêu đã có logic khai thác trực tiếp từ bảng nguồn.
+
+    Các chỉ tiêu này chưa lưu vật lý trong customer_period_profiles nhưng đã được
+    API chi tiết C360 tính/hiển thị từ nguồn tương ứng.
+    """
+    pf14 = db.query(
+        func.count(func.distinct(PF14AccountBalance.custseq)).filter(
+            func.coalesce(PF14AccountBalance.monterm, 0) == 0,
+            func.coalesce(PF14AccountBalance.monthlyendbalance, 0) != 0,
+        ),
+        func.count(func.distinct(PF14AccountBalance.custseq)).filter(
+            func.coalesce(PF14AccountBalance.monterm, 0) > 0,
+            func.coalesce(PF14AccountBalance.averagebalance, 0) != 0,
+        ),
+    ).filter(PF14AccountBalance.period_key == period_key).one()
+    bc06_segment = (
+        db.query(func.count(func.distinct(BC06CustomerClassification.customer_code)))
+        .filter(
+            BC06CustomerClassification.period_key == period_key,
+            BC06CustomerClassification.segment_branch.isnot(None),
+            func.trim(BC06CustomerClassification.segment_branch) != "",
+        )
+        .scalar()
+        or 0
+    )
+    bc29 = db.query(
+        func.count(func.distinct(BC29CustomerCreditRisk.customer_code)).filter(
+            BC29CustomerCreditRisk.debt_group.in_(["3", "4", "5"]),
+            func.coalesce(BC29CustomerCreditRisk.total_outstanding, 0) != 0,
+        ),
+        func.count(func.distinct(BC29CustomerCreditRisk.customer_code)).filter(
+            func.coalesce(BC29CustomerCreditRisk.handled_risk_amount, 0) != 0,
+        ),
+        func.count(func.distinct(BC29CustomerCreditRisk.customer_code)).filter(
+            func.coalesce(BC29CustomerCreditRisk.period_provision_amount, 0) != 0,
+        ),
+    ).filter(BC29CustomerCreditRisk.period_key == period_key).one()
+    return {
+        "SODU_TKTT": ("pf14_account_balances.monthlyendbalance", int(pf14[0] or 0)),
+        "SODU_TGCKHBQ": ("pf14_account_balances.averagebalance", int(pf14[1] or 0)),
+        "PHAN_LOAIKH": ("bc06_customer_classifications.segment_branch", int(bc06_segment)),
+        "DUNO_XAU": ("bc29_customer_credit_risks.total_outstanding", int(bc29[0] or 0)),
+        "DUNO_XLRR": ("bc29_customer_credit_risks.handled_risk_amount", int(bc29[1] or 0)),
+        "DPRR_TT": ("bc29_customer_credit_risks.period_provision_amount", int(bc29[2] or 0)),
+    }
 _PROFILE_COVERAGE_CACHE: dict[str, tuple[float, dict]] = {}
 
 
@@ -96,6 +167,84 @@ def serialize_job(job: CustomerProcessingJob | None) -> dict | None:
             "updated_at",
         ],
     )
+
+
+def enrich_profile_org_names(db: Session, payloads: list[dict]) -> list[dict]:
+    registry, _, _ = _load_active_org_department_registry(db)
+    staff_rows = (
+        db.query(SystemUser, OrgBranch, OrgDepartment)
+        .outerjoin(OrgBranch, OrgBranch.id == SystemUser.branch_id)
+        .outerjoin(OrgDepartment, OrgDepartment.id == SystemUser.department_id)
+        .all()
+    )
+    staff_registry = {}
+    for user, branch, department in staff_rows:
+        staff_info = {
+            "ma_cb": user.credit_officer_code,
+            "officer_employee_code": user.employee_code,
+            "officer_ipcas": user.ipcas_username,
+            "ten_can_bo": user.full_name,
+            "officer_branch_code": branch.branch_code if branch else None,
+            "officer_branch_name": branch.branch_name if branch else None,
+            "officer_department_code": department.department_code if department else None,
+            "officer_department_name": department.department_name if department else None,
+        }
+        for value in (user.credit_officer_code, user.employee_code, user.ipcas_username):
+            key = str(value or "").strip().upper()
+            if key:
+                staff_registry[key] = staff_info
+
+    def enrich_officer(target: dict) -> dict | None:
+        staff_info = None
+        for field in ("ma_cb", "officer_employee_code", "officer_ipcas"):
+            key = str(target.get(field) or "").strip().upper()
+            if key and key in staff_registry:
+                staff_info = staff_registry[key]
+                break
+        if staff_info:
+            target.update({key: value for key, value in staff_info.items() if value is not None})
+        return staff_info
+
+    for payload in payloads:
+        enrich_officer(payload)
+        labels = []
+        for raw_item in str(payload.get("pgd_codes") or "").split(","):
+            item = raw_item.strip()
+            if not item:
+                continue
+            if ":" in item:
+                branch_code, department_code = [part.strip() for part in item.split(":", 1)]
+            else:
+                branch_code = str(payload.get("primary_branch_code") or "").strip()
+                department_code = item
+            if not department_code:
+                continue
+            name = registry.get((branch_code, department_code))
+            labels.append(f"{name or department_code} ({branch_code})" if branch_code else (name or department_code))
+        payload["pgd_names"] = ", ".join(dict.fromkeys(labels)) or None
+
+        primary_branch = str(payload.get("primary_branch_code") or "").strip()
+        primary_pgd = str(payload.get("primary_pgd_code") or "").strip()
+        if primary_branch and primary_pgd:
+            payload["primary_pgd_name"] = registry.get(
+                (primary_branch, primary_pgd),
+                payload.get("primary_pgd_name"),
+            )
+
+        details = payload.get("branch_details")
+        if isinstance(details, list):
+            for detail in details:
+                # Cán bộ quản lý là quan hệ theo từng khách hàng + chi nhánh.
+                # Không kế thừa cán bộ đại diện của hồ sơ tổng xuống chi nhánh
+                # không có cán bộ trong dữ liệu LN01.
+                detail_staff = enrich_officer(detail)
+                if detail_staff:
+                    detail.update({key: value for key, value in detail_staff.items() if value is not None})
+                branch = str(detail.get("branch_code") or "").strip()
+                pgd = str(detail.get("ma_pgd") or "").strip()
+                if branch and pgd:
+                    detail["ten_pgd"] = registry.get((branch, pgd), detail.get("ten_pgd"))
+    return payloads
 
 
 PROFILE_SERVICE_FIELDS = {
@@ -260,6 +409,16 @@ def profile_brief_fields() -> list[str]:
         "so_du_tien_gui",
         "doanh_so_chuyen_tien_ve_tk",
         "so_du_tien_vay",
+        "du_no_ngan_han",
+        "du_no_ngan_han_bq",
+        "du_no_trung_dai_han",
+        "du_no_trung_dai_han_bq",
+        "du_no_thau_chi",
+        "du_no_thau_chi_bq",
+        "pf10_lds_count",
+        "pf10_interest",
+        "pf10_accruals",
+        "pf10_book_correction_interest",
         "loai_vay",
         "so_du_tgtt_binh_quan",
         "ma_cb",
@@ -334,6 +493,18 @@ def apply_profile_filters(
     group_key: str | None = None,
     multi_branch: bool | None = None,
     no_service: bool = False,
+    customer_type: str | None = None,
+    has_deposit: bool | None = None,
+    has_loan: bool | None = None,
+    min_deposit: float | None = None,
+    max_deposit: float | None = None,
+    min_loan: float | None = None,
+    max_loan: float | None = None,
+    min_casa: float | None = None,
+    max_casa: float | None = None,
+    service_codes: str | None = None,
+    min_service_count: int | None = None,
+    missing_phone: bool | None = None,
 ):
     if keyword:
         like = f"%{keyword.strip()}%"
@@ -356,6 +527,42 @@ def apply_profile_filters(
             query = query.filter(or_(*(CustomerPeriodProfile.loai_vay.ilike(f"%{item}%") for item in loan_types)))
     if officer_code:
         query = query.filter(CustomerPeriodProfile.ma_cb == officer_code)
+    if customer_type:
+        customer_types = split_filter_values(customer_type)
+        if customer_types:
+            query = query.filter(CustomerPeriodProfile.loai_khach_hang.in_(customer_types))
+    deposit_expr = (
+        func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0)
+        + func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0)
+    )
+    loan_expr = func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0)
+    casa_expr = func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0)
+    if has_deposit is not None:
+        query = query.filter(deposit_expr > 0 if has_deposit else deposit_expr <= 0)
+    if has_loan is not None:
+        query = query.filter(loan_expr > 0 if has_loan else loan_expr <= 0)
+    for value, expression, operator in (
+        (min_deposit, deposit_expr, "min"),
+        (max_deposit, deposit_expr, "max"),
+        (min_loan, loan_expr, "min"),
+        (max_loan, loan_expr, "max"),
+        (min_casa, casa_expr, "min"),
+        (max_casa, casa_expr, "max"),
+    ):
+        if value is not None:
+            query = query.filter(expression >= value if operator == "min" else expression <= value)
+    required_services = [item for item in split_filter_values(service_codes) if item in PROFILE_SERVICE_FIELDS]
+    for service in required_services:
+        query = query.filter(getattr(CustomerPeriodProfile, service) > 0)
+    if min_service_count is not None:
+        service_count_expr = sum(func.coalesce(getattr(CustomerPeriodProfile, key), 0) for key in PROFILE_SERVICE_FIELDS)
+        query = query.filter(service_count_expr >= min_service_count)
+    if missing_phone is not None:
+        phone_missing = or_(
+            CustomerPeriodProfile.telephone.is_(None),
+            func.trim(CustomerPeriodProfile.telephone) == "",
+        )
+        query = query.filter(phone_missing if missing_phone else ~phone_missing)
     if multi_branch is not None:
         query = query.filter(CustomerPeriodProfile.branch_count > 1 if multi_branch else CustomerPeriodProfile.branch_count <= 1)
     unused_services = [item for item in split_filter_values(unused_service) if item in PROFILE_SERVICE_FIELDS]
@@ -518,6 +725,7 @@ def list_processing_periods(db: Session = Depends(get_db)):
         summary = build_period_file_summary(
             period_files.get(batch.period_key, []),
             int(optional_counts.get(batch.period_key, 0) or 0),
+            batch.period_date,
         )
         last_job = latest_jobs.get(batch.period_key)
         profile_count = latest_success_counts.get(batch.period_key, 0)
@@ -585,6 +793,14 @@ def profile_field_coverage(
             "populated_count": value,
             "total_count": int(total),
             "coverage_percent": round(value * 100 / total, 2) if total else 0,
+        }
+    for code, (source_field, count) in _source_dictionary_coverage(db, period_key).items():
+        fields[code] = {
+            "profile_field": source_field,
+            "populated_count": count,
+            "total_count": int(total),
+            "coverage_percent": round(count * 100 / total, 2) if total else 0,
+            "storage_scope": "source",
         }
     payload = {"period_key": period_key, "total_profiles": int(total), "fields": fields}
     _PROFILE_COVERAGE_CACHE[period_key] = (monotonic(), payload)
@@ -747,6 +963,18 @@ def list_profiles(
     group_key: str | None = None,
     no_service: bool = False,
     multi_branch: bool | None = None,
+    customer_type: str | None = None,
+    has_deposit: bool | None = None,
+    has_loan: bool | None = None,
+    min_deposit: float | None = None,
+    max_deposit: float | None = None,
+    min_loan: float | None = None,
+    max_loan: float | None = None,
+    min_casa: float | None = None,
+    max_casa: float | None = None,
+    service_codes: str | None = None,
+    min_service_count: int | None = Query(default=None, ge=0, le=20),
+    missing_phone: bool | None = None,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     page: int = Query(default=1, ge=1),
@@ -768,6 +996,18 @@ def list_profiles(
         group_key=group_key,
         multi_branch=multi_branch,
         no_service=no_service,
+        customer_type=customer_type,
+        has_deposit=has_deposit,
+        has_loan=has_loan,
+        min_deposit=min_deposit,
+        max_deposit=max_deposit,
+        min_loan=min_loan,
+        max_loan=max_loan,
+        min_casa=min_casa,
+        max_casa=max_casa,
+        service_codes=service_codes,
+        min_service_count=min_service_count,
+        missing_phone=missing_phone,
     )
     total = query.count() if include_total else None
     query = apply_profile_sort(
@@ -795,6 +1035,16 @@ def list_profiles(
         "so_du_tien_gui",
         "doanh_so_chuyen_tien_ve_tk",
         "so_du_tien_vay",
+        "du_no_ngan_han",
+        "du_no_ngan_han_bq",
+        "du_no_trung_dai_han",
+        "du_no_trung_dai_han_bq",
+        "du_no_thau_chi",
+        "du_no_thau_chi_bq",
+        "pf10_lds_count",
+        "pf10_interest",
+        "pf10_accruals",
+        "pf10_book_correction_interest",
         "loai_vay",
         "so_du_tgtt_binh_quan",
         "thau_chi",
@@ -837,9 +1087,500 @@ def list_profiles(
         pgd_code,
         [serialize_model(item, fields) for item in rows],
     )
+    items = enrich_profile_org_names(db, items)
     if include_total:
         return {"items": items, "total": total, "page": page, "page_size": effective_page_size}
     return items
+
+
+@router.get("/pf10-loans")
+def get_pf10_customer_loans(
+    period_key: str = Query(...),
+    ma_kh: str = Query(...),
+    category: str | None = None,
+    branch_code: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    profile = (
+        db.query(CustomerPeriodProfile)
+        .filter(
+            CustomerPeriodProfile.period_key == period_key,
+            CustomerPeriodProfile.ma_kh == ma_kh,
+        )
+        .first()
+    )
+    if not profile:
+        raise HTTPException(
+            status_code=404,
+            detail="Khách hàng chưa có trong kết quả xử lý dữ liệu của kỳ",
+        )
+
+    all_branch_query = db.query(PF10LoanProfitability).filter(
+        PF10LoanProfitability.period_key == period_key,
+        PF10LoanProfitability.customer_code == ma_kh,
+    )
+    branch_rows = (
+        all_branch_query.with_entities(PF10LoanProfitability.branch_code)
+        .distinct()
+        .order_by(PF10LoanProfitability.branch_code)
+        .all()
+    )
+    branches = [row[0] for row in branch_rows if row[0]]
+    base_query = all_branch_query
+    if branch_code:
+        base_query = base_query.filter(PF10LoanProfitability.branch_code == branch_code)
+
+    category_rows = []
+    for key, loan_types in PF10_LOAN_TYPE_GROUPS.items():
+        values = (
+            base_query.filter(PF10LoanProfitability.loan_type.in_(loan_types))
+            .with_entities(
+                func.count(func.distinct(PF10LoanProfitability.account_number)),
+                func.coalesce(func.sum(PF10LoanProfitability.end_of_month_balance), 0),
+                func.coalesce(func.sum(PF10LoanProfitability.average_balance), 0),
+                func.coalesce(func.sum(PF10LoanProfitability.interest_amount), 0),
+                func.coalesce(func.sum(PF10LoanProfitability.accruals), 0),
+                func.coalesce(func.sum(PF10LoanProfitability.book_correction_interest), 0),
+                func.count(func.distinct(PF10LoanProfitability.branch_code)),
+            )
+            .one()
+        )
+        category_rows.append({
+            "key": key,
+            "loan_types": sorted(loan_types),
+            "account_count": int(values[0] or 0),
+            "end_balance": serialize_value(values[1]),
+            "average_balance": serialize_value(values[2]),
+            "interest": serialize_value(values[3]),
+            "accruals": serialize_value(values[4]),
+            "book_correction_interest": serialize_value(values[5]),
+            "branch_count": int(values[6] or 0),
+        })
+
+    detail_query = base_query
+    selected_types = PF10_LOAN_TYPE_GROUPS.get(category or "")
+    if selected_types:
+        detail_query = detail_query.filter(PF10LoanProfitability.loan_type.in_(selected_types))
+    total = detail_query.count()
+    rows = (
+        detail_query.order_by(
+            PF10LoanProfitability.branch_code,
+            PF10LoanProfitability.loan_type,
+            desc(PF10LoanProfitability.end_of_month_balance),
+            PF10LoanProfitability.account_number,
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    dp01_branches = {
+        row[0]
+        for row in (
+            db.query(DP01DepositAccount.branch_code)
+            .filter(
+                DP01DepositAccount.period_key == period_key,
+                DP01DepositAccount.ma_kh == ma_kh,
+            )
+            .distinct()
+            .all()
+        )
+        if row[0]
+    }
+
+    fields = [
+        "id", "branch_code", "account_number", "customer_code", "customer_name",
+        "loan_type", "balance_sheet_account_code", "average_balance",
+        "end_of_month_balance", "month_term", "opening_date", "maturity_date",
+        "closing_date", "contract_rate", "monthly_total_interest",
+        "book_correction_interest", "accruals", "interest_amount", "ratio",
+        "currency_code",
+    ]
+    items = []
+    for row in rows:
+        payload = serialize_model(row, fields)
+        payload["loan_type_label"] = PF10_LOAN_TYPE_LABELS.get(row.loan_type, row.loan_type or "Khác")
+        payload["dp01_match_status"] = (
+            "same_branch" if row.branch_code in dp01_branches else "other_branch"
+        )
+        balance = float(row.end_of_month_balance or 0)
+        if row.closing_date and row.closing_date <= profile.period_date:
+            status = "closed"
+        elif balance == 0:
+            status = "closed"
+        elif (
+            row.maturity_date
+            and row.maturity_date.year == profile.period_date.year
+            and row.maturity_date.month == profile.period_date.month
+        ):
+            status = "due_in_month"
+        elif row.maturity_date and 0 < (row.maturity_date - profile.period_date).days <= 90:
+            status = "due_soon"
+        else:
+            status = "active"
+        payload["loan_status"] = status
+        items.append(payload)
+
+    risk_query = db.query(BC29CustomerCreditRisk).filter(
+        BC29CustomerCreditRisk.period_key == period_key,
+        BC29CustomerCreditRisk.customer_code == ma_kh,
+    )
+    if branch_code:
+        risk_query = risk_query.filter(BC29CustomerCreditRisk.branch_code == branch_code)
+    risk_rows = risk_query.order_by(BC29CustomerCreditRisk.branch_code).all()
+    risk = {
+        "available": bool(risk_rows),
+        "debt_groups": sorted({str(row.debt_group) for row in risk_rows if row.debt_group is not None}),
+        "max_principal_overdue_days": max((row.principal_overdue_days or 0 for row in risk_rows), default=0),
+        "max_interest_overdue_days": max((row.interest_overdue_days or 0 for row in risk_rows), default=0),
+        "specific_provision": serialize_value(sum((row.period_provision_amount or 0 for row in risk_rows), Decimal(0))),
+        "collateral_value": serialize_value(sum((row.total_collateral_value or 0 for row in risk_rows), Decimal(0))),
+        "handled_risk_amount": serialize_value(sum((row.handled_risk_amount or 0 for row in risk_rows), Decimal(0))),
+        "items": [
+            serialize_model(
+                row,
+                [
+                    "id", "branch_code", "debt_group", "classification", "total_outstanding",
+                    "period_provision_amount", "total_collateral_value",
+                    "principal_overdue_days", "interest_overdue_days",
+                    "handled_risk_amount", "risk_handling_date",
+                ],
+            )
+            for row in risk_rows
+        ],
+    }
+
+    if profile.period_date.month == 12:
+        next_month_start = date(profile.period_date.year + 1, 1, 1)
+        next_month_end = date(profile.period_date.year + 1, 2, 1)
+    else:
+        next_month_start = date(profile.period_date.year, profile.period_date.month + 1, 1)
+        if next_month_start.month == 12:
+            next_month_end = date(next_month_start.year + 1, 1, 1)
+        else:
+            next_month_end = date(next_month_start.year, next_month_start.month + 1, 1)
+
+    ln_scope = db.query(LN01Loan).filter(
+        LN01Loan.period_key == period_key,
+        LN01Loan.custseq == ma_kh,
+    )
+    if branch_code:
+        ln_scope = ln_scope.filter(LN01Loan.brcd == branch_code)
+    ln_rows = ln_scope.all()
+    principal_due = sum(
+        (row.next_repayment_amount or 0)
+        for row in ln_rows
+        if row.next_repayment_date and next_month_start <= row.next_repayment_date < next_month_end
+    )
+    interest_due = sum(
+        (row.total_interest_repayment_amount or row.interest_amount or 0)
+        for row in ln_rows
+        if row.next_interest_repayment_date
+        and next_month_start <= row.next_interest_repayment_date < next_month_end
+    )
+    overdue_interest = sum((row.pastdue_interest_amount or 0) for row in ln_rows)
+    current_groups = sorted({str(row.debt_group) for row in ln_rows if row.debt_group})
+    previous_ln_period = (
+        db.query(func.max(LN01Loan.period_key))
+        .filter(LN01Loan.period_key < period_key, LN01Loan.custseq == ma_kh)
+        .scalar()
+    )
+    previous_group_query = db.query(LN01Loan.debt_group).filter(
+        LN01Loan.period_key == previous_ln_period,
+        LN01Loan.custseq == ma_kh,
+        LN01Loan.debt_group.isnot(None),
+    ) if previous_ln_period else None
+    if previous_group_query is not None and branch_code:
+        previous_group_query = previous_group_query.filter(LN01Loan.brcd == branch_code)
+    previous_groups = sorted({str(row[0]) for row in previous_group_query.all()}) if previous_group_query is not None else []
+    obligations = {
+        "source_available": any(
+            row.next_repayment_date
+            or row.next_interest_repayment_date
+            or row.pastdue_interest_amount is not None
+            or row.debt_group
+            for row in ln_rows
+        ),
+        "next_month": next_month_start.strftime("%m/%Y"),
+        "principal_due": serialize_value(principal_due),
+        "interest_due": serialize_value(interest_due),
+        "overdue_interest": serialize_value(overdue_interest),
+        "overdue_loan_count": sum(1 for row in ln_rows if (row.pastdue_interest_amount or 0) > 0),
+        "current_debt_groups": current_groups,
+        "previous_period": previous_ln_period,
+        "previous_debt_groups": previous_groups,
+        "debt_group_changed": bool(previous_groups and current_groups and previous_groups != current_groups),
+    }
+
+    return {
+        "period_key": period_key,
+        "ma_kh": ma_kh,
+        "customer_name": profile.ten_kh,
+        "categories": category_rows,
+        "branches": branches,
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "risk": risk,
+        "obligations": obligations,
+    }
+
+
+@router.get("/deposit-accounts")
+def get_customer_deposit_accounts(
+    period_key: str = Query(...),
+    ma_kh: str = Query(...),
+    category: str | None = None,
+    branch_code: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    profile = (
+        db.query(CustomerPeriodProfile)
+        .filter(
+            CustomerPeriodProfile.period_key == period_key,
+            CustomerPeriodProfile.ma_kh == ma_kh,
+        )
+        .first()
+    )
+    if not profile:
+        raise HTTPException(status_code=404, detail="Khách hàng chưa có trong kết quả xử lý của kỳ")
+
+    all_branch_query = db.query(PF14AccountBalance).filter(
+        PF14AccountBalance.period_key == period_key,
+        PF14AccountBalance.custseq == ma_kh,
+    )
+    branches = [
+        row[0]
+        for row in (
+            all_branch_query.with_entities(PF14AccountBalance.trbrcd)
+            .distinct()
+            .order_by(PF14AccountBalance.trbrcd)
+            .all()
+        )
+        if row[0]
+    ]
+    base_query = all_branch_query
+    if branch_code:
+        base_query = base_query.filter(PF14AccountBalance.trbrcd == branch_code)
+
+    categories = []
+    for key, condition in (
+        ("demand", func.coalesce(PF14AccountBalance.monterm, 0) == 0),
+        ("term", func.coalesce(PF14AccountBalance.monterm, 0) > 0),
+    ):
+        values = (
+            base_query.filter(condition)
+            .with_entities(
+                func.count(func.distinct(PF14AccountBalance.accountno)),
+                func.coalesce(func.sum(PF14AccountBalance.monthlyendbalance), 0),
+                func.coalesce(func.sum(PF14AccountBalance.averagebalance), 0),
+                func.count(func.distinct(PF14AccountBalance.trbrcd)),
+            )
+            .one()
+        )
+        categories.append({
+            "key": key,
+            "account_count": int(values[0] or 0),
+            "end_balance": serialize_value(values[1]),
+            "average_balance": serialize_value(values[2]),
+            "branch_count": int(values[3] or 0),
+        })
+
+    previous_period = (
+        db.query(func.max(PF14AccountBalance.period_key))
+        .filter(
+            PF14AccountBalance.period_key < period_key,
+            PF14AccountBalance.custseq == ma_kh,
+        )
+        .scalar()
+    )
+    current_rows = base_query.all()
+    previous_query = db.query(PF14AccountBalance).filter(
+        PF14AccountBalance.period_key == previous_period,
+        PF14AccountBalance.custseq == ma_kh,
+    ) if previous_period else None
+    if previous_query is not None and branch_code:
+        previous_query = previous_query.filter(PF14AccountBalance.trbrcd == branch_code)
+    previous_rows = previous_query.all() if previous_query is not None else []
+
+    current_map = {(row.trbrcd, row.accountno): row for row in current_rows if row.accountno}
+    previous_map = {(row.trbrcd, row.accountno): row for row in previous_rows if row.accountno}
+    combined_keys = set(current_map) | set(previous_map)
+    if category == "demand":
+        combined_keys = {
+            key for key in combined_keys
+            if (current_map.get(key) or previous_map.get(key)).monterm in (None, 0)
+        }
+    elif category == "term":
+        combined_keys = {
+            key for key in combined_keys
+            if ((current_map.get(key) or previous_map.get(key)).monterm or 0) > 0
+        }
+
+    account_keys = [key[1] for key in combined_keys]
+    dp_rows = (
+        db.query(DP01DepositAccount)
+        .filter(
+            DP01DepositAccount.period_key.in_([value for value in (period_key, previous_period) if value]),
+            DP01DepositAccount.ma_kh == ma_kh,
+        )
+        .all()
+        if account_keys else []
+    )
+    dp_by_account = {
+        (row.period_key, row.branch_code or row.ma_cn, row.so_tai_khoan): row
+        for row in dp_rows
+    }
+    dp_product_names = {
+        (row.period_key, row.branch_code or row.ma_cn, row.dp_type_code): row.dp_type_name
+        for row in dp_rows
+        if row.dp_type_code and row.dp_type_name
+    }
+
+    items = []
+    for key in combined_keys:
+        current = current_map.get(key)
+        previous = previous_map.get(key)
+        row = current or previous
+        current_balance = current.monthlyendbalance if current else Decimal(0)
+        previous_balance = previous.monthlyendbalance if previous else Decimal(0)
+        if current is None or (float(current_balance or 0) == 0 and float(previous_balance or 0) > 0):
+            account_status = "closed"
+        elif previous is None:
+            account_status = "new"
+        else:
+            account_status = "active"
+        dp = (
+            dp_by_account.get((period_key, row.trbrcd, row.accountno))
+            or dp_by_account.get((previous_period, row.trbrcd, row.accountno))
+        )
+        fallback_deposit_type = (
+            dp_product_names.get((period_key, row.trbrcd, row.productcode))
+            or dp_product_names.get((previous_period, row.trbrcd, row.productcode))
+        )
+        items.append({
+            "id": row.id if current else f"closed-{row.id}",
+            "branch_code": row.trbrcd,
+            "account_number": row.accountno,
+            "product_code": row.productcode,
+            "deposit_type": dp.dp_type_name if dp else fallback_deposit_type,
+            "deposit_type_source": "DP01" if (dp or fallback_deposit_type) else None,
+            "deposit_type_match": "account_number" if dp else ("product_code" if fallback_deposit_type else None),
+            "account_source": "PF14",
+            "currency_code": row.ccy,
+            "month_term": row.monterm,
+            "opening_date": serialize_value(dp.opening_date) if dp else None,
+            "maturity_date": serialize_value(dp.maturity_date) if dp else None,
+            "end_balance": serialize_value(current_balance),
+            "average_balance": serialize_value(current.averagebalance if current else 0),
+            "previous_balance": serialize_value(previous_balance),
+            "balance_change": serialize_value((current_balance or 0) - (previous_balance or 0)),
+            "account_status": (
+                "closed"
+                if dp and dp.close_date and dp.close_date <= profile.period_date
+                else (
+                    "inactive"
+                    if dp and str(dp.account_status or "").strip().lower() == "inactive"
+                    else account_status
+                )
+            ),
+            "source_account_status": dp.account_status if dp else None,
+        })
+    status_order = {"new": 0, "active": 1, "closed": 2}
+    items.sort(
+        key=lambda item: (
+            status_order.get(item["account_status"], 9),
+            item["branch_code"] or "",
+            -float(item["end_balance"] or 0),
+            item["account_number"] or "",
+        )
+    )
+    total = len(items)
+    total_end_balance = sum(float(item["end_balance"] or 0) for item in items)
+    total_average_balance = sum(float(item["average_balance"] or 0) for item in items)
+    total_previous_balance = sum(float(item["previous_balance"] or 0) for item in items)
+    for item in items:
+        end_balance = float(item["end_balance"] or 0)
+        average_balance = float(item["average_balance"] or 0)
+        item["retention_rate"] = (
+            round(average_balance * 100 / end_balance, 2) if end_balance > 0 else None
+        )
+        item["low_average_high_end"] = bool(end_balance > 0 and average_balance / end_balance < 0.5)
+        item["high_average_end_drop"] = bool(average_balance > 0 and end_balance / average_balance < 0.5)
+    status_counts = {
+        status: sum(1 for item in items if item["account_status"] == status)
+        for status in ("active", "inactive", "new", "closed")
+    }
+    analytics = {
+        **status_counts,
+        "total_end_balance": total_end_balance,
+        "total_average_balance": total_average_balance,
+        "total_previous_balance": total_previous_balance,
+        "balance_change": total_end_balance - total_previous_balance,
+        "volatility_rate": (
+            round(abs(total_end_balance - total_previous_balance) * 100 / abs(total_previous_balance), 2)
+            if total_previous_balance else None
+        ),
+        "retention_rate": (
+            round(total_average_balance * 100 / total_end_balance, 2)
+            if total_end_balance > 0 else None
+        ),
+        "balance_usage_rate": (
+            round(total_average_balance * 100 / max(total_average_balance, total_end_balance), 2)
+            if max(total_average_balance, total_end_balance) > 0 else None
+        ),
+        "low_average_high_end_count": sum(1 for item in items if item["low_average_high_end"]),
+        "high_average_end_drop_count": sum(1 for item in items if item["high_average_end_drop"]),
+    }
+    start = (page - 1) * page_size
+    items = items[start:start + page_size]
+
+    return {
+        "period_key": period_key,
+        "ma_kh": ma_kh,
+        "customer_name": profile.ten_kh,
+        "categories": categories,
+        "branches": branches,
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "previous_period": previous_period,
+        "analytics": analytics,
+    }
+
+
+@router.get("/customer-classification-history")
+def get_customer_classification_history(
+    ma_kh: str = Query(...),
+    branch_code: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(BC06CustomerClassification).filter(
+        BC06CustomerClassification.customer_code == ma_kh,
+    )
+    if branch_code:
+        query = query.filter(BC06CustomerClassification.branch_code == branch_code)
+    rows = query.order_by(
+        BC06CustomerClassification.period_key,
+        BC06CustomerClassification.branch_code,
+    ).all()
+    fields = [
+        "id", "period_key", "period_date", "branch_code", "branch_name",
+        "customer_code", "customer_name", "customer_type",
+        "benefit_score_branch", "balance_score_branch", "qualitative_score_branch",
+        "customer_score_branch", "segment_branch", "rank_branch",
+        "segment_system", "rank_system", "market_segment_branch", "market_rank_branch",
+    ]
+    return {
+        "ma_kh": ma_kh,
+        "branches": sorted({row.branch_code for row in rows if row.branch_code}),
+        "items": [serialize_model(row, fields) for row in rows],
+    }
 
 
 EXPORT_MAX_ROWS = 100_000
@@ -887,6 +1628,18 @@ def export_profiles(
     group_key: str | None = None,
     no_service: bool = False,
     multi_branch: bool | None = None,
+    customer_type: str | None = None,
+    has_deposit: bool | None = None,
+    has_loan: bool | None = None,
+    min_deposit: float | None = None,
+    max_deposit: float | None = None,
+    min_loan: float | None = None,
+    max_loan: float | None = None,
+    min_casa: float | None = None,
+    max_casa: float | None = None,
+    service_codes: str | None = None,
+    min_service_count: int | None = Query(default=None, ge=0, le=20),
+    missing_phone: bool | None = None,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     db: Session = Depends(get_db),
@@ -905,6 +1658,18 @@ def export_profiles(
         group_key=group_key,
         multi_branch=multi_branch,
         no_service=no_service,
+        customer_type=customer_type,
+        has_deposit=has_deposit,
+        has_loan=has_loan,
+        min_deposit=min_deposit,
+        max_deposit=max_deposit,
+        min_loan=min_loan,
+        max_loan=max_loan,
+        min_casa=min_casa,
+        max_casa=max_casa,
+        service_codes=service_codes,
+        min_service_count=min_service_count,
+        missing_phone=missing_phone,
     )
     total = query.count()
     if total == 0:
@@ -982,6 +1747,19 @@ def get_profile_summary(
     unused_service: str | None = None,
     group_key: str | None = None,
     multi_branch: bool | None = None,
+    no_service: bool = False,
+    customer_type: str | None = None,
+    has_deposit: bool | None = None,
+    has_loan: bool | None = None,
+    min_deposit: float | None = None,
+    max_deposit: float | None = None,
+    min_loan: float | None = None,
+    max_loan: float | None = None,
+    min_casa: float | None = None,
+    max_casa: float | None = None,
+    service_codes: str | None = None,
+    min_service_count: int | None = Query(default=None, ge=0, le=20),
+    missing_phone: bool | None = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
@@ -996,6 +1774,19 @@ def get_profile_summary(
         unused_service=unused_service,
         group_key=group_key,
         multi_branch=multi_branch,
+        no_service=no_service,
+        customer_type=customer_type,
+        has_deposit=has_deposit,
+        has_loan=has_loan,
+        min_deposit=min_deposit,
+        max_deposit=max_deposit,
+        min_loan=min_loan,
+        max_loan=max_loan,
+        min_casa=min_casa,
+        max_casa=max_casa,
+        service_codes=service_codes,
+        min_service_count=min_service_count,
+        missing_phone=missing_phone,
     )
     summary = query.with_entities(
         func.count(CustomerPeriodProfile.id),
@@ -1159,7 +1950,30 @@ def get_profile_groups(
 
 
 @router.get("/profile-history")
-def get_profile_history(ma_kh: str = Query(...), db: Session = Depends(get_db)):
+def get_profile_history(
+    ma_kh: str = Query(...),
+    branch_code: str | None = None,
+    db: Session = Depends(get_db),
+):
+    if branch_code:
+        rows = (
+            db.query(CustomerPeriodBranchDetail)
+            .filter(
+                CustomerPeriodBranchDetail.ma_kh == ma_kh,
+                CustomerPeriodBranchDetail.branch_code == branch_code,
+            )
+            .order_by(CustomerPeriodBranchDetail.period_key)
+            .all()
+        )
+        fields = [
+            "id", "period_key", "period_date", "ma_kh", "branch_code", "ma_pgd",
+            "ten_kh", "loai_khach_hang", "so_du_tien_gui", "so_du_tien_vay",
+            "du_no_ngan_han", "du_no_ngan_han_bq", "du_no_trung_dai_han",
+            "du_no_trung_dai_han_bq", "du_no_thau_chi", "du_no_thau_chi_bq",
+            "pf10_lds_count", "pf10_interest", "so_du_tgtt_binh_quan",
+            *sorted(PROFILE_SERVICE_FIELDS),
+        ]
+        return [serialize_model(item, fields) for item in rows]
     rows = (
         db.query(CustomerPeriodProfile)
         .filter(CustomerPeriodProfile.ma_kh == ma_kh)
@@ -1177,50 +1991,87 @@ def compare_periods(
     pgd_code: str | None = None,
     db: Session = Depends(get_db),
 ):
+    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
     current_query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == current_period)
     previous_query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == previous_period)
     current_query = apply_profile_filters(current_query, branch_code=branch_code, pgd_code=pgd_code)
     previous_query = apply_profile_filters(previous_query, branch_code=branch_code, pgd_code=pgd_code)
 
-    def aggregate(query):
-        return query.with_entities(
-            func.count(CustomerPeriodProfile.id),
-            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_gui), 0),
-            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
-            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
-        ).one()
-
-    current_summary = aggregate(current_query)
-    previous_summary = aggregate(previous_query)
-
-    current_rows = current_query.with_entities(
-        CustomerPeriodProfile.ma_kh,
-        *[getattr(CustomerPeriodProfile, field) for field in sorted(PROFILE_SERVICE_FIELDS)],
-    ).all()
-    previous_rows = previous_query.with_entities(
-        CustomerPeriodProfile.ma_kh,
-        *[getattr(CustomerPeriodProfile, field) for field in sorted(PROFILE_SERVICE_FIELDS)],
-    ).all()
-
     service_fields = sorted(PROFILE_SERVICE_FIELDS)
-    current_map = {
-        row[0]: {field for index, field in enumerate(service_fields, start=1) if int(row[index] or 0) > 0}
-        for row in current_rows
-    }
-    previous_map = {
-        row[0]: {field for index, field in enumerate(service_fields, start=1) if int(row[index] or 0) > 0}
-        for row in previous_rows
-    }
-    current_customers = set(current_map)
-    previous_customers = set(previous_map)
+    current_data = current_query.with_entities(
+        CustomerPeriodProfile.ma_kh.label("ma_kh"),
+        CustomerPeriodProfile.so_du_tien_gui.label("deposit"),
+        CustomerPeriodProfile.so_du_tien_vay.label("loan"),
+        CustomerPeriodProfile.so_du_tgtt_binh_quan.label("casa"),
+        *[getattr(CustomerPeriodProfile, field).label(field) for field in service_fields],
+    ).subquery()
+    previous_data = previous_query.with_entities(
+        CustomerPeriodProfile.ma_kh.label("ma_kh"),
+        CustomerPeriodProfile.so_du_tien_gui.label("deposit"),
+        CustomerPeriodProfile.so_du_tien_vay.label("loan"),
+        CustomerPeriodProfile.so_du_tgtt_binh_quan.label("casa"),
+        *[getattr(CustomerPeriodProfile, field).label(field) for field in service_fields],
+    ).subquery()
 
-    new_services: dict[str, int] = {field: 0 for field in service_fields}
-    lost_services: dict[str, int] = {field: 0 for field in service_fields}
-    for ma_kh in current_customers & previous_customers:
-        for field in current_map[ma_kh] - previous_map[ma_kh]:
-            new_services[field] += 1
-        for field in previous_map[ma_kh] - current_map[ma_kh]:
-            lost_services[field] += 1
+    aggregate_columns = [
+        func.count(current_data.c.ma_kh),
+        func.count(previous_data.c.ma_kh),
+        func.coalesce(func.sum(current_data.c.deposit), 0),
+        func.coalesce(func.sum(previous_data.c.deposit), 0),
+        func.coalesce(func.sum(current_data.c.loan), 0),
+        func.coalesce(func.sum(previous_data.c.loan), 0),
+        func.coalesce(func.sum(current_data.c.casa), 0),
+        func.coalesce(func.sum(previous_data.c.casa), 0),
+        func.sum(case((previous_data.c.ma_kh.is_(None), 1), else_=0)),
+        func.sum(case((current_data.c.ma_kh.is_(None), 1), else_=0)),
+    ]
+    for field in service_fields:
+        aggregate_columns.extend([
+            func.sum(
+                case(
+                    (
+                        and_(
+                            previous_data.c.ma_kh.isnot(None),
+                            func.coalesce(current_data.c[field], 0) > 0,
+                            func.coalesce(previous_data.c[field], 0) <= 0,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+            func.sum(
+                case(
+                    (
+                        and_(
+                            current_data.c.ma_kh.isnot(None),
+                            func.coalesce(previous_data.c[field], 0) > 0,
+                            func.coalesce(current_data.c[field], 0) <= 0,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ),
+        ])
+    aggregate_result = (
+        db.query(*aggregate_columns)
+        .select_from(current_data)
+        .join(previous_data, previous_data.c.ma_kh == current_data.c.ma_kh, full=True)
+        .one()
+    )
+    new_services = {
+        field: int(aggregate_result[10 + index * 2] or 0)
+        for index, field in enumerate(service_fields)
+    }
+    lost_services = {
+        field: int(aggregate_result[11 + index * 2] or 0)
+        for index, field in enumerate(service_fields)
+    }
+    current_summary = (aggregate_result[0], aggregate_result[2], aggregate_result[4], aggregate_result[6])
+    previous_summary = (aggregate_result[1], aggregate_result[3], aggregate_result[5], aggregate_result[7])
+    new_customers = int(aggregate_result[8] or 0)
+    lost_customers = int(aggregate_result[9] or 0)
 
     def number(value):
         return serialize_value(value) or 0
@@ -1250,8 +2101,8 @@ def compare_periods(
                 "delta": number(current_summary[3]) - number(previous_summary[3]),
             },
         },
-        "new_customers": len(current_customers - previous_customers),
-        "lost_customers": len(previous_customers - current_customers),
+        "new_customers": int(new_customers),
+        "lost_customers": int(lost_customers),
         "new_services": {key: value for key, value in new_services.items() if value > 0},
         "lost_services": {key: value for key, value in lost_services.items() if value > 0},
     }
@@ -1399,6 +2250,15 @@ def get_profile_filter_options(
             if item.strip()
         }
     )
+    customer_types = [
+        row[0]
+        for row in scoped_query.with_entities(CustomerPeriodProfile.loai_khach_hang)
+        .filter(CustomerPeriodProfile.loai_khach_hang.isnot(None))
+        .distinct()
+        .order_by(CustomerPeriodProfile.loai_khach_hang)
+        .all()
+        if row[0]
+    ]
 
     officer_rows = (
         scoped_query.with_entities(
@@ -1427,6 +2287,7 @@ def get_profile_filter_options(
         "pgd_options": pgd_options,
         "pgd_names": pgd_name_map,
         "loan_types": loan_types,
+        "customer_types": customer_types,
         "officers": officers,
     }
 

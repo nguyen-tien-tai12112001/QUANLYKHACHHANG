@@ -1,17 +1,28 @@
 from datetime import date, datetime
 from decimal import Decimal
+from time import monotonic
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import and_, case, desc, func
+from sqlalchemy import and_, case, desc, func, or_, text
 from sqlalchemy.orm import Query as OrmQuery, Session
+from sqlalchemy.orm import aliased
 
 from app.auth.branch_scope import BranchScope
 from app.auth.dependencies import get_branch_scope
 from app.database import get_db
-from app.models import CN05CustomerService, CustomerPeriodBranchDetail, CustomerPeriodProfile, LN01Loan
+from app.models import (
+    CN05CustomerService,
+    CustomerPeriodBranchDetail,
+    CustomerPeriodProfile,
+    LN01Loan,
+    PF14AccountBalance,
+)
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
+_INSIGHTS_CACHE: dict[tuple[str, str | None, str | None], tuple[float, dict]] = {}
+_SUMMARY_CACHE: dict[tuple[str, str | None, str | None], tuple[float, dict]] = {}
+_INSIGHTS_CACHE_TTL_SECONDS = 60
 
 ACTIVE_SERVICE_KEYS = [
     "thau_chi",
@@ -443,27 +454,39 @@ def _branch_row_to_campaign(period_key: str, branch_code: str, row) -> dict:
 def _summary_from_profiles(db: Session, period_key: str, ma_pgd: str | None) -> dict:
     """Toàn tỉnh: 1 mã KH = 1 hồ sơ, không cộng trùng theo chi nhánh."""
     query = _base_query(db, period_key, None, ma_pgd)
-
-    total_customers = query.count()
-    totals = query.with_entities(
+    retail_filter = CustomerPeriodProfile.loai_khach_hang.in_(RETAIL_CUSTOMER_TYPES)
+    aggregate_columns = [
+        func.count(CustomerPeriodProfile.id),
         func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
         func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_gui), 0),
         func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
-    ).one()
-
-    loan_base = query.filter(CustomerPeriodProfile.so_du_tien_vay > 0).count()
-    plus_base = query.filter(CustomerPeriodProfile.agribank_plus > 0).count()
-
-    def _profile_service_count(key: str, base_kind: str) -> int:
-        q = query
+        func.sum(case((CustomerPeriodProfile.so_du_tien_vay > 0, 1), else_=0)),
+        func.sum(case((CustomerPeriodProfile.agribank_plus > 0, 1), else_=0)),
+        func.sum(case((retail_filter, 1), else_=0)),
+        func.coalesce(func.sum(case((retail_filter, CustomerPeriodProfile.so_du_tien_vay), else_=0)), 0),
+        func.sum(case((_no_service_condition(), 1), else_=0)),
+    ]
+    for key in ACTIVE_SERVICE_KEYS:
+        base_kind = SERVICE_PENETRATION_BASE.get(key, "all")
+        condition = getattr(CustomerPeriodProfile, key) > 0
         if base_kind == "loan":
-            q = q.filter(CustomerPeriodProfile.so_du_tien_vay > 0)
+            condition = and_(condition, CustomerPeriodProfile.so_du_tien_vay > 0)
         elif base_kind == "agribank_plus":
-            q = q.filter(CustomerPeriodProfile.agribank_plus > 0)
-        return q.filter(getattr(CustomerPeriodProfile, key) > 0).count()
+            condition = and_(condition, CustomerPeriodProfile.agribank_plus > 0)
+        aggregate_columns.append(func.sum(case((condition, 1), else_=0)))
+    aggregate = query.with_entities(*aggregate_columns).one()
+
+    total_customers = int(aggregate[0] or 0)
+    totals = aggregate[1:4]
+    loan_base = int(aggregate[4] or 0)
+    plus_base = int(aggregate[5] or 0)
+    service_counts = {
+        key: int(aggregate[9 + index] or 0)
+        for index, key in enumerate(ACTIVE_SERVICE_KEYS)
+    }
 
     service_penetration = _build_service_penetration_rows(
-        count_fn=_profile_service_count,
+        count_fn=lambda key, _base_kind: service_counts[key],
         loan_base=loan_base,
         plus_base=plus_base,
         total_customers=total_customers,
@@ -477,16 +500,12 @@ def _summary_from_profiles(db: Session, period_key: str, ma_pgd: str | None) -> 
         total_customers=total_customers,
     )
 
-    retail_filter = CustomerPeriodProfile.loai_khach_hang.in_(RETAIL_CUSTOMER_TYPES)
-    cn_count = query.filter(retail_filter).count()
+    cn_count = int(aggregate[6] or 0)
     dn_count = max(total_customers - cn_count, 0)
-    cn_loan = query.filter(retail_filter).with_entities(
-        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0)
-    ).scalar() or 0
+    cn_loan = aggregate[7] or 0
     total_loan_amt = float(totals[0] or 0)
     dn_loan = max(total_loan_amt - float(cn_loan or 0), 0)
-
-    no_service_count = query.filter(_no_service_condition()).count()
+    no_service_count = int(aggregate[8] or 0)
 
     campaign_candidates = []
     campaign_rows = (
@@ -636,6 +655,12 @@ def dashboard_summary(
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
+    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+    cache_key = (period_key, scope.ma_cn, scope.ma_pgd)
+    cached = _SUMMARY_CACHE.get(cache_key)
+    if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
+        return cached[1]
+
     if scope.ma_cn:
         payload = _summary_from_branch(db, period_key, scope.ma_cn, scope.ma_pgd)
     else:
@@ -644,7 +669,7 @@ def dashboard_summary(
     loan_type_breakdown = _build_loan_type_breakdown(db, period_key, scope.ma_cn, scope.ma_pgd)
     officer_leaderboard = _build_officer_leaderboard(db, period_key, scope.ma_cn, scope.ma_pgd)
 
-    return {
+    result = {
         "period_key": period_key,
         "ma_cn": scope.ma_cn,
         "ma_pgd": scope.ma_pgd,
@@ -655,6 +680,8 @@ def dashboard_summary(
         "segment": payload["segment"],
         "campaign_top5": payload["campaign_top5"],
     }
+    _SUMMARY_CACHE[cache_key] = (monotonic(), result)
+    return result
 
 
 def _period_trend_totals(db: Session, period_key: str, ma_cn: str | None, ma_pgd: str | None) -> tuple[float, float]:
@@ -713,3 +740,199 @@ def dashboard_trends(
         "ma_cn": scope.ma_cn,
         "ma_pgd": scope.ma_pgd,
     }
+
+
+@router.get("/insights")
+def dashboard_insights(
+    period_key: str = Query(...),
+    scope: BranchScope = Depends(get_branch_scope),
+    db: Session = Depends(get_db),
+):
+    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+    cache_key = (period_key, scope.ma_cn, scope.ma_pgd)
+    cached = _INSIGHTS_CACHE.get(cache_key)
+    if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    current = aliased(CustomerPeriodProfile)
+    previous = aliased(CustomerPeriodProfile)
+    previous_period = (
+        db.query(func.max(CustomerPeriodProfile.period_key))
+        .filter(CustomerPeriodProfile.period_key < period_key)
+        .scalar()
+    )
+    joined = (
+        db.query(current, previous)
+        .outerjoin(
+            previous,
+            and_(
+                previous.period_key == previous_period,
+                previous.ma_kh == current.ma_kh,
+            ),
+        )
+        .filter(current.period_key == period_key)
+    )
+    if scope.ma_cn:
+        joined = joined.filter(current.branch_codes.ilike(f"%{scope.ma_cn}%"))
+    if scope.ma_pgd:
+        joined = joined.filter(current.pgd_codes.ilike(f"%{scope.ma_pgd}%"))
+
+    current_deposit = (
+        func.coalesce(current.so_du_tien_gui, 0)
+        + func.coalesce(current.so_du_tgtt_binh_quan, 0)
+    )
+    previous_deposit = (
+        func.coalesce(previous.so_du_tien_gui, 0)
+        + func.coalesce(previous.so_du_tgtt_binh_quan, 0)
+    )
+    current_services = sum(func.coalesce(getattr(current, key), 0) for key in ACTIVE_SERVICE_KEYS)
+    previous_services = sum(func.coalesce(getattr(previous, key), 0) for key in ACTIVE_SERVICE_KEYS)
+
+    overview = joined.with_entities(
+        func.count(current.id),
+        func.sum(case((current_deposit > 0, 1), else_=0)),
+        func.sum(case((func.coalesce(current.so_du_tien_vay, 0) > 0, 1), else_=0)),
+        func.sum(case((current_services > 0, 1), else_=0)),
+        func.sum(case((func.coalesce(current.branch_count, 0) > 1, 1), else_=0)),
+        func.coalesce(func.sum(current_deposit), 0),
+        func.coalesce(func.sum(previous_deposit), 0),
+        func.coalesce(func.sum(current.so_du_tien_vay), 0),
+        func.coalesce(func.sum(previous.so_du_tien_vay), 0),
+        func.sum(case((and_(previous.id.isnot(None), current_deposit <= previous_deposit * 0.7, previous_deposit > 0), 1), else_=0)),
+        func.sum(case((and_(previous.id.isnot(None), func.coalesce(current.so_du_tien_vay, 0) >= func.coalesce(previous.so_du_tien_vay, 0) * 1.3, func.coalesce(previous.so_du_tien_vay, 0) > 0), 1), else_=0)),
+        func.sum(case((and_(previous.id.isnot(None), current_services < previous_services), 1), else_=0)),
+    ).one()
+
+    anomaly_condition = or_(
+        and_(previous.id.isnot(None), previous_deposit > 0, current_deposit <= previous_deposit * 0.7),
+        and_(
+            previous.id.isnot(None),
+            func.coalesce(previous.so_du_tien_vay, 0) > 0,
+            func.coalesce(current.so_du_tien_vay, 0) >= func.coalesce(previous.so_du_tien_vay, 0) * 1.3,
+        ),
+        and_(previous.id.isnot(None), current_services < previous_services),
+    )
+    anomaly_rows = (
+        joined.filter(anomaly_condition)
+        .order_by(desc(func.abs(current_deposit - previous_deposit)))
+        .limit(12)
+        .all()
+    )
+    anomalies = []
+    for row, old in anomaly_rows:
+        flags = []
+        now_deposit = float((row.so_du_tien_gui or 0) + (row.so_du_tgtt_binh_quan or 0))
+        old_deposit = float((old.so_du_tien_gui or 0) + (old.so_du_tgtt_binh_quan or 0)) if old else 0
+        if old_deposit > 0 and now_deposit <= old_deposit * 0.7:
+            flags.append("Tiền gửi giảm mạnh")
+        if old and float(old.so_du_tien_vay or 0) > 0 and float(row.so_du_tien_vay or 0) >= float(old.so_du_tien_vay or 0) * 1.3:
+            flags.append("Dư nợ tăng nhanh")
+        now_services = sum(float(getattr(row, key) or 0) for key in ACTIVE_SERVICE_KEYS)
+        old_services = sum(float(getattr(old, key) or 0) for key in ACTIVE_SERVICE_KEYS) if old else 0
+        if old and now_services < old_services:
+            flags.append("Giảm sản phẩm")
+        anomalies.append({
+            "id": row.id,
+            "ma_kh": row.ma_kh,
+            "ten_kh": row.ten_kh,
+            "primary_branch_code": row.primary_branch_code,
+            "branch_codes": row.branch_codes,
+            "deposit": now_deposit,
+            "previous_deposit": old_deposit,
+            "loan": float(row.so_du_tien_vay or 0),
+            "previous_loan": float(old.so_du_tien_vay or 0) if old else 0,
+            "flags": flags,
+        })
+
+    pf_previous_period = (
+        db.query(func.max(PF14AccountBalance.period_key))
+        .filter(PF14AccountBalance.period_key < period_key)
+        .scalar()
+    )
+    new_accounts = 0
+    closed_accounts = 0
+    if pf_previous_period:
+        current_accounts_query = db.query(
+            PF14AccountBalance.trbrcd.label("branch"),
+            PF14AccountBalance.custseq.label("customer"),
+            PF14AccountBalance.accountno.label("account"),
+        ).filter(PF14AccountBalance.period_key == period_key)
+        previous_accounts_query = db.query(
+            PF14AccountBalance.trbrcd.label("branch"),
+            PF14AccountBalance.custseq.label("customer"),
+            PF14AccountBalance.accountno.label("account"),
+        ).filter(PF14AccountBalance.period_key == pf_previous_period)
+        if scope.ma_cn:
+            current_accounts_query = current_accounts_query.filter(PF14AccountBalance.trbrcd == scope.ma_cn)
+            previous_accounts_query = previous_accounts_query.filter(PF14AccountBalance.trbrcd == scope.ma_cn)
+        current_accounts = current_accounts_query.subquery()
+        previous_accounts = previous_accounts_query.subquery()
+        account_changes = (
+            db.query(
+                func.sum(case((previous_accounts.c.account.is_(None), 1), else_=0)),
+                func.sum(case((current_accounts.c.account.is_(None), 1), else_=0)),
+            )
+            .select_from(current_accounts)
+            .join(
+                previous_accounts,
+                and_(
+                    previous_accounts.c.branch == current_accounts.c.branch,
+                    previous_accounts.c.customer == current_accounts.c.customer,
+                    previous_accounts.c.account == current_accounts.c.account,
+                ),
+                full=True,
+            )
+            .one()
+        )
+        new_accounts = int(account_changes[0] or 0)
+        closed_accounts = int(account_changes[1] or 0)
+
+    ln_query = _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd)
+    period_date = datetime.strptime(period_key, "%Y%m%d").date()
+    next_month_start = date(period_date.year + (period_date.month == 12), 1 if period_date.month == 12 else period_date.month + 1, 1)
+    next_month_end = date(next_month_start.year + (next_month_start.month == 12), 1 if next_month_start.month == 12 else next_month_start.month + 1, 1)
+    obligations = ln_query.with_entities(
+        func.coalesce(func.sum(case((and_(LN01Loan.next_repayment_date >= next_month_start, LN01Loan.next_repayment_date < next_month_end), LN01Loan.next_repayment_amount), else_=0)), 0),
+        func.coalesce(func.sum(case((and_(LN01Loan.next_interest_repayment_date >= next_month_start, LN01Loan.next_interest_repayment_date < next_month_end), LN01Loan.total_interest_repayment_amount), else_=0)), 0),
+        func.coalesce(func.sum(LN01Loan.pastdue_interest_amount), 0),
+        func.count(func.distinct(case((func.coalesce(LN01Loan.pastdue_interest_amount, 0) > 0, LN01Loan.custseq)))),
+        func.count(LN01Loan.next_repayment_date),
+    ).one()
+
+    result = {
+        "period_key": period_key,
+        "previous_period": previous_period,
+        "customer_overview": {
+            "total": int(overview[0] or 0),
+            "with_deposit": int(overview[1] or 0),
+            "with_loan": int(overview[2] or 0),
+            "with_digital_service": int(overview[3] or 0),
+            "multi_branch": int(overview[4] or 0),
+        },
+        "deposit": {
+            "total": float(overview[5] or 0),
+            "previous_total": float(overview[6] or 0),
+            "change": float((overview[5] or 0) - (overview[6] or 0)),
+            "new_accounts": int(new_accounts or 0),
+            "closed_accounts": int(closed_accounts or 0),
+            "large_drop_customers": int(overview[9] or 0),
+        },
+        "credit": {
+            "total": float(overview[7] or 0),
+            "previous_total": float(overview[8] or 0),
+            "change": float((overview[7] or 0) - (overview[8] or 0)),
+            "principal_due_next_month": float(obligations[0] or 0),
+            "interest_due_next_month": float(obligations[1] or 0),
+            "overdue_interest": float(obligations[2] or 0),
+            "overdue_customers": int(obligations[3] or 0),
+            "obligation_source_available": bool(obligations[4]),
+        },
+        "abnormal": {
+            "deposit_drop_count": int(overview[9] or 0),
+            "loan_increase_count": int(overview[10] or 0),
+            "service_drop_count": int(overview[11] or 0),
+            "items": anomalies,
+        },
+    }
+    _INSIGHTS_CACHE[cache_key] = (monotonic(), result)
+    return result

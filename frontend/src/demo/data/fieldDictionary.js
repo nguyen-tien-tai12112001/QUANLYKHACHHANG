@@ -35,12 +35,12 @@ const rows = [
   ['HKD_ETAX', 'Phần mềm bán hàng/E-Tax Mobile', 'Tiền gửi', 'L', 'Chưa chốt', 4],
 
   ['DS_LC', 'Doanh số thanh toán LC trong tháng', 'Tiền vay', 'N', 'LN/TTQT', null],
-  ['DUNO_NHTT', 'Dư nợ ngắn hạn thông thường', 'Tiền vay', 'N', 'LN01', null],
-  ['DUNO_NHTTBQ', 'Dư nợ ngắn hạn bình quân', 'Tiền vay', 'N', 'LN01', null],
-  ['DUNO_TDHTT', 'Dư nợ trung dài hạn thông thường', 'Tiền vay', 'N', 'LN01', null],
-  ['DUNO_TDHTTBQ', 'Dư nợ trung dài hạn bình quân', 'Tiền vay', 'N', 'LN01', null],
-  ['DUNO_TC', 'Dư nợ thấu chi cuối kỳ', 'Tiền vay', 'N', 'LN01', null],
-  ['DUNO_TCBQ', 'Dư nợ thấu chi bình quân', 'Tiền vay', 'N', 'LN01', null],
+  ['DUNO_NHTT', 'Dư nợ ngắn hạn thông thường', 'Tiền vay', 'N', 'PF10', null],
+  ['DUNO_NHTTBQ', 'Dư nợ ngắn hạn bình quân', 'Tiền vay', 'N', 'PF10', null],
+  ['DUNO_TDHTT', 'Dư nợ trung dài hạn thông thường', 'Tiền vay', 'N', 'PF10', null],
+  ['DUNO_TDHTTBQ', 'Dư nợ trung dài hạn bình quân', 'Tiền vay', 'N', 'PF10', null],
+  ['DUNO_TC', 'Dư nợ thấu chi cuối kỳ', 'Tiền vay', 'N', 'PF10', null],
+  ['DUNO_TCBQ', 'Dư nợ thấu chi bình quân', 'Tiền vay', 'N', 'PF10', null],
   ['DUNO_XAU', 'Dư nợ nhóm 3, 4, 5', 'Tiền vay', 'N', 'LN01', null],
   ['DUNO_XAUBQ', 'Dư nợ xấu bình quân', 'Tiền vay', 'N', 'LN01', null],
   ['DUNO_XLRR', 'Dư nợ xử lý rủi ro', 'Tiền vay', 'N', 'LN01', null],
@@ -130,4 +130,3 @@ export const determinationStatuses = [
   ...Object.entries(statusNames).map(([value, label]) => ({ value: Number(value), label })),
   { value: 'unrated', label: 'Chưa đánh giá' },
 ];
-

@@ -5,6 +5,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     Numeric,
     String,
@@ -129,6 +130,13 @@ class CifCustomer(Base):
     telephone: Mapped[str | None] = mapped_column(String(100))
     full_address: Mapped[str | None] = mapped_column(Text)
     nationality_code: Mapped[str | None] = mapped_column(String(20))
+    birth_date: Mapped[object | None] = mapped_column(Date)
+    gender_code: Mapped[str | None] = mapped_column(String(20))
+    establishment_date: Mapped[object | None] = mapped_column(Date)
+    occupation: Mapped[str | None] = mapped_column(String(255))
+    economic_sector_code: Mapped[str | None] = mapped_column(String(50))
+    customer_segment_code: Mapped[str | None] = mapped_column(String(50), index=True)
+    data_quality_status: Mapped[str] = mapped_column(String(30), default="pending", index=True, nullable=False)
     status: Mapped[str] = mapped_column(String(30), default="active", index=True, nullable=False)
     branch_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     identifier_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -136,6 +144,281 @@ class CifCustomer(Base):
     last_import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("cif_import_batches.id"))
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), index=True)
+
+
+class CustomerBranchRelationship(Base):
+    __tablename__ = "customer_branch_relationships"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("cif_customers.id"), index=True, nullable=False)
+    branch_code: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
+    pgd_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    officer_user_id: Mapped[int | None] = mapped_column(ForeignKey("system_users.id"), index=True)
+    officer_code: Mapped[str | None] = mapped_column(String(50), index=True)
+    relationship_type: Mapped[str] = mapped_column(String(30), default="servicing", nullable=False)
+    is_primary: Mapped[bool] = mapped_column(Boolean, default=False, index=True, nullable=False)
+    valid_from: Mapped[object] = mapped_column(Date, nullable=False)
+    valid_to: Mapped[object | None] = mapped_column(Date)
+    source_code: Mapped[str | None] = mapped_column(String(30))
+    source_record_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "customer_id",
+            "branch_code",
+            "pgd_code",
+            "valid_from",
+            name="uq_customer_branch_relationship",
+        ),
+    )
+
+
+class CustomerRepresentative(Base):
+    __tablename__ = "customer_representatives"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("cif_customers.id"), index=True, nullable=False)
+    representative_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    identity_number: Mapped[str | None] = mapped_column(String(100), index=True)
+    position: Mapped[str | None] = mapped_column(String(100))
+    is_legal_representative: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    valid_from: Mapped[object | None] = mapped_column(Date)
+    valid_to: Mapped[object | None] = mapped_column(Date)
+    source_code: Mapped[str | None] = mapped_column(String(30))
+    source_record_id: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CustomerDepositPeriodMetric(Base):
+    __tablename__ = "customer_deposit_period_metrics"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(8), nullable=False)
+    period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("cif_customers.id"), nullable=False)
+    branch_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    demand_deposit_eom: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    demand_deposit_average: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    term_deposit_eom: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    term_deposit_average: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    incoming_turnover: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    funding_ftp_income: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    last_transaction_date: Mapped[object | None] = mapped_column(Date)
+    source_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"))
+    calculation_version: Mapped[str | None] = mapped_column(String(30))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("period_key", "customer_id", "branch_code", name="uq_customer_deposit_period_metric"),
+        Index(
+            "ix_customer_deposit_metrics_period_branch_customer",
+            "period_key",
+            "branch_code",
+            "customer_id",
+        ),
+    )
+
+
+class CustomerLoanPeriodMetric(Base):
+    __tablename__ = "customer_loan_period_metrics"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(8), nullable=False)
+    period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("cif_customers.id"), nullable=False)
+    branch_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    short_term_eom: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    short_term_average: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    medium_long_term_eom: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    medium_long_term_average: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    overdraft_eom: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    overdraft_average: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    bad_debt_eom: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    bad_debt_average: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    written_off_debt_eom: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    written_off_debt_average: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    general_provision_period: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    specific_provision_period: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    general_provision_accumulated: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    specific_provision_accumulated: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    loan_ftp_income: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    source_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"))
+    calculation_version: Mapped[str | None] = mapped_column(String(30))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("period_key", "customer_id", "branch_code", name="uq_customer_loan_period_metric"),
+        Index(
+            "ix_customer_loan_metrics_period_branch_customer",
+            "period_key",
+            "branch_code",
+            "customer_id",
+        ),
+    )
+
+
+class CustomerRevenuePeriodMetric(Base):
+    __tablename__ = "customer_revenue_period_metrics"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(8), nullable=False)
+    period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("cif_customers.id"), nullable=False)
+    branch_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    metric_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    amount: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    quantity: Mapped[int | None] = mapped_column(Integer)
+    source_code: Mapped[str | None] = mapped_column(String(30))
+    source_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"))
+    calculation_version: Mapped[str | None] = mapped_column(String(30))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "period_key", "customer_id", "branch_code", "metric_code",
+            name="uq_customer_revenue_period_metric",
+        ),
+        Index(
+            "ix_customer_revenue_metrics_period_code",
+            "period_key",
+            "metric_code",
+            "branch_code",
+        ),
+    )
+
+
+class CustomerFeePeriodMetric(Base):
+    __tablename__ = "customer_fee_period_metrics"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(8), nullable=False)
+    period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("cif_customers.id"), nullable=False)
+    branch_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    fee_code: Mapped[str] = mapped_column(String(50), nullable=False)
+    amount: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    transaction_count: Mapped[int | None] = mapped_column(Integer)
+    source_code: Mapped[str | None] = mapped_column(String(30))
+    source_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"))
+    calculation_version: Mapped[str | None] = mapped_column(String(30))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "period_key", "customer_id", "branch_code", "fee_code",
+            name="uq_customer_fee_period_metric",
+        ),
+        Index(
+            "ix_customer_fee_metrics_period_code",
+            "period_key",
+            "fee_code",
+            "branch_code",
+        ),
+    )
+
+
+class ProductDefinition(Base):
+    __tablename__ = "product_definitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    product_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    product_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    product_group: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    source_code: Mapped[str | None] = mapped_column(String(30))
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class CustomerProductPeriodStatus(Base):
+    __tablename__ = "customer_product_period_statuses"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    period_key: Mapped[str] = mapped_column(String(8), nullable=False)
+    period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    customer_id: Mapped[int] = mapped_column(ForeignKey("cif_customers.id"), nullable=False)
+    branch_code: Mapped[str] = mapped_column(String(10), nullable=False)
+    product_id: Mapped[int] = mapped_column(ForeignKey("product_definitions.id"), nullable=False)
+    is_active: Mapped[bool | None] = mapped_column(Boolean)
+    quantity: Mapped[int | None] = mapped_column(Integer)
+    activated_at: Mapped[object | None] = mapped_column(Date)
+    deactivated_at: Mapped[object | None] = mapped_column(Date)
+    source_code: Mapped[str | None] = mapped_column(String(30))
+    source_record_id: Mapped[int | None] = mapped_column(BigInteger)
+    source_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "period_key", "customer_id", "branch_code", "product_id",
+            name="uq_customer_product_period_status",
+        ),
+        Index(
+            "ix_customer_product_status_period_product",
+            "period_key",
+            "product_id",
+            "is_active",
+        ),
+        Index(
+            "ix_customer_product_status_period_branch_customer",
+            "period_key",
+            "branch_code",
+            "customer_id",
+        ),
+    )
+
+
+class ProfileMetricDefinition(Base):
+    __tablename__ = "profile_metric_definitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    metric_code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    metric_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    group_code: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    data_type: Mapped[str] = mapped_column(String(20), nullable=False)
+    unit: Mapped[str | None] = mapped_column(String(30))
+    aggregation_type: Mapped[str | None] = mapped_column(String(30))
+    default_visible: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    display_order: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    status_code: Mapped[int] = mapped_column(Integer, default=3, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class ProfileMetricRuleVersion(Base):
+    __tablename__ = "profile_metric_rule_versions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    metric_id: Mapped[int] = mapped_column(ForeignKey("profile_metric_definitions.id"), index=True, nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    source_codes: Mapped[list | None] = mapped_column(JSON)
+    source_columns: Mapped[list | None] = mapped_column(JSON)
+    join_rule: Mapped[str | None] = mapped_column(Text)
+    filter_rule: Mapped[str | None] = mapped_column(Text)
+    calculation_sql: Mapped[str | None] = mapped_column(Text)
+    reconciliation_rule: Mapped[str | None] = mapped_column(Text)
+    valid_from_period: Mapped[str | None] = mapped_column(String(8))
+    valid_to_period: Mapped[str | None] = mapped_column(String(8))
+    approval_status: Mapped[str] = mapped_column(String(30), default="draft", nullable=False)
+    approved_by: Mapped[int | None] = mapped_column(ForeignKey("system_users.id"))
+    approved_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("metric_id", "version_no", name="uq_profile_metric_rule_version"),
+    )
 
 
 class CifCustomerIdentifier(Base):
@@ -254,6 +537,13 @@ class DP01DepositAccount(Base):
     employee_number: Mapped[str | None] = mapped_column(String(50))
     employee_name: Mapped[str | None] = mapped_column(String(255))
     tygia: Mapped[object | None] = mapped_column(Numeric(18, 6))
+    rate: Mapped[object | None] = mapped_column(Numeric(18, 8))
+    account_status: Mapped[str | None] = mapped_column(String(30), index=True)
+    close_date: Mapped[object | None] = mapped_column(Date)
+    renewal_date: Mapped[object | None] = mapped_column(Date)
+    auto_renewal: Mapped[str | None] = mapped_column(String(20))
+    special_rate: Mapped[str | None] = mapped_column(String(20))
+    accrual_amount: Mapped[object | None] = mapped_column(Numeric(20, 2))
     raw_data: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -324,6 +614,18 @@ class LN01Loan(Base):
     accrual_amount_end_of_month: Mapped[object | None] = mapped_column(Numeric(20, 2))
     ty_gia: Mapped[object | None] = mapped_column(Numeric(18, 6))
     officer_ipcas: Mapped[str | None] = mapped_column(String(50))
+    disbursement_date: Mapped[object | None] = mapped_column(Date)
+    disbursement_amount: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    disbursement_maturity_date: Mapped[object | None] = mapped_column(Date)
+    repayment_amount: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    next_repayment_date: Mapped[object | None] = mapped_column(Date, index=True)
+    next_repayment_amount: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    next_interest_repayment_date: Mapped[object | None] = mapped_column(Date, index=True)
+    interest_amount: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    pastdue_interest_amount: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    total_interest_repayment_amount: Mapped[object | None] = mapped_column(Numeric(20, 2))
+    last_repayment_date: Mapped[object | None] = mapped_column(Date)
+    debt_group: Mapped[str | None] = mapped_column(String(20), index=True)
     raw_data: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -348,6 +650,39 @@ class PF14AccountBalance(Base):
     operationalfunds: Mapped[object | None] = mapped_column(Numeric(20, 2))
     monterm: Mapped[int | None] = mapped_column(Integer)
     ccy: Mapped[str | None] = mapped_column(String(10))
+    raw_data: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PF10LoanProfitability(Base):
+    __tablename__ = "pf10_loan_profitability"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    import_file_id: Mapped[int] = mapped_column(ForeignKey("import_files.id"), index=True, nullable=False)
+    import_batch_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id"), index=True, nullable=False)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    report_month: Mapped[str | None] = mapped_column(String(6), index=True)
+    branch_code: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
+    ma_kh_chuan: Mapped[str | None] = mapped_column(String(32), index=True)
+    account_number: Mapped[str | None] = mapped_column(String(50), index=True)
+    customer_code: Mapped[str | None] = mapped_column(String(32), index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(255))
+    loan_type: Mapped[str | None] = mapped_column(String(30), index=True)
+    balance_sheet_account_code: Mapped[str | None] = mapped_column(String(100))
+    average_balance: Mapped[object | None] = mapped_column(Numeric(24, 6))
+    end_of_month_balance: Mapped[object | None] = mapped_column(Numeric(24, 6))
+    month_term: Mapped[int | None] = mapped_column(Integer)
+    opening_date: Mapped[object | None] = mapped_column(Date)
+    maturity_date: Mapped[object | None] = mapped_column(Date)
+    closing_date: Mapped[object | None] = mapped_column(Date)
+    contract_rate: Mapped[object | None] = mapped_column(Numeric(18, 8))
+    monthly_total_interest: Mapped[object | None] = mapped_column(Numeric(24, 6))
+    book_correction_interest: Mapped[object | None] = mapped_column(Numeric(24, 6))
+    accruals: Mapped[object | None] = mapped_column(Numeric(24, 6))
+    interest_amount: Mapped[object | None] = mapped_column(Numeric(24, 6))
+    ratio: Mapped[object | None] = mapped_column(Numeric(18, 8))
+    currency_code: Mapped[str | None] = mapped_column(String(10))
     raw_data: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -607,6 +942,7 @@ class CustomerPeriodProfile(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
     period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    customer_id: Mapped[int | None] = mapped_column(ForeignKey("cif_customers.id"), index=True)
     ma_kh: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     ten_kh: Mapped[str | None] = mapped_column(String(255), index=True)
     loai_khach_hang: Mapped[str | None] = mapped_column(String(100))
@@ -618,6 +954,16 @@ class CustomerPeriodProfile(Base):
     so_du_tien_gui: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     doanh_so_chuyen_tien_ve_tk: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     so_du_tien_vay: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    du_no_ngan_han: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_ngan_han_bq: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_trung_dai_han: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_trung_dai_han_bq: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_thau_chi: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_thau_chi_bq: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    pf10_lds_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pf10_interest: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    pf10_accruals: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    pf10_book_correction_interest: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
     loai_vay: Mapped[str | None] = mapped_column(String(100))
     so_du_tgtt_binh_quan: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     thau_chi: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -659,6 +1005,7 @@ class CustomerPeriodBranchDetail(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
     period_date: Mapped[object] = mapped_column(Date, nullable=False)
+    customer_id: Mapped[int | None] = mapped_column(ForeignKey("cif_customers.id"), index=True)
     ma_kh: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
     branch_code: Mapped[str] = mapped_column(String(10), index=True, nullable=False)
     ma_pgd: Mapped[str | None] = mapped_column(String(20), index=True)
@@ -670,6 +1017,16 @@ class CustomerPeriodBranchDetail(Base):
     doanh_so_cramt: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     doanh_so_dramt: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     so_du_tien_vay: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
+    du_no_ngan_han: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_ngan_han_bq: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_trung_dai_han: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_trung_dai_han_bq: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_thau_chi: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    du_no_thau_chi_bq: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    pf10_lds_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pf10_interest: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    pf10_accruals: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    pf10_book_correction_interest: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
     loai_vay: Mapped[str | None] = mapped_column(String(100))
     so_du_tgtt_binh_quan: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     thau_chi: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

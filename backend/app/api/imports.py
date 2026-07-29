@@ -24,7 +24,7 @@ from app.imports.importer import (
     recover_import_jobs,
     remove_stored_upload_file,
 )
-from app.imports.summarizer import refresh_report_sources, summarize_period
+from app.imports.summarizer import SOURCE_CONFIGS, refresh_report_sources, summarize_period
 from app.models import (
     AuditLog,
     BC06CustomerClassification,
@@ -42,6 +42,7 @@ from app.models import (
     ImportFile,
     LN01Loan,
     KH02CustomerTransaction,
+    PF10LoanProfitability,
     PF14AccountBalance,
     ReportSourceStatus,
     SupplementalBaoLanhRecord,
@@ -227,6 +228,7 @@ def delete_period_data(db: Session, period_key: str) -> dict:
         DP01DepositAccount,
         CN05CustomerService,
         LN01Loan,
+        PF10LoanProfitability,
         PF14AccountBalance,
         BC06CustomerClassification,
         BC29CustomerCreditRisk,
@@ -631,7 +633,7 @@ def source_readiness(period_key: str = Query(...), db: Session = Depends(get_db)
         .all()
     )
     source_rows = []
-    for source_code in ("DP01", "LN01", "CN05", "PF14", "BC06", "BC29", "KH02"):
+    for source_code in ("DP01", "LN01", "CN05", "PF10", "PF14", "BC06", "BC29", "KH02"):
         source_files = [item for item in files if item.file_type == source_code]
         success_files = [item for item in source_files if item.status == "success"]
         source_rows.append({
@@ -710,7 +712,9 @@ def list_report_sources(period_key: str = Query(...), db: Session = Depends(get_
         .order_by(ReportSourceStatus.source_code)
         .all()
     )
-    if not rows:
+    expected_source_codes = {config["code"] for config in SOURCE_CONFIGS}
+    current_source_codes = {row.source_code for row in rows}
+    if not rows or current_source_codes != expected_source_codes:
         refresh_report_sources(db, period_key)
         db.commit()
         rows = (

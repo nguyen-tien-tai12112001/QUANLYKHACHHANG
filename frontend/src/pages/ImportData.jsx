@@ -47,13 +47,14 @@ const { Dragger } = Upload;
 const { RangePicker } = DatePicker;
 const { Paragraph, Text, Title } = Typography;
 
-const requiredTypes = ['DP01', 'LN01', 'CN05', 'PF14'];
+const requiredTypes = ['DP01', 'LN01', 'CN05', 'PF10', 'PF14'];
 const supportedTypes = [...requiredTypes, 'BC06', 'BC29', 'KH02', 'FTPLN'];
 const typeColors = {
   DP01: 'gold',
   LN01: 'volcano',
   CN05: 'green',
   PF14: 'cyan',
+  PF10: 'magenta',
   BC06: 'purple',
   BC29: 'red',
   KH02: 'blue',
@@ -141,7 +142,7 @@ function parseFilename(name) {
       identity: value.toLowerCase(),
     };
   }
-  const standard = /^(\d+)_(CN05|DP01|LN01|PF14|BC29)_(\d{8})\.(csv|xlsx)$/i.exec(value);
+  const standard = /^(\d+)_(CN05|DP01|LN01|PF10|PF14|BC29)_(\d{8})\.(csv|xlsx)$/i.exec(value);
   if (!standard) return null;
   const periodKey = standard[3];
   const month = Number(periodKey.slice(4, 6));
@@ -832,6 +833,12 @@ function ImportData() {
   ]);
 
   useEffect(() => {
+    const hasActiveWarehouseJob = uploading
+      || importJobs.some((job) => ['queued', 'uploading', 'processing'].includes(job.status))
+      || files.some((file) => ['queued', 'processing', 'deleting'].includes(file.status))
+      || periods.some((period) => period.running_job);
+    if (!hasActiveWarehouseJob) return undefined;
+
     async function refreshWarehouseInBackground() {
       if (document.visibilityState === 'hidden') {
         return;
@@ -899,6 +906,10 @@ function ImportData() {
     selectedKeyword,
     selectedUploadedRange?.[0]?.valueOf(),
     selectedUploadedRange?.[1]?.valueOf(),
+    files,
+    importJobs,
+    periods,
+    uploading,
   ]);
 
   return (
@@ -946,7 +957,7 @@ function ImportData() {
             <CloudUploadOutlined />
           </p>
           <p className="ant-upload-text">Kéo thả nhiều file dữ liệu vào đây</p>
-          <p className="ant-upload-hint">Hỗ trợ DP01, LN01, CN05, PF14, BC06, BC29, KH02 và FTPLN theo quy tắc tên đã cấu hình</p>
+          <p className="ant-upload-hint">Hỗ trợ DP01, LN01, CN05, PF10, PF14, BC06, BC29, KH02 và FTPLN theo quy tắc tên đã cấu hình</p>
         </Dragger>
 
         {uploadPreview.length ? (
@@ -1313,7 +1324,7 @@ function ImportData() {
                 <Space orientation="vertical" size={8}>
                   <Text strong>Kỳ dữ liệu: {deleteTarget.record.period_key} · {periodLabel(deleteTarget.record.period_key)}</Text>
                   <Text>
-                    Hành động này sẽ xóa toàn bộ file nguồn, dữ liệu chi tiết DP/LN/CN/PF/BC06/BC29/KH02/FTPLN, file bổ sung, trạng thái nguồn và kết quả xử lý của kỳ.
+                    Hành động này sẽ xóa toàn bộ file nguồn, dữ liệu chi tiết DP01/LN01/CN05/PF10/PF14/BC06/BC29/KH02/FTPLN, file bổ sung, trạng thái nguồn và kết quả xử lý của kỳ.
                   </Text>
                   {deleteTarget.record.processed ? (
                     <Tag color="warning">

@@ -39,6 +39,11 @@ const REQUIRED_LABELS = {
   LN01: 'LN01 - khoản vay',
   CN05: 'CN05 - dịch vụ',
   PF14: 'PF14 - CASA',
+  PF10: 'PF10 - hiệu quả và lãi khoản vay',
+  BC06: 'BC06 - phân loại khách hàng',
+  BC29: 'BC29 - rủi ro tín dụng',
+  KH02: 'KH02 - giao dịch trong tháng',
+  FTPLN: 'FTPLN - FTP khoản vay theo ngày',
 };
 
 const statusMeta = {
@@ -116,7 +121,14 @@ function ReadinessDetails({ row }) {
       {row.missing_required_files?.length ? (
         <div className="processing-readiness-popover__missing">
           <Text type="danger" strong>Còn thiếu:</Text>
-          <Text>{row.missing_required_files.map((item) => `${item.file_type}/${item.branch_code}`).join(', ')}</Text>
+          <Text>
+            {row.missing_required_files.map((item) => {
+              const missingDays = item.missing_dates?.length
+                ? ` (thiếu ngày: ${item.missing_dates.join(', ')})`
+                : '';
+              return `${item.file_type}/${item.branch_code}${missingDays}`;
+            }).join(', ')}
+          </Text>
         </div>
       ) : null}
     </div>

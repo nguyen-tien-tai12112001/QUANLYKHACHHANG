@@ -330,21 +330,26 @@ function HistoryTab() {
   const [issuesLoading, setIssuesLoading] = useState(false);
   useEffect(() => {
     let active = true;
+    let timer = null;
     async function load() {
       try {
         const { data } = await client.get('/cif/imports');
-        if (active) setRows(data || []);
+        if (!active) return;
+        const nextRows = data || [];
+        setRows(nextRows);
+        if (nextRows.some((row) => ['queued', 'processing'].includes(row.status))) {
+          timer = window.setTimeout(load, 3000);
+        }
       } catch (error) {
-        message.error(error.response?.data?.detail || error.message);
+        if (active) message.error(error.response?.data?.detail || error.message);
       } finally {
         if (active) setLoading(false);
       }
     }
     load();
-    const timer = window.setInterval(load, 3000);
     return () => {
       active = false;
-      window.clearInterval(timer);
+      if (timer) window.clearTimeout(timer);
     };
   }, []);
   async function openImportResult(row) {

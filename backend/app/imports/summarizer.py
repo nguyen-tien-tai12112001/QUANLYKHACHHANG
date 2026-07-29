@@ -15,6 +15,7 @@ from app.models import (
     ImportFile,
     KH02CustomerTransaction,
     LN01Loan,
+    PF10LoanProfitability,
     PF14AccountBalance,
     ReportSourceStatus,
 )
@@ -43,6 +44,16 @@ SOURCE_CONFIGS = [
         "table": "ln01_loans",
         "model": LN01Loan,
         "fields": ["BRCD", "CUSTSEQ", "CUSTNM", "DU_NO", "LOAN_TYPE", "OFFICER_ID"],
+    },
+    {
+        "code": "PF10",
+        "name": "Hiệu quả và lãi khoản vay",
+        "table": "pf10_loan_profitability",
+        "model": PF10LoanProfitability,
+        "fields": [
+            "TRDATE", "TRBRCD", "ACCTNO", "CUSTSEQ", "LNTYPE", "AVGBAL",
+            "EOMBAL", "CONTRATE", "INTEREST", "RATIO", "CCY",
+        ],
     },
     {
         "code": "PF14",

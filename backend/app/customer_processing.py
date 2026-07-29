@@ -1,5 +1,6 @@
 import shutil
-from datetime import datetime, timezone
+import calendar
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from app.models import (
 
 
 OPTIONAL_UPLOAD_DIR = Path(__file__).resolve().parents[1] / "uploads" / "optional"
-REQUIRED_FILE_TYPES = ("DP01", "LN01", "CN05", "PF14")
+REQUIRED_FILE_TYPES = ("DP01", "LN01", "CN05", "PF10", "PF14", "BC06", "BC29", "KH02", "FTPLN")
 BAO_LANH_LC_CODES = {"ILU", "ILS"}
 BAO_LANH_CODES = {"VPB", "VMB", "VAB", "VBB", "VSB", "VRT"}
 
@@ -64,10 +65,9 @@ DEFAULT_VND_RATE_SQL = text(
 
 UPDATE_PROFILES_TRANSFER_INFLOW_SQL = text(
     """
-    WITH dp_balance AS (
+    WITH current_bal AS MATERIALIZED (
         SELECT
-            dp.period_key,
-            COALESCE(NULLIF(TRIM(dp.ma_kh_chuan), ''), TRIM(dp.ma_kh)) AS customer_key,
+            dp.ma_kh_chuan AS customer_key,
             SUM(
                 CASE
                     WHEN COALESCE(dp.current_balance, 0) >= 0
@@ -79,19 +79,27 @@ UPDATE_PROFILES_TRANSFER_INFLOW_SQL = text(
         LEFT JOIN customer_period_exchange_rates rate
             ON rate.period_key = dp.period_key
             AND rate.ccy = UPPER(TRIM(COALESCE(dp.ccy, 'VND')))
-        WHERE dp.period_key IN (:period_key, :previous_period_key)
-            AND dp.ma_kh IS NOT NULL
-        GROUP BY dp.period_key, COALESCE(NULLIF(TRIM(dp.ma_kh_chuan), ''), TRIM(dp.ma_kh))
+        WHERE dp.period_key = :period_key
+            AND dp.ma_kh_chuan IS NOT NULL
+        GROUP BY dp.ma_kh_chuan
     ),
-    current_bal AS (
-        SELECT customer_key, total_balance
-        FROM dp_balance
-        WHERE period_key = :period_key
-    ),
-    previous_bal AS (
-        SELECT customer_key, total_balance
-        FROM dp_balance
-        WHERE period_key = :previous_period_key
+    previous_bal AS MATERIALIZED (
+        SELECT
+            dp.ma_kh_chuan AS customer_key,
+            SUM(
+                CASE
+                    WHEN COALESCE(dp.current_balance, 0) >= 0
+                    THEN COALESCE(dp.current_balance, 0) * COALESCE(rate.exchange_rate, 1)
+                    ELSE 0
+                END
+            ) AS total_balance
+        FROM dp01_deposit_accounts dp
+        LEFT JOIN customer_period_exchange_rates rate
+            ON rate.period_key = dp.period_key
+            AND rate.ccy = UPPER(TRIM(COALESCE(dp.ccy, 'VND')))
+        WHERE dp.period_key = :previous_period_key
+            AND dp.ma_kh_chuan IS NOT NULL
+        GROUP BY dp.ma_kh_chuan
     )
     UPDATE customer_period_profiles profile
     SET doanh_so_chuyen_tien_ve_tk = CASE
@@ -168,6 +176,7 @@ def apply_transfer_inflow_to_profiles(db: Session, period_key: str) -> None:
             {"period_key": period_key},
         )
         return
+    db.execute(text(f"SET LOCAL work_mem = '{settings.PROCESSING_WORK_MEM}'"))
     db.execute(
         UPDATE_PROFILES_TRANSFER_INFLOW_SQL,
         {"period_key": period_key, "previous_period_key": previous_period_key},
@@ -216,15 +225,14 @@ BRANCH_DETAIL_SQL = text(
         GROUP BY period_key, ma_kh, ma_cn
     ),
     valid_users AS (
-        SELECT DISTINCT ON (UPPER(TRIM(ipcas_username)))
-            UPPER(TRIM(ipcas_username)) AS normalized_ipcas_username,
-            TRIM(ipcas_username) AS ma_cb,
+        SELECT DISTINCT ON (TRIM(credit_officer_code))
+            TRIM(credit_officer_code) AS credit_officer_code,
             full_name AS ten_can_bo,
             employee_code AS officer_employee_code
         FROM system_users
-        WHERE ipcas_username IS NOT NULL
-            AND TRIM(ipcas_username) <> ''
-        ORDER BY UPPER(TRIM(ipcas_username)), is_active DESC, full_name
+        WHERE credit_officer_code IS NOT NULL
+            AND TRIM(credit_officer_code) <> ''
+        ORDER BY TRIM(credit_officer_code), is_active DESC, full_name
     ),
     ln_base AS (
         SELECT
@@ -232,8 +240,8 @@ BRANCH_DETAIL_SQL = text(
             loans.brcd AS branch_code,
             COALESCE(loans.du_no, 0) AS du_no,
             loans.loan_type,
-            valid_users.ma_cb,
-            valid_users.ten_can_bo,
+            COALESCE(valid_users.credit_officer_code, NULLIF(TRIM(loans.officer_id), '')) AS ma_cb,
+            COALESCE(valid_users.ten_can_bo, loans.officer_name) AS ten_can_bo,
             valid_users.officer_employee_code,
             CASE WHEN loan_type = 'Thấu chi trên TK khách hàng' THEN 1 ELSE 0 END AS is_thau_chi,
             CASE WHEN loan_type = 'Vay ngắn hạn (TK 211)' THEN 1 ELSE 0 END AS is_ngan,
@@ -241,7 +249,7 @@ BRANCH_DETAIL_SQL = text(
             CASE WHEN loan_type = 'Vay dài hạn (TK 213)' THEN 1 ELSE 0 END AS is_dai
         FROM ln01_loans loans
         LEFT JOIN valid_users
-            ON valid_users.normalized_ipcas_username = UPPER(TRIM(COALESCE(loans.officer_ipcas, '')))
+            ON valid_users.credit_officer_code = TRIM(COALESCE(loans.officer_id, ''))
         WHERE loans.period_key = :period_key AND loans.custseq IS NOT NULL
     ),
     ln_agg AS (
@@ -292,6 +300,26 @@ BRANCH_DETAIL_SQL = text(
         LEFT JOIN ln_top_officer
             ON ln_top_officer.ma_kh = ln_agg.ma_kh
             AND ln_top_officer.branch_code = ln_agg.branch_code
+    ),
+    pf10 AS (
+        SELECT
+            customer_code AS ma_kh,
+            branch_code,
+            SUM(CASE WHEN loan_type = '100' THEN COALESCE(end_of_month_balance, 0) ELSE 0 END) AS du_no_ngan_han,
+            SUM(CASE WHEN loan_type = '100' THEN COALESCE(average_balance, 0) ELSE 0 END) AS du_no_ngan_han_bq,
+            SUM(CASE WHEN loan_type IN ('110', '120') THEN COALESCE(end_of_month_balance, 0) ELSE 0 END) AS du_no_trung_dai_han,
+            SUM(CASE WHEN loan_type IN ('110', '120') THEN COALESCE(average_balance, 0) ELSE 0 END) AS du_no_trung_dai_han_bq,
+            SUM(CASE WHEN loan_type = '241' THEN COALESCE(end_of_month_balance, 0) ELSE 0 END) AS du_no_thau_chi,
+            SUM(CASE WHEN loan_type = '241' THEN COALESCE(average_balance, 0) ELSE 0 END) AS du_no_thau_chi_bq,
+            COUNT(DISTINCT account_number) AS pf10_lds_count,
+            SUM(COALESCE(interest_amount, 0)) AS pf10_interest,
+            SUM(COALESCE(accruals, 0)) AS pf10_accruals,
+            SUM(COALESCE(book_correction_interest, 0)) AS pf10_book_correction_interest
+        FROM pf10_loan_profitability
+        WHERE period_key = :period_key
+          AND customer_code IS NOT NULL
+          AND branch_code IS NOT NULL
+        GROUP BY customer_code, branch_code
     ),
     exchange_rates AS (
         SELECT ccy, exchange_rate
@@ -354,6 +382,10 @@ BRANCH_DETAIL_SQL = text(
         SELECT cn.ma_kh, cn.branch_code
         FROM cn
         INNER JOIN dp_customers ON dp_customers.ma_kh = cn.ma_kh
+        UNION
+        SELECT pf10.ma_kh, pf10.branch_code
+        FROM pf10
+        INNER JOIN dp_customers ON dp_customers.ma_kh = pf10.ma_kh
     )
     INSERT INTO customer_period_branch_details (
         period_key,
@@ -369,6 +401,16 @@ BRANCH_DETAIL_SQL = text(
         doanh_so_cramt,
         doanh_so_dramt,
         so_du_tien_vay,
+        du_no_ngan_han,
+        du_no_ngan_han_bq,
+        du_no_trung_dai_han,
+        du_no_trung_dai_han_bq,
+        du_no_thau_chi,
+        du_no_thau_chi_bq,
+        pf10_lds_count,
+        pf10_interest,
+        pf10_accruals,
+        pf10_book_correction_interest,
         loai_vay,
         so_du_tgtt_binh_quan,
         thau_chi,
@@ -401,6 +443,16 @@ BRANCH_DETAIL_SQL = text(
         COALESCE(dp.doanh_so_cramt, 0),
         COALESCE(dp.doanh_so_dramt, 0),
         COALESCE(ln.so_du_tien_vay, 0),
+        COALESCE(pf10.du_no_ngan_han, 0),
+        COALESCE(pf10.du_no_ngan_han_bq, 0),
+        COALESCE(pf10.du_no_trung_dai_han, 0),
+        COALESCE(pf10.du_no_trung_dai_han_bq, 0),
+        COALESCE(pf10.du_no_thau_chi, 0),
+        COALESCE(pf10.du_no_thau_chi_bq, 0),
+        COALESCE(pf10.pf10_lds_count, 0),
+        COALESCE(pf10.pf10_interest, 0),
+        COALESCE(pf10.pf10_accruals, 0),
+        COALESCE(pf10.pf10_book_correction_interest, 0),
         ln.loai_vay,
         COALESCE(pf.so_du_tgtt_binh_quan, 0),
         COALESCE(ln.thau_chi, 0),
@@ -421,6 +473,7 @@ BRANCH_DETAIL_SQL = text(
     FROM keys
     LEFT JOIN dp ON dp.ma_kh = keys.ma_kh AND dp.branch_code = keys.branch_code
     LEFT JOIN ln ON ln.ma_kh = keys.ma_kh AND ln.branch_code = keys.branch_code
+    LEFT JOIN pf10 ON pf10.ma_kh = keys.ma_kh AND pf10.branch_code = keys.branch_code
     LEFT JOIN pf ON pf.ma_kh = keys.ma_kh AND pf.branch_code = keys.branch_code
     LEFT JOIN cn ON cn.ma_kh = keys.ma_kh AND cn.branch_code = keys.branch_code
     LEFT JOIN import_batches batch ON batch.period_key = :period_key
@@ -528,6 +581,16 @@ PROFILE_SQL = text(
             SUM(COALESCE(so_du_tien_gui, 0)) AS so_du_tien_gui,
             0 AS doanh_so_chuyen_tien_ve_tk,
             SUM(COALESCE(so_du_tien_vay, 0)) AS so_du_tien_vay,
+            SUM(COALESCE(du_no_ngan_han, 0)) AS du_no_ngan_han,
+            SUM(COALESCE(du_no_ngan_han_bq, 0)) AS du_no_ngan_han_bq,
+            SUM(COALESCE(du_no_trung_dai_han, 0)) AS du_no_trung_dai_han,
+            SUM(COALESCE(du_no_trung_dai_han_bq, 0)) AS du_no_trung_dai_han_bq,
+            SUM(COALESCE(du_no_thau_chi, 0)) AS du_no_thau_chi,
+            SUM(COALESCE(du_no_thau_chi_bq, 0)) AS du_no_thau_chi_bq,
+            SUM(COALESCE(pf10_lds_count, 0)) AS pf10_lds_count,
+            SUM(COALESCE(pf10_interest, 0)) AS pf10_interest,
+            SUM(COALESCE(pf10_accruals, 0)) AS pf10_accruals,
+            SUM(COALESCE(pf10_book_correction_interest, 0)) AS pf10_book_correction_interest,
             CONCAT_WS(
                 '/',
                 CASE WHEN MAX(CASE WHEN loai_vay LIKE '%Thấu chi%' THEN 1 ELSE 0 END) = 1 THEN 'Thấu chi' END,
@@ -562,6 +625,16 @@ PROFILE_SQL = text(
                     'so_du_tien_gui', so_du_tien_gui,
                     'doanh_so_cramt', doanh_so_cramt,
                     'so_du_tien_vay', so_du_tien_vay,
+                    'du_no_ngan_han', du_no_ngan_han,
+                    'du_no_ngan_han_bq', du_no_ngan_han_bq,
+                    'du_no_trung_dai_han', du_no_trung_dai_han,
+                    'du_no_trung_dai_han_bq', du_no_trung_dai_han_bq,
+                    'du_no_thau_chi', du_no_thau_chi,
+                    'du_no_thau_chi_bq', du_no_thau_chi_bq,
+                    'pf10_lds_count', pf10_lds_count,
+                    'pf10_interest', pf10_interest,
+                    'pf10_accruals', pf10_accruals,
+                    'pf10_book_correction_interest', pf10_book_correction_interest,
                     'loai_vay', loai_vay,
                     'so_du_tgtt_binh_quan', so_du_tgtt_binh_quan,
                     'thau_chi', thau_chi,
@@ -649,6 +722,16 @@ PROFILE_SQL = text(
         so_du_tien_gui,
         doanh_so_chuyen_tien_ve_tk,
         so_du_tien_vay,
+        du_no_ngan_han,
+        du_no_ngan_han_bq,
+        du_no_trung_dai_han,
+        du_no_trung_dai_han_bq,
+        du_no_thau_chi,
+        du_no_thau_chi_bq,
+        pf10_lds_count,
+        pf10_interest,
+        pf10_accruals,
+        pf10_book_correction_interest,
         loai_vay,
         so_du_tgtt_binh_quan,
         thau_chi,
@@ -691,6 +774,16 @@ PROFILE_SQL = text(
         detail_agg.so_du_tien_gui,
         detail_agg.doanh_so_chuyen_tien_ve_tk,
         detail_agg.so_du_tien_vay,
+        detail_agg.du_no_ngan_han,
+        detail_agg.du_no_ngan_han_bq,
+        detail_agg.du_no_trung_dai_han,
+        detail_agg.du_no_trung_dai_han_bq,
+        detail_agg.du_no_thau_chi,
+        detail_agg.du_no_thau_chi_bq,
+        detail_agg.pf10_lds_count,
+        detail_agg.pf10_interest,
+        detail_agg.pf10_accruals,
+        detail_agg.pf10_book_correction_interest,
         detail_agg.loai_vay,
         detail_agg.so_du_tgtt_binh_quan,
         detail_agg.thau_chi,
@@ -984,7 +1077,11 @@ def active_import_files_query(db: Session, period_key: str):
     )
 
 
-def build_period_file_summary(files: list[ImportFile], optional_count: int = 0) -> dict:
+def build_period_file_summary(
+    files: list[ImportFile],
+    optional_count: int = 0,
+    period_date: date | None = None,
+) -> dict:
     success_by_type = {file_type: 0 for file_type in REQUIRED_FILE_TYPES}
     error_by_type = {file_type: 0 for file_type in REQUIRED_FILE_TYPES}
     processing_by_type = {file_type: 0 for file_type in REQUIRED_FILE_TYPES}
@@ -1010,8 +1107,47 @@ def build_period_file_summary(files: list[ImportFile], optional_count: int = 0) 
         for item in files
         if item.file_type in REQUIRED_FILE_TYPES and item.branch_code and item.status == "success"
     }
+    ftpln_missing_dates: dict[str, list[str]] = {}
+    if period_date:
+        expected_dates = {
+            date(period_date.year, period_date.month, day)
+            for day in range(1, calendar.monthrange(period_date.year, period_date.month)[1] + 1)
+        }
+        for branch_code in branch_codes:
+            branch_ftpln_files = [
+                item
+                for item in files
+                if item.file_type == "FTPLN" and item.branch_code == branch_code
+            ]
+            success_dates = {
+                item.business_date
+                for item in branch_ftpln_files
+                if item.status == "success" and item.business_date is not None
+            }
+            duplicate_dates = {
+                business_date
+                for business_date in success_dates
+                if sum(
+                    1
+                    for item in branch_ftpln_files
+                    if item.status == "success" and item.business_date == business_date
+                ) > 1
+            }
+            missing_dates = sorted(expected_dates - success_dates)
+            has_errors = any(item.status == "error" for item in branch_ftpln_files)
+            if missing_dates or duplicate_dates or has_errors:
+                successful_pairs.discard(("FTPLN", branch_code))
+                ftpln_missing_dates[branch_code] = [item.isoformat() for item in missing_dates]
     missing_required_files = [
-        {"file_type": file_type, "branch_code": branch_code}
+        {
+            "file_type": file_type,
+            "branch_code": branch_code,
+            **(
+                {"missing_dates": ftpln_missing_dates.get(branch_code, [])}
+                if file_type == "FTPLN"
+                else {}
+            ),
+        }
         for branch_code in branch_codes
         for file_type in REQUIRED_FILE_TYPES
         if (file_type, branch_code) not in successful_pairs
@@ -1031,7 +1167,7 @@ def build_period_file_summary(files: list[ImportFile], optional_count: int = 0) 
         "available_required_file_count": available_required,
         "total_file_count": len(files),
         "optional_file_count": optional_count,
-        "is_ready": available_required == len(REQUIRED_FILE_TYPES),
+        "is_ready": bool(branch_codes) and not missing_required_files,
         "branch_codes": branch_codes,
         "branch_count": len(branch_codes),
         "ready_branch_count": ready_branch_count,
@@ -1049,13 +1185,18 @@ def build_period_file_summary(files: list[ImportFile], optional_count: int = 0) 
 
 def get_period_file_summary(db: Session, period_key: str) -> dict:
     files = active_import_files_query(db, period_key).all()
+    batch = db.query(ImportBatch).filter(ImportBatch.period_key == period_key).first()
     optional_count = (
         db.query(func.count(CustomerProcessingOptionalFile.id))
         .filter(CustomerProcessingOptionalFile.period_key == period_key)
         .scalar()
         or 0
     )
-    return build_period_file_summary(files, int(optional_count))
+    return build_period_file_summary(
+        files,
+        int(optional_count),
+        batch.period_date if batch else None,
+    )
 
 
 def update_job(db: Session, job: CustomerProcessingJob, status: str, stage: str, progress: int) -> None:
@@ -1119,7 +1260,7 @@ def process_customer_period(job_id: int) -> None:
         db.execute(DEFAULT_VND_RATE_SQL, {"period_key": job.period_key})
         db.commit()
 
-        update_job(db, job, "processing", "Đối chiếu DP01 với LN01, CN05, PF14 theo từng chi nhánh/PGD", 48)
+        update_job(db, job, "processing", "Đối chiếu DP01 với LN01, PF10, CN05, PF14 theo từng chi nhánh/PGD", 48)
         db.execute(BRANCH_DETAIL_SQL, {"period_key": job.period_key, "job_id": job.id})
         db.commit()
 

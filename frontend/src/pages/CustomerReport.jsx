@@ -520,7 +520,7 @@ function ServiceMiniGrid({ row, onUnusedClick }) {
 }
 
 function sourceTag(source) {
-  const colors = { DP01: 'gold', LN01: 'volcano', PF14: 'cyan', CN05: 'green', MANUAL: 'default' };
+  const colors = { DP01: 'gold', LN01: 'volcano', PF10: 'magenta', PF14: 'cyan', CN05: 'green', MANUAL: 'default' };
   return <Tag color={colors[source] || 'default'}>{source}</Tag>;
 }
 
@@ -528,6 +528,7 @@ const sourceGroups = [
   { label: 'Thông tin KH', source: 'DP01', note: 'Mã CN, mã KH, tên KH, loại KH, PGD' },
   { label: 'Tiền gửi', source: 'DP01', note: 'Số dư tiền gửi, doanh số DR/CR' },
   { label: 'Khoản vay', source: 'LN01', note: 'Dư nợ, loại vay, cán bộ quản lý' },
+  { label: 'Hiệu quả khoản vay', source: 'PF10', note: 'Số dư bình quân, lãi suất, lãi và tỷ lệ theo tài khoản vay' },
   { label: 'CASA bình quân', source: 'PF14', note: 'Số dư TGTT bình quân trong tháng' },
   { label: 'Dịch vụ', source: 'CN05', note: 'Thấu chi, số đẹp, Agribank Plus, SMS, thẻ' },
   { label: 'Bổ sung', source: 'MANUAL', note: 'Các cột chưa có nguồn rõ sẽ nhập/mapping sau' },

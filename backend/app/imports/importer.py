@@ -38,6 +38,7 @@ from app.models import (
     ImportFile,
     KH02CustomerTransaction,
     LN01Loan,
+    PF10LoanProfitability,
     PF14AccountBalance,
 )
 
@@ -106,6 +107,7 @@ def delete_import_file_rows(db: Session, file_id: int) -> None:
         DP01DepositAccount,
         CN05CustomerService,
         LN01Loan,
+        PF10LoanProfitability,
         PF14AccountBalance,
         BC06CustomerClassification,
         BC29CustomerCreditRisk,
@@ -357,6 +359,13 @@ def _import_dp01(db: Session, rows: list[dict], import_file: ImportFile) -> int:
                 "employee_number": clean_text(raw.get("EMPLOYEE_NUMBER")),
                 "employee_name": clean_text(raw.get("EMPLOYEE_NAME")),
                 "tygia": parse_decimal(raw.get("TYGIA")),
+                "rate": parse_decimal(raw.get("RATE")),
+                "account_status": clean_text(raw.get("ACCOUNT_STATUS")),
+                "close_date": parse_yyyymmdd(raw.get("CLOSE_DATE")),
+                "renewal_date": parse_yyyymmdd(raw.get("RENEW_DATE")),
+                "auto_renewal": clean_text(raw.get("AUTO_RENEWAL")),
+                "special_rate": clean_text(raw.get("SPECIAL_RATE")),
+                "accrual_amount": parse_decimal(raw.get("ACRUAL_AMOUNT")),
             }
         )
     bulk_insert_in_chunks(db, DP01DepositAccount, mappings)
@@ -438,6 +447,18 @@ def _import_ln01(db: Session, rows: list[dict], import_file: ImportFile) -> int:
                 "accrual_amount_end_of_month": parse_decimal(raw.get("ACCRUAL_AMOUNT_END_OF_MONTH")),
                 "ty_gia": parse_decimal(raw.get("TY_GIA")),
                 "officer_ipcas": clean_text(raw.get("OFFICER_IPCAS")),
+                "disbursement_date": parse_yyyymmdd(raw.get("DSBSDT")),
+                "disbursement_amount": parse_decimal(raw.get("DISBURSEMENT_AMOUNT")),
+                "disbursement_maturity_date": parse_yyyymmdd(raw.get("DSBSMATDT")),
+                "repayment_amount": parse_decimal(raw.get("REPAYMENT_AMOUNT")),
+                "next_repayment_date": parse_yyyymmdd(raw.get("NEXT_REPAY_DATE")),
+                "next_repayment_amount": parse_decimal(raw.get("NEXT_REPAY_AMOUNT")),
+                "next_interest_repayment_date": parse_yyyymmdd(raw.get("NEXT_INT_REPAY_DATE")),
+                "interest_amount": parse_decimal(raw.get("INTEREST_AMOUNT")),
+                "pastdue_interest_amount": parse_decimal(raw.get("PASTDUE_INTEREST_AMOUNT")),
+                "total_interest_repayment_amount": parse_decimal(raw.get("TOTAL_INTEREST_REPAY_AMOUNT")),
+                "last_repayment_date": parse_yyyymmdd(raw.get("LAST_REPAY_DATE")),
+                "debt_group": clean_text(raw.get("NHOM_NO")),
             }
         )
     bulk_insert_in_chunks(db, LN01Loan, mappings)
@@ -518,6 +539,13 @@ def _copy_dp01_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> 
                 "employee_number": clean_text(raw.get("EMPLOYEE_NUMBER")),
                 "employee_name": clean_text(raw.get("EMPLOYEE_NAME")),
                 "tygia": parse_decimal(raw.get("TYGIA")),
+                "rate": parse_decimal(raw.get("RATE")),
+                "account_status": clean_text(raw.get("ACCOUNT_STATUS")),
+                "close_date": parse_yyyymmdd(raw.get("CLOSE_DATE")),
+                "renewal_date": parse_yyyymmdd(raw.get("RENEW_DATE")),
+                "auto_renewal": clean_text(raw.get("AUTO_RENEWAL")),
+                "special_rate": clean_text(raw.get("SPECIAL_RATE")),
+                "accrual_amount": parse_decimal(raw.get("ACRUAL_AMOUNT")),
             }
         )
     copy_insert_mappings(db, DP01DepositAccount, mappings)
@@ -599,6 +627,18 @@ def _copy_ln01_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> 
                 "accrual_amount_end_of_month": parse_decimal(raw.get("ACCRUAL_AMOUNT_END_OF_MONTH")),
                 "ty_gia": parse_decimal(raw.get("TY_GIA")),
                 "officer_ipcas": clean_text(raw.get("OFFICER_IPCAS")),
+                "disbursement_date": parse_yyyymmdd(raw.get("DSBSDT")),
+                "disbursement_amount": parse_decimal(raw.get("DISBURSEMENT_AMOUNT")),
+                "disbursement_maturity_date": parse_yyyymmdd(raw.get("DSBSMATDT")),
+                "repayment_amount": parse_decimal(raw.get("REPAYMENT_AMOUNT")),
+                "next_repayment_date": parse_yyyymmdd(raw.get("NEXT_REPAY_DATE")),
+                "next_repayment_amount": parse_decimal(raw.get("NEXT_REPAY_AMOUNT")),
+                "next_interest_repayment_date": parse_yyyymmdd(raw.get("NEXT_INT_REPAY_DATE")),
+                "interest_amount": parse_decimal(raw.get("INTEREST_AMOUNT")),
+                "pastdue_interest_amount": parse_decimal(raw.get("PASTDUE_INTEREST_AMOUNT")),
+                "total_interest_repayment_amount": parse_decimal(raw.get("TOTAL_INTEREST_REPAY_AMOUNT")),
+                "last_repayment_date": parse_yyyymmdd(raw.get("LAST_REPAY_DATE")),
+                "debt_group": clean_text(raw.get("NHOM_NO")),
             }
         )
     copy_insert_mappings(db, LN01Loan, mappings)
@@ -631,6 +671,51 @@ def _copy_pf14_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> 
             }
         )
     copy_insert_mappings(db, PF14AccountBalance, mappings)
+    return len(mappings)
+
+
+def _copy_pf10_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> int:
+    mappings = []
+    expected_month = import_file.period_key[:6]
+    for raw in rows:
+        branch_code = clean_text(raw.get("TRBRCD")) or import_file.branch_code
+        validate_source_identity(import_file, branch_code)
+        report_month = clean_text(raw.get("TRDATE"))
+        if report_month and report_month != expected_month:
+            raise ValueError(
+                f"TRDATE {report_month} không khớp tháng {expected_month} trên tên file PF10"
+            )
+        customer_code = clean_customer_code(raw.get("CUSTSEQ"))
+        closing_date = parse_yyyymmdd(raw.get("CLSDT"))
+        mappings.append({
+            "import_file_id": import_file.id,
+            "import_batch_id": import_file.import_batch_id,
+            "period_key": import_file.period_key,
+            "period_date": import_file.period_date,
+            "report_month": report_month,
+            "branch_code": branch_code,
+            "ma_kh_chuan": build_ma_kh_chuan(branch_code, customer_code),
+            "account_number": clean_text(raw.get("ACCTNO")),
+            "customer_code": customer_code,
+            "customer_name": clean_text(raw.get("CUSTNAME")),
+            "loan_type": clean_text(raw.get("LNTYPE")),
+            "balance_sheet_account_code": clean_text(raw.get("BSACCTCD")),
+            "average_balance": parse_decimal(raw.get("AVGBAL")),
+            "end_of_month_balance": parse_decimal(raw.get("EOMBAL")),
+            "month_term": parse_int(raw.get("MONTERM")),
+            "opening_date": parse_yyyymmdd(raw.get("OPNDT")),
+            "maturity_date": parse_yyyymmdd(raw.get("MATDT")),
+            "closing_date": closing_date,
+            "contract_rate": parse_decimal(raw.get("CONTRATE")),
+            "monthly_total_interest": parse_decimal(raw.get("MMTOTINT")),
+            "book_correction_interest": parse_decimal(raw.get("BVCORRINT")),
+            "accruals": parse_decimal(raw.get("ACCRUALS")),
+            "interest_amount": parse_decimal(raw.get("INTEREST")),
+            "ratio": parse_decimal(raw.get("RATIO")),
+            "currency_code": clean_text(raw.get("CCY")),
+            "raw_data": json_safe_raw(raw),
+        })
+    bulk_insert_in_chunks(db, PF10LoanProfitability, mappings)
     return len(mappings)
 
 
@@ -814,6 +899,7 @@ COPY_CHUNK_HANDLERS = {
     "CN05": _copy_cn05_chunk,
     "LN01": _copy_ln01_chunk,
     "PF14": _copy_pf14_chunk,
+    "PF10": _copy_pf10_chunk,
     "BC06": _import_bc06_chunk,
     "BC29": _import_bc29_chunk,
     "KH02": _import_kh02_chunk,
