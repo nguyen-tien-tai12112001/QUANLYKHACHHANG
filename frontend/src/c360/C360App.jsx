@@ -65,6 +65,15 @@ const compactMoney = (value) => {
   return `${number.toLocaleString('vi-VN')} đ`;
 };
 const fullMoney = (value) => `${Number(value || 0).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} đ`;
+const originalMoney = (value, ccy) => `${Number(value || 0).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} ${ccy || 'VND'}`;
+const convertedMoneyCell = (vndValue, originalValue, row) => (
+  <div>
+    <Text strong>{fullMoney(vndValue)}</Text>
+    {row.currency_code && row.currency_code !== 'VND' ? (
+      <><br /><Text type="secondary">{originalMoney(originalValue, row.currency_code)} × {Number(row.exchange_rate || 1).toLocaleString('vi-VN')}</Text></>
+    ) : null}
+  </div>
+);
 const loanTypeLabel = (value) => {
   const text = String(value || '').trim();
   if (!text) return 'Không có khoản vay';
@@ -110,6 +119,7 @@ const internationalFields = [
 ];
 
 const feeFields = [
+  { key: 'abic_batd', label: 'Phí Bảo an tín dụng', source: 'KH02', money: true },
   { key: 'phi_bao_lanh', label: 'Phí bảo lãnh', source: 'KH02', money: true },
   { key: 'phi_chuyen_tien', label: 'Phí chuyển tiền', source: 'KH02', money: true },
   { key: 'phi_kdnt', label: 'Phí/lãi mua bán ngoại tệ', source: 'KDNH', money: true },
@@ -167,6 +177,7 @@ const productGroups = [
     note: 'Sản phẩm bảo hiểm khách hàng đang tham gia',
     tone: 'green',
     items: [
+      ['abic_batd', 'Bảo an tín dụng'],
       ['batd', 'Bảo an tín dụng'],
       ['batk', 'Bảo an tài khoản'],
       ['abic_bathe', 'Bảo an chủ thẻ'],
@@ -435,6 +446,7 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
   const [loanData, setLoanData] = useState({ categories: [], branches: [], items: [], total: 0 });
   const [depositData, setDepositData] = useState({ categories: [], branches: [], items: [], total: 0 });
   const [classificationData, setClassificationData] = useState({ branches: [], items: [] });
+  const [financialMetrics, setFinancialMetrics] = useState({ totals: {}, branches: [] });
   const [loanCategory, setLoanCategory] = useState('short_term');
   const [loanBranch, setLoanBranch] = useState(null);
   const [depositCategory, setDepositCategory] = useState('demand');
@@ -444,6 +456,24 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
   const [loanLoading, setLoanLoading] = useState(false);
   const [depositLoading, setDepositLoading] = useState(false);
   const [classificationLoading, setClassificationLoading] = useState(false);
+  const [financialLoading, setFinancialLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !customer?.ma_kh || !['credit', 'fees', 'products'].includes(activeTab)) return;
+    let active = true;
+    setFinancialLoading(true);
+    client.get('/customer-processing/financial-metrics', {
+      params: {
+        period_key: periodKey,
+        ma_kh: customer.ma_kh,
+        branch_code: profileBranch || undefined,
+      },
+    })
+      .then(({ data }) => { if (active) setFinancialMetrics(data || { totals: {}, branches: [] }); })
+      .catch(() => { if (active) setFinancialMetrics({ totals: {}, branches: [] }); })
+      .finally(() => { if (active) setFinancialLoading(false); });
+    return () => { active = false; };
+  }, [activeTab, customer?.ma_kh, open, periodKey, profileBranch]);
 
   useEffect(() => {
     if (!open || !customer?.ma_kh || activeTab !== 'history') return;
@@ -521,6 +551,7 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
     setActiveTab(nextTab);
     window.requestAnimationFrame(() => {
       const modal = modalAnchorRef.current?.closest('.ant-modal');
+      modalAnchorRef.current?.closest('.c360-profile-scroll')?.scrollTo({ top: 0, left: 0 });
       modal?.closest('.ant-modal-wrap')?.scrollTo({ top: 0, left: 0 });
       modal?.querySelector('.c360-profile-tabs > .ant-tabs-content-holder')?.scrollTo({ top: 0, left: 0 });
     });
@@ -542,6 +573,7 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
         pgd_count: selectedBranchDetail.ma_pgd ? 1 : 0,
       }
     : customer;
+  const metricCustomer = { ...viewedCustomer, ...(financialMetrics.totals || {}) };
   const officerScope = profileBranch && selectedBranchDetail ? [selectedBranchDetail] : branchDetails;
   const officerSummary = [...new Set(officerScope
     .filter((item) => item.ten_can_bo || item.ma_cb || item.officer_employee_code)
@@ -564,7 +596,7 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
     + Number(viewedCustomer.du_no_thau_chi || 0)
     || Number(viewedCustomer.so_du_tien_vay || 0);
   const periodRevenue = Number(viewedCustomer.pf10_interest || 0)
-    + feeFields.reduce((sum, field) => sum + Number(viewedCustomer[field.key] || 0), 0);
+    + feeFields.reduce((sum, field) => sum + Number(metricCustomer[field.key] || 0), 0);
   const classificationPrevious = {};
   const classificationRows = [...(classificationData.items || [])]
     .sort((a, b) => `${a.period_key}-${a.branch_code}`.localeCompare(`${b.period_key}-${b.branch_code}`))
@@ -584,10 +616,11 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
       onCancel={onClose}
       footer={null}
       title={null}
-      centered
+      wrapClassName="c360-real-profile-wrap"
       destroyOnHidden
       className="c360-real-profile-modal"
     >
+      <div className="c360-profile-scroll">
       <div ref={modalAnchorRef} className="demo-quick-header c360-profile-hero">
         <Avatar size={48} className="demo-profile-avatar">{customer.ten_kh?.charAt(0) || 'K'}</Avatar>
         <div>
@@ -685,10 +718,10 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
                     const status = depositStatusLabels[value] || [value || '—', 'default'];
                     return <Tag color={status[1]}>{status[0]}</Tag>;
                   } },
-                  { title: 'Số dư cuối kỳ', dataIndex: 'end_balance', width: 175, align: 'right', render: fullMoney },
-                  { title: `Kỳ trước${depositData.previous_period ? ` (${periodLabel(depositData.previous_period)})` : ''}`, dataIndex: 'previous_balance', width: 180, align: 'right', render: fullMoney },
+                  { title: 'Số dư cuối kỳ (VND)', dataIndex: 'end_balance', width: 210, align: 'right', render: (value, row) => convertedMoneyCell(value, row.end_balance_original, row) },
+                  { title: `Kỳ trước (VND)${depositData.previous_period ? ` · ${periodLabel(depositData.previous_period)}` : ''}`, dataIndex: 'previous_balance', width: 210, align: 'right', render: (value, row) => convertedMoneyCell(value, row.previous_balance_original, row) },
                   { title: 'Biến động', dataIndex: 'balance_change', width: 180, align: 'right', render: (value) => <Text className={Number(value || 0) >= 0 ? 'is-up' : 'is-down'} strong>{Number(value || 0) >= 0 ? '+' : ''}{fullMoney(value)}</Text> },
-                  { title: 'Số dư bình quân', dataIndex: 'average_balance', width: 180, align: 'right', render: fullMoney },
+                  { title: 'Số dư bình quân (VND)', dataIndex: 'average_balance', width: 210, align: 'right', render: (value, row) => convertedMoneyCell(value, row.average_balance_original, row) },
                   { title: 'Tỷ lệ duy trì', dataIndex: 'retention_rate', width: 125, align: 'right', render: (value, row) => <div><Text strong>{value == null ? '—' : `${value}%`}</Text>{row.low_average_high_end || row.high_average_end_drop ? <><br /><Tag color="warning">Cần xem</Tag></> : null}</div> },
                   { title: 'Ngày mở', dataIndex: 'opening_date', width: 120, render: dateLabel },
                   { title: 'Ngày đến hạn', dataIndex: 'maturity_date', width: 125, render: dateLabel },
@@ -743,6 +776,10 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
                   <div><Text>Tài sản bảo đảm</Text><strong>{loanData.risk?.available ? compactMoney(loanData.risk.collateral_value) : '—'}</strong></div>
                   <div><Text>Dự phòng cụ thể</Text><strong>{loanData.risk?.available ? compactMoney(loanData.risk.specific_provision) : '—'}</strong></div>
                   <div><Text>Dư nợ XLRR</Text><strong>{loanData.risk?.available ? compactMoney(loanData.risk.handled_risk_amount) : '—'}</strong></div>
+                  <div><Text>DPRR chung tháng</Text><strong>{financialLoading ? '…' : fullMoney(metricCustomer.dprr_chung_tt)}</strong></div>
+                  <div><Text>DPRR chung lũy kế</Text><strong>{financialLoading ? '…' : fullMoney(metricCustomer.dprr_chung_lk)}</strong></div>
+                  <div><Text>DPRR cụ thể tháng</Text><strong>{financialLoading ? '…' : fullMoney(metricCustomer.dprr_cuthe_tt)}</strong></div>
+                  <div><Text>DPRR cụ thể lũy kế</Text><strong>{financialLoading ? '…' : fullMoney(metricCustomer.dprr_cuthe_lk)}</strong></div>
                 </div>
               </div>
               <div className="c360-credit-toolbar">
@@ -815,9 +852,23 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
                 <Tag color="gold">KH02 · Nguồn bổ sung</Tag>
               </div>
               <DomainMetricGrid
-                customer={viewedCustomer}
+                customer={metricCustomer}
                 fields={feeFields}
                 emptyNote="Chỉ tiêu chưa có nguồn được để trống thay vì mặc định bằng 0, tránh hiểu nhầm khách hàng không phát sinh phí."
+              />
+              <Table
+                loading={financialLoading}
+                size="small"
+                rowKey="branch_code"
+                pagination={false}
+                dataSource={financialMetrics.branches || []}
+                columns={[
+                  { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100 },
+                  { title: 'Phí bảo lãnh', dataIndex: 'phi_bao_lanh', align: 'right', render: fullMoney },
+                  { title: 'Phí chuyển tiền', dataIndex: 'phi_chuyen_tien', align: 'right', render: fullMoney },
+                  { title: 'Phí NHĐT', dataIndex: 'phi_nhdt', align: 'right', render: fullMoney },
+                  { title: 'Phí BATD', dataIndex: 'abic_batd', align: 'right', render: fullMoney },
+                ]}
               />
             </div>
           ),
@@ -877,7 +928,7 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
         {
           key: 'products',
           label: 'Sản phẩm dịch vụ',
-          children: <ProductServiceGroups customer={viewedCustomer} />,
+          children: <ProductServiceGroups customer={metricCustomer} />,
         },
         {
           key: 'history',
@@ -907,6 +958,7 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
           ),
         },
       ]} />
+      </div>
     </Modal>
   );
 }

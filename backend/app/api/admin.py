@@ -47,6 +47,7 @@ class UserPayload(BaseModel):
     password: str | None = None
     employee_code: str
     credit_officer_code: str | None = None
+    customer_cif_code: str | None = None
     ipcas_username: str | None = None
     branch_id: int | None = None
     department_id: int | None = None
@@ -115,6 +116,15 @@ def validate_user_payload(db: Session, payload: UserPayload, user_id: int | None
             exists_ipcas = exists_ipcas.filter(SystemUser.id != user_id)
         if exists_ipcas.first():
             raise HTTPException(status_code=400, detail="User IPCAS đã tồn tại")
+    customer_cif_code = clean_code(payload.customer_cif_code) if payload.customer_cif_code else None
+    if customer_cif_code and (len(customer_cif_code) != 13 or not customer_cif_code.isdigit()):
+        raise HTTPException(status_code=400, detail="Mã CIF của user phải gồm đúng 13 chữ số")
+    if customer_cif_code:
+        exists_cif = db.query(SystemUser).filter(SystemUser.customer_cif_code == customer_cif_code)
+        if user_id:
+            exists_cif = exists_cif.filter(SystemUser.id != user_id)
+        if exists_cif.first():
+            raise HTTPException(status_code=400, detail="Mã CIF này đã được gắn cho user khác")
 
 
 def log_action(db: Session, request: Request, action: str, entity_type: str, entity_id=None, description: str | None = None) -> None:
@@ -165,6 +175,7 @@ def serialize_user(user: SystemUser) -> dict:
         "username": user.username,
         "employee_code": user.employee_code,
         "credit_officer_code": user.credit_officer_code,
+        "customer_cif_code": user.customer_cif_code,
         "ipcas_username": user.ipcas_username,
         "full_name": user.full_name,
         "branch_id": user.branch_id,
@@ -414,6 +425,7 @@ def create_user(payload: UserPayload, request: Request, db: Session = Depends(ge
         password_hash=hash_password(payload.password or "1"),
         employee_code=employee_code,
         credit_officer_code=clean_code(payload.credit_officer_code) or None,
+        customer_cif_code=clean_code(payload.customer_cif_code) or None,
         ipcas_username=clean_code(payload.ipcas_username).upper() or None,
         full_name=payload.full_name.strip(),
         branch_id=payload.branch_id,
@@ -446,6 +458,7 @@ def update_user(user_id: int, payload: UserPayload, request: Request, db: Sessio
         user.password_hash = hash_password(payload.password)
     user.employee_code = employee_code
     user.credit_officer_code = clean_code(payload.credit_officer_code) or None
+    user.customer_cif_code = clean_code(payload.customer_cif_code) or None
     user.ipcas_username = clean_code(payload.ipcas_username).upper() or None
     user.full_name = payload.full_name.strip()
     user.branch_id = payload.branch_id
@@ -769,6 +782,7 @@ def import_users(request: Request, file: UploadFile = File(...), db: Session = D
         payload = {
             "username": employee_code.lower(),
             "employee_code": employee_code,
+            "customer_cif_code": norm_code(row.get("MA_CIF") or row.get("CUSTNO")) or None,
             "credit_officer_code": norm_code(row.get("Mã CBTD")) or None,
             "ipcas_username": norm_text(row.get("User IPCAS")).upper() or None,
             "full_name": norm_text(row.get("Tên NV")) or employee_code,

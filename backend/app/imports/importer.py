@@ -366,10 +366,10 @@ def _import_dp01(db: Session, rows: list[dict], import_file: ImportFile) -> int:
                 "auto_renewal": clean_text(raw.get("AUTO_RENEWAL")),
                 "special_rate": clean_text(raw.get("SPECIAL_RATE")),
                 "accrual_amount": parse_decimal(raw.get("ACRUAL_AMOUNT")),
+                "raw_data": json_safe_raw(raw),
             }
         )
     bulk_insert_in_chunks(db, DP01DepositAccount, mappings)
-    _upsert_customers_from_dp01(db, mappings, import_file.period_key)
     return len(mappings)
 
 
@@ -546,10 +546,10 @@ def _copy_dp01_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> 
                 "auto_renewal": clean_text(raw.get("AUTO_RENEWAL")),
                 "special_rate": clean_text(raw.get("SPECIAL_RATE")),
                 "accrual_amount": parse_decimal(raw.get("ACRUAL_AMOUNT")),
+                "raw_data": json_safe_raw(raw),
             }
         )
     copy_insert_mappings(db, DP01DepositAccount, mappings)
-    _upsert_customers_from_dp01(db, mappings, import_file.period_key)
     return len(mappings)
 
 

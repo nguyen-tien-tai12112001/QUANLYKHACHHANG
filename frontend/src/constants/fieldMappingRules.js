@@ -185,11 +185,53 @@ const implemented = {
     calculation: 'SUM(HANDLED_RISK_AMOUNT) theo mã khách hàng và chi nhánh trong kỳ.',
     reconciliation: 'Đối chiếu CUSTOMER_CODE, ngày xử lý rủi ro và số tiền xử lý tại BC29 trước khi cộng toàn khách hàng.',
   },
-  DPRR_TT: {
-    profileField: 'bc29_customer_credit_risks.period_provision_amount',
+  DPRR_CHUNG_TT: {
+    profileField: 'dprr_chung_tt',
+    actualSource: 'LN01',
+    calculation: '(SUM(DU_NO nhóm 1-4 kỳ này) - SUM(DU_NO nhóm 1-4 kỳ trước)) × 0,75%, theo khách hàng lõi và chi nhánh.',
+    reconciliation: 'Đối chiếu CUSTSEQ, BRCODE và NHOM_NO giữa hai kỳ LN01; giá trị âm được giữ để phản ánh hoàn nhập.',
+  },
+  DPRR_CHUNG_LK: {
+    profileField: 'dprr_chung_lk',
+    actualSource: 'LN01',
+    calculation: 'SUM(DU_NO nhóm 1-4 cuối kỳ) × 0,75%, theo khách hàng lõi và chi nhánh.',
+    reconciliation: 'Đối chiếu CUSTSEQ, BRCODE, NHOM_NO và tổng DU_NO của LN01 tại kỳ.',
+  },
+  DPRR_CUTHE_TT: {
+    profileField: 'dprr_cuthe_tt',
     actualSource: 'BC29',
-    calculation: 'SUM(PERIOD_PROVISION_AMOUNT) theo mã khách hàng và chi nhánh trong kỳ.',
-    reconciliation: 'Đối chiếu số dự phòng kỳ với dư nợ, nhóm nợ và giá trị tài sản bảo đảm được khấu trừ trong BC29.',
+    calculation: 'SUM(SO_TRICH_LAP_TRONG_KY nhóm 2-5 kỳ này) trừ cùng chỉ tiêu kỳ trước, theo khách hàng lõi và chi nhánh.',
+    reconciliation: 'Đối chiếu MA_KH, BRANCH_CODE và NHOM_NO giữa hai kỳ BC29; giá trị âm là hoàn nhập.',
+  },
+  DPRR_CUTHE_LK: {
+    profileField: 'dprr_cuthe_lk',
+    actualSource: 'BC29',
+    calculation: 'SUM(SO_TRICH_LAP_TRONG_KY) của nhóm nợ 2-5 tại kỳ, theo khách hàng lõi và chi nhánh.',
+    reconciliation: 'Đối chiếu MA_KH, BRANCH_CODE, NHOM_NO và SO_TRICH_LAP_TRONG_KY trong BC29.',
+  },
+  PHI_BAOLANH: {
+    profileField: 'phi_bao_lanh',
+    actualSource: 'KH02',
+    calculation: 'Với ACCTCD bắt đầu 7040: SUM(CRAMT) - SUM(DRAMT), theo CUSTSEQ và chi nhánh.',
+    reconciliation: 'Đối chiếu tài khoản 7040xx và tổng phát sinh Có/Nợ trong KH02.',
+  },
+  PHI_CHUYENTIEN: {
+    profileField: 'phi_chuyen_tien',
+    actualSource: 'KH02',
+    calculation: 'Với ACCTCD bắt đầu 711001 hoặc 711002: SUM(CRAMT) - SUM(DRAMT), theo CUSTSEQ và chi nhánh.',
+    reconciliation: 'Đối chiếu tài khoản phí chuyển tiền và tổng phát sinh Có/Nợ trong KH02.',
+  },
+  PHI_NHDT: {
+    profileField: 'phi_nhdt',
+    actualSource: 'KH02',
+    calculation: 'Với ACCTCD bắt đầu 711036, 711037 hoặc 711039: SUM(CRAMT) - SUM(DRAMT), theo CUSTSEQ và chi nhánh.',
+    reconciliation: 'Đối chiếu tài khoản phí NHĐT và tổng phát sinh Có/Nợ trong KH02.',
+  },
+  ABIC_BATD: {
+    profileField: 'abic_batd',
+    actualSource: 'KH02',
+    calculation: 'Với ACCTCD bắt đầu 714: SUM(CRAMT) - SUM(DRAMT), theo CUSTSEQ và chi nhánh.',
+    reconciliation: 'Đối chiếu tài khoản 714xxx và tổng phát sinh Có/Nợ trong KH02.',
   },
   LOATHANTAI: {
     profileField: 'loa_bien_dong_so_du',

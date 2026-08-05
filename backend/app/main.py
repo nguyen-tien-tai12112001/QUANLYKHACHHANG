@@ -10,6 +10,7 @@ from app.api.health import router as health_router
 from app.api.imports import router as imports_router
 from app.config import settings
 from app.database import init_db
+from app.cif_importer import resume_pending_cif_imports
 from app.imports.importer import enqueue_pending_import_files, start_import_workers
 from app.seed_data import seed_initial_data
 
@@ -44,6 +45,7 @@ def on_startup():
     seed_initial_data()
     start_import_workers()
     enqueue_pending_import_files()
+    resume_pending_cif_imports()
 
 
 @app.get("/")

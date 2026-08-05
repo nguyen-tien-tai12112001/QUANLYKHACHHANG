@@ -493,7 +493,7 @@ function CustomerProcessing() {
                 <Button
                   type="primary"
                   icon={<PlayCircleOutlined />}
-                  disabled={!selectedPeriodInfo?.success_by_type?.DP01 || isCurrentJobRunning}
+                  disabled={!selectedPeriodInfo?.is_fully_ready || isCurrentJobRunning}
                   loading={processing}
                   onClick={startProcessing}
                 >

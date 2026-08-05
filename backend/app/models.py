@@ -107,6 +107,13 @@ class CifImportBatch(Base):
     review_rows: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     conflict_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     format_warning: Mapped[str | None] = mapped_column(Text)
+    uploaded_by: Mapped[str | None] = mapped_column(String(100), index=True)
+    importer_version: Mapped[str | None] = mapped_column(String(30))
+    column_stats: Mapped[dict | None] = mapped_column(JSON)
+    comparison_summary: Mapped[dict | None] = mapped_column(JSON)
+    stage_history: Mapped[list | None] = mapped_column(JSON)
+    heartbeat_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), index=True)
+    attempt_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
     started_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
@@ -447,11 +454,43 @@ class CifCustomerIdentifier(Base):
     district: Mapped[str | None] = mapped_column(String(100))
     commune_ward: Mapped[str | None] = mapped_column(String(100))
     nationality_code: Mapped[str | None] = mapped_column(String(20))
+    birth_date: Mapped[object | None] = mapped_column(Date)
+    gender_code: Mapped[str | None] = mapped_column(String(20))
+    establishment_date: Mapped[object | None] = mapped_column(Date)
+    occupation: Mapped[str | None] = mapped_column(String(255))
     source_status: Mapped[str | None] = mapped_column(String(100))
     normalized_status: Mapped[str] = mapped_column(String(30), default="active", index=True, nullable=False)
     operator_user: Mapped[str | None] = mapped_column(String(100))
     raw_data: Mapped[dict | None] = mapped_column(JSON)
     imported_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CifSourceRecord(Base):
+    __tablename__ = "cif_source_records"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    import_batch_id: Mapped[int] = mapped_column(ForeignKey("cif_import_batches.id"), index=True, nullable=False)
+    source_sheet: Mapped[str | None] = mapped_column(String(255))
+    source_row_number: Mapped[int] = mapped_column(Integer, nullable=False)
+    full_cif_code: Mapped[str | None] = mapped_column(String(32), index=True)
+    branch_code: Mapped[str | None] = mapped_column(String(10), index=True)
+    customer_core_code: Mapped[str | None] = mapped_column(String(32), index=True)
+    row_hash: Mapped[str] = mapped_column(String(64), index=True, nullable=False)
+    validation_status: Mapped[str] = mapped_column(String(30), index=True, nullable=False)
+    duplicate_of_row_number: Mapped[int | None] = mapped_column(Integer)
+    comparison_status: Mapped[str | None] = mapped_column(String(30), index=True)
+    changed_fields: Mapped[dict | None] = mapped_column(JSON)
+    current_snapshot: Mapped[dict | None] = mapped_column(JSON)
+    review_status: Mapped[str | None] = mapped_column(String(30), index=True)
+    reviewed_by: Mapped[str | None] = mapped_column(String(100))
+    reviewed_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    raw_data: Mapped[dict] = mapped_column(JSON, nullable=False)
+    imported_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("import_batch_id", "source_sheet", "source_row_number", name="uq_cif_source_row"),
+    )
 
 
 class CifImportError(Base):
@@ -481,8 +520,41 @@ class CifIdentityConflict(Base):
     details: Mapped[dict | None] = mapped_column(JSON)
     status: Mapped[str] = mapped_column(String(30), default="pending", index=True, nullable=False)
     resolution_note: Mapped[str | None] = mapped_column(Text)
+    resolved_by: Mapped[str | None] = mapped_column(String(100))
     resolved_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class CifChangeAudit(Base):
+    __tablename__ = "cif_change_audits"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    source_record_id: Mapped[int | None] = mapped_column(ForeignKey("cif_source_records.id"), index=True)
+    import_batch_id: Mapped[int | None] = mapped_column(ForeignKey("cif_import_batches.id"), index=True)
+    customer_id: Mapped[int | None] = mapped_column(ForeignKey("cif_customers.id"), index=True)
+    full_cif_code: Mapped[str | None] = mapped_column(String(32), index=True)
+    action: Mapped[str] = mapped_column(String(40), index=True, nullable=False)
+    before_data: Mapped[dict | None] = mapped_column(JSON)
+    after_data: Mapped[dict | None] = mapped_column(JSON)
+    changed_fields: Mapped[dict | None] = mapped_column(JSON)
+    performed_by: Mapped[str] = mapped_column(String(100), nullable=False)
+    note: Mapped[str | None] = mapped_column(Text)
+    performed_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+
+class CifGoldenRule(Base):
+    __tablename__ = "cif_golden_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_field: Mapped[str] = mapped_column(String(100), unique=True, index=True, nullable=False)
+    source_columns: Mapped[list] = mapped_column(JSON, nullable=False)
+    strategy: Mapped[str] = mapped_column(String(50), nullable=False)
+    priority_order: Mapped[list | None] = mapped_column(JSON)
+    requires_review_on_conflict: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True, nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    updated_by: Mapped[str | None] = mapped_column(String(100))
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
 class Customer(Base):
@@ -846,6 +918,18 @@ class CustomerPeriodSummary(Base):
     ma_kh: Mapped[str | None] = mapped_column(String(32), index=True)
     ten_kh: Mapped[str | None] = mapped_column(String(255), index=True)
     loai_khach_hang: Mapped[str | None] = mapped_column(String(100))
+    ten_chu_doanh_nghiep: Mapped[str | None] = mapped_column(String(255))
+    so_cccd: Mapped[str | None] = mapped_column(String(100), index=True)
+    ma_so_thue: Mapped[str | None] = mapped_column(String(100), index=True)
+    ngay_thanh_lap: Mapped[object | None] = mapped_column(Date)
+    dia_chi: Mapped[str | None] = mapped_column(Text)
+    gioi_tinh: Mapped[str | None] = mapped_column(String(20))
+    ngay_sinh: Mapped[object | None] = mapped_column(Date)
+    nghe_nghiep: Mapped[str | None] = mapped_column(String(255))
+    management_source: Mapped[str | None] = mapped_column(String(30), index=True)
+    managing_branch_code: Mapped[str | None] = mapped_column(String(10), index=True)
+    managing_department_code: Mapped[str | None] = mapped_column(String(20))
+    managing_department_name: Mapped[str | None] = mapped_column(String(255))
     so_du_tien_vay: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     so_du_tien_gui_ckh: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     loai_vay: Mapped[str | None] = mapped_column(String(255))
@@ -961,6 +1045,14 @@ class CustomerPeriodProfile(Base):
     du_no_thau_chi: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
     du_no_thau_chi_bq: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
     pf10_lds_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    phi_bao_lanh: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    phi_chuyen_tien: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    phi_nhdt: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    abic_batd: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    dprr_chung_tt: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    dprr_chung_lk: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    dprr_cuthe_tt: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    dprr_cuthe_lk: Mapped[object | None] = mapped_column(Numeric(24, 2))
     pf10_interest: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
     pf10_accruals: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
     pf10_book_correction_interest: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
@@ -1027,6 +1119,14 @@ class CustomerPeriodBranchDetail(Base):
     pf10_interest: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
     pf10_accruals: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
     pf10_book_correction_interest: Mapped[object | None] = mapped_column(Numeric(24, 6), default=0)
+    phi_bao_lanh: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    phi_chuyen_tien: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    phi_nhdt: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    abic_batd: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    dprr_chung_tt: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    dprr_chung_lk: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    dprr_cuthe_tt: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    dprr_cuthe_lk: Mapped[object | None] = mapped_column(Numeric(24, 2))
     loai_vay: Mapped[str | None] = mapped_column(String(100))
     so_du_tgtt_binh_quan: Mapped[object | None] = mapped_column(Numeric(20, 2), default=0)
     thau_chi: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -1051,6 +1151,30 @@ class CustomerPeriodBranchDetail(Base):
 
     __table_args__ = (
         UniqueConstraint("period_key", "ma_kh", "branch_code", "ma_pgd", name="uq_customer_period_branch_detail"),
+    )
+
+
+class CustomerSourceReconciliation(Base):
+    __tablename__ = "customer_source_reconciliations"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    processing_job_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_jobs.id"), index=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    source_type: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
+    branch_code: Mapped[str | None] = mapped_column(String(10), index=True)
+    customer_core_code: Mapped[str | None] = mapped_column(String(32), index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(255))
+    source_row_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    source_amount: Mapped[object | None] = mapped_column(Numeric(24, 2))
+    reason_code: Mapped[str] = mapped_column(String(50), index=True, nullable=False)
+    status: Mapped[str] = mapped_column(String(30), default="pending", index=True, nullable=False)
+    details: Mapped[dict | None] = mapped_column(JSON)
+    reviewed_by: Mapped[str | None] = mapped_column(String(100))
+    reviewed_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    __table_args__ = (
+        UniqueConstraint("processing_job_id", "source_type", "branch_code", "customer_core_code", "reason_code", name="uq_customer_source_reconciliation"),
     )
 
 
@@ -1214,6 +1338,7 @@ class SystemUser(Base):
     password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
     employee_code: Mapped[str | None] = mapped_column(String(50), unique=True, index=True)
     credit_officer_code: Mapped[str | None] = mapped_column(String(50), index=True)
+    customer_cif_code: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
     ipcas_username: Mapped[str | None] = mapped_column(String(80), index=True)
     full_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
     branch_id: Mapped[int | None] = mapped_column(ForeignKey("org_branches.id"), index=True)

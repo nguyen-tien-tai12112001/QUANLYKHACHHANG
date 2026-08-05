@@ -88,7 +88,7 @@ const sectionMeta = {
 const defaultVisibleColumns = {
   branches: ['branch_code', 'branch_name', 'department_count', 'user_count', 'status'],
   departments: ['branch_name', 'department_code', 'department_name', 'manager_name', 'user_count', 'status'],
-  users: ['full_name', 'employee_code', 'ipcas_username', 'department_name', 'role_code', 'data_scope', 'is_active'],
+  users: ['full_name', 'employee_code', 'customer_cif_code', 'ipcas_username', 'department_name', 'role_code', 'data_scope', 'is_active'],
   roles: ['role_code', 'role_name', 'description', 'user_count', 'permissions'],
 };
 
@@ -446,6 +446,7 @@ function SystemAdmin({ section = 'branches' }) {
         },
         { title: 'Mã NV', dataIndex: 'employee_code', key: 'employee_code', width: 125, align: 'center', render: (value) => <Tag color="red">{value || 'Thiếu'}</Tag> },
         { title: 'Mã CBTD', dataIndex: 'credit_officer_code', key: 'credit_officer_code', width: 120, align: 'center', render: (value) => value ? <Tag>{value}</Tag> : <Text type="secondary">-</Text> },
+        { title: 'Mã CIF quản lý', dataIndex: 'customer_cif_code', key: 'customer_cif_code', width: 155, render: (value) => value ? <Text code>{value}</Text> : <Text type="secondary">-</Text> },
         { title: 'User IPCAS', dataIndex: 'ipcas_username', key: 'ipcas_username', width: 135, align: 'center', render: (value) => value ? <Tag color="blue">{value}</Tag> : <Tag color="warning">Chưa có</Tag> },
         { title: 'Chi nhánh', dataIndex: 'branch_name', key: 'branch_name', width: 220, render: (value) => ellipsisText(value) },
         { title: 'Phòng ban', dataIndex: 'department_name', key: 'department_name', width: 220, render: (value) => value ? ellipsisText(value) : <Tag color="warning">Chưa gán</Tag> },
@@ -741,6 +742,7 @@ function SystemAdmin({ section = 'branches' }) {
               <Col span={12}><Form.Item label="Mật khẩu" name="password"><Input.Password placeholder="Bỏ trống để dùng mật khẩu mặc định 1" /></Form.Item></Col>
               <Col span={24}><Form.Item label="Họ tên cán bộ" name="full_name" rules={[{ required: true, message: 'Nhập họ tên' }]}><Input /></Form.Item></Col>
               <Col span={12}><Form.Item label="Mã CBTD" name="credit_officer_code"><Input /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Mã CIF quản lý" name="customer_cif_code" rules={[{ pattern: /^\d{13}$/, message: 'Mã CIF phải gồm đúng 13 chữ số' }]}><Input maxLength={13} placeholder="Ví dụ 2600012345678" /></Form.Item></Col>
               <Col span={12}><Form.Item label="User IPCAS" name="ipcas_username"><Input /></Form.Item></Col>
               <Col span={12}>
                 <Form.Item label="Chi nhánh" name="branch_id" rules={[{ required: true, message: 'Chọn chi nhánh' }]}>

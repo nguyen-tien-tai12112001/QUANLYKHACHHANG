@@ -26,6 +26,7 @@ from app.models import (
     CustomerPeriodProfile,
     CustomerProcessingJob,
     CustomerProcessingOptionalFile,
+    CustomerSourceReconciliation,
     DP01DepositAccount,
     ImportFile,
     ImportBatch,
@@ -69,6 +70,14 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "DUNO_TDHTTBQ": "du_no_trung_dai_han_bq",
     "DUNO_TC": "du_no_thau_chi",
     "DUNO_TCBQ": "du_no_thau_chi_bq",
+    "PHI_BAOLANH": "phi_bao_lanh",
+    "PHI_CHUYENTIEN": "phi_chuyen_tien",
+    "PHI_NHDT": "phi_nhdt",
+    "ABIC_BATD": "abic_batd",
+    "DPRR_CHUNG_TT": "dprr_chung_tt",
+    "DPRR_CHUNG_LK": "dprr_chung_lk",
+    "DPRR_CUTHE_TT": "dprr_cuthe_tt",
+    "DPRR_CUTHE_LK": "dprr_cuthe_lk",
     "TKSODEP": "tk_so_dep",
     "AGRIBANKPLUS": "agribank_plus",
     "OTT": "tin_nhan_ott",
@@ -402,6 +411,18 @@ def profile_brief_fields() -> list[str]:
         "ma_kh",
         "ten_kh",
         "loai_khach_hang",
+        "ten_chu_doanh_nghiep",
+        "so_cccd",
+        "ma_so_thue",
+        "ngay_thanh_lap",
+        "dia_chi",
+        "gioi_tinh",
+        "ngay_sinh",
+        "nghe_nghiep",
+        "management_source",
+        "managing_branch_code",
+        "managing_department_code",
+        "managing_department_name",
         "branch_codes",
         "pgd_codes",
         "branch_count",
@@ -430,6 +451,14 @@ def profile_brief_fields() -> list[str]:
         "primary_pgd_name",
         "primary_location_score",
         "primary_location_reason",
+        "phi_bao_lanh",
+        "phi_chuyen_tien",
+        "phi_nhdt",
+        "abic_batd",
+        "dprr_chung_tt",
+        "dprr_chung_lk",
+        "dprr_cuthe_tt",
+        "dprr_cuthe_lk",
         *sorted(PROFILE_SERVICE_FIELDS),
     ]
 
@@ -951,6 +980,49 @@ def get_job(job_id: int, db: Session = Depends(get_db)):
     return serialize_job(job)
 
 
+@router.get("/reconciliations")
+def list_source_reconciliations(
+    period_key: str = Query(...),
+    source_type: str | None = None,
+    branch_code: str | None = None,
+    reason_code: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=100, ge=1, le=500),
+    db: Session = Depends(get_db),
+):
+    query = db.query(CustomerSourceReconciliation).filter(
+        CustomerSourceReconciliation.period_key == period_key
+    )
+    if source_type:
+        query = query.filter(CustomerSourceReconciliation.source_type == source_type.strip().upper())
+    if branch_code:
+        query = query.filter(CustomerSourceReconciliation.branch_code == branch_code.strip())
+    if reason_code:
+        query = query.filter(CustomerSourceReconciliation.reason_code == reason_code.strip().upper())
+    total = query.count()
+    rows = (
+        query.order_by(
+            CustomerSourceReconciliation.source_type,
+            CustomerSourceReconciliation.branch_code,
+            CustomerSourceReconciliation.customer_core_code,
+        )
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
+    fields = [
+        "id", "processing_job_id", "period_key", "source_type", "branch_code",
+        "customer_core_code", "customer_name", "source_row_count", "source_amount",
+        "reason_code", "status", "details", "reviewed_by", "reviewed_at", "created_at",
+    ]
+    return {
+        "items": [serialize_model(row, fields) for row in rows],
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+    }
+
+
 @router.get("/profiles")
 def list_profiles(
     period_key: str = Query(...),
@@ -1032,6 +1104,18 @@ def list_profiles(
         "branch_count",
         "pgd_count",
         "dp_record_count",
+        "ten_chu_doanh_nghiep",
+        "so_cccd",
+        "ma_so_thue",
+        "ngay_thanh_lap",
+        "dia_chi",
+        "gioi_tinh",
+        "ngay_sinh",
+        "nghe_nghiep",
+        "management_source",
+        "managing_branch_code",
+        "managing_department_code",
+        "managing_department_name",
         "so_du_tien_gui",
         "doanh_so_chuyen_tien_ve_tk",
         "so_du_tien_vay",
@@ -1091,6 +1175,44 @@ def list_profiles(
     if include_total:
         return {"items": items, "total": total, "page": page, "page_size": effective_page_size}
     return items
+
+
+@router.get("/financial-metrics")
+def get_customer_financial_metrics(
+    period_key: str = Query(...),
+    ma_kh: str = Query(...),
+    branch_code: str | None = None,
+    db: Session = Depends(get_db),
+):
+    metric_fields = [
+        "phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd",
+        "dprr_chung_tt", "dprr_chung_lk", "dprr_cuthe_tt", "dprr_cuthe_lk",
+    ]
+    query = db.query(CustomerPeriodBranchDetail).filter(
+        CustomerPeriodBranchDetail.period_key == period_key,
+        CustomerPeriodBranchDetail.ma_kh == ma_kh,
+    )
+    if branch_code:
+        query = query.filter(CustomerPeriodBranchDetail.branch_code == branch_code)
+    rows = query.all()
+    grouped: dict[str, dict] = {}
+    for row in rows:
+        code = row.branch_code or "UNKNOWN"
+        item = grouped.setdefault(code, {"branch_code": code, **{field: Decimal(0) for field in metric_fields}})
+        for field in metric_fields:
+            value = getattr(row, field)
+            if value is not None:
+                item[field] += value
+
+    branches = []
+    for code in sorted(grouped):
+        item = grouped[code]
+        branches.append({key: serialize_value(value) if key in metric_fields else value for key, value in item.items()})
+    totals = {
+        field: serialize_value(sum((Decimal(str(item[field])) for item in branches), Decimal(0)))
+        for field in metric_fields
+    }
+    return {"period_key": period_key, "ma_kh": ma_kh, "totals": totals, "branches": branches}
 
 
 @router.get("/pf10-loans")
@@ -1368,16 +1490,27 @@ def get_customer_deposit_accounts(
         base_query = base_query.filter(PF14AccountBalance.trbrcd == branch_code)
 
     categories = []
+    rate_join = and_(
+        CustomerPeriodExchangeRate.period_key == PF14AccountBalance.period_key,
+        CustomerPeriodExchangeRate.ccy == func.upper(func.trim(func.coalesce(PF14AccountBalance.ccy, "VND"))),
+    )
     for key, condition in (
         ("demand", func.coalesce(PF14AccountBalance.monterm, 0) == 0),
         ("term", func.coalesce(PF14AccountBalance.monterm, 0) > 0),
     ):
         values = (
-            base_query.filter(condition)
+            base_query.outerjoin(CustomerPeriodExchangeRate, rate_join)
+            .filter(condition)
             .with_entities(
                 func.count(func.distinct(PF14AccountBalance.accountno)),
-                func.coalesce(func.sum(PF14AccountBalance.monthlyendbalance), 0),
-                func.coalesce(func.sum(PF14AccountBalance.averagebalance), 0),
+                func.coalesce(func.sum(
+                    PF14AccountBalance.monthlyendbalance
+                    * func.coalesce(CustomerPeriodExchangeRate.exchange_rate, 1)
+                ), 0),
+                func.coalesce(func.sum(
+                    PF14AccountBalance.averagebalance
+                    * func.coalesce(CustomerPeriodExchangeRate.exchange_rate, 1)
+                ), 0),
                 func.count(func.distinct(PF14AccountBalance.trbrcd)),
             )
             .one()
@@ -1406,6 +1539,17 @@ def get_customer_deposit_accounts(
     if previous_query is not None and branch_code:
         previous_query = previous_query.filter(PF14AccountBalance.trbrcd == branch_code)
     previous_rows = previous_query.all() if previous_query is not None else []
+    rate_periods = [value for value in (period_key, previous_period) if value]
+    rate_rows = (
+        db.query(CustomerPeriodExchangeRate)
+        .filter(CustomerPeriodExchangeRate.period_key.in_(rate_periods))
+        .all()
+    )
+    rates = {(item.period_key, item.ccy): item.exchange_rate for item in rate_rows}
+
+    def exchange_rate(source_period: str | None, ccy: str | None) -> Decimal:
+        code = str(ccy or "VND").strip().upper()
+        return Decimal(rates.get((source_period, code)) or (1 if code == "VND" else 1))
 
     current_map = {(row.trbrcd, row.accountno): row for row in current_rows if row.accountno}
     previous_map = {(row.trbrcd, row.accountno): row for row in previous_rows if row.accountno}
@@ -1446,8 +1590,12 @@ def get_customer_deposit_accounts(
         current = current_map.get(key)
         previous = previous_map.get(key)
         row = current or previous
-        current_balance = current.monthlyendbalance if current else Decimal(0)
-        previous_balance = previous.monthlyendbalance if previous else Decimal(0)
+        current_original = current.monthlyendbalance if current else Decimal(0)
+        previous_original = previous.monthlyendbalance if previous else Decimal(0)
+        current_rate = exchange_rate(period_key, current.ccy if current else row.ccy)
+        previous_rate = exchange_rate(previous_period, previous.ccy if previous else row.ccy)
+        current_balance = (current_original or 0) * current_rate
+        previous_balance = (previous_original or 0) * previous_rate
         if current is None or (float(current_balance or 0) == 0 and float(previous_balance or 0) > 0):
             account_status = "closed"
         elif previous is None:
@@ -1472,12 +1620,18 @@ def get_customer_deposit_accounts(
             "deposit_type_match": "account_number" if dp else ("product_code" if fallback_deposit_type else None),
             "account_source": "PF14",
             "currency_code": row.ccy,
+            "exchange_rate": serialize_value(current_rate if current else previous_rate),
             "month_term": row.monterm,
             "opening_date": serialize_value(dp.opening_date) if dp else None,
             "maturity_date": serialize_value(dp.maturity_date) if dp else None,
             "end_balance": serialize_value(current_balance),
-            "average_balance": serialize_value(current.averagebalance if current else 0),
+            "end_balance_original": serialize_value(current_original),
+            "average_balance": serialize_value(
+                (current.averagebalance or 0) * current_rate if current else 0
+            ),
+            "average_balance_original": serialize_value(current.averagebalance if current else 0),
             "previous_balance": serialize_value(previous_balance),
+            "previous_balance_original": serialize_value(previous_original),
             "balance_change": serialize_value((current_balance or 0) - (previous_balance or 0)),
             "account_status": (
                 "closed"

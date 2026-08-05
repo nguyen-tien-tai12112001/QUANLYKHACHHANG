@@ -2,13 +2,26 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
-from app.cif_importer import import_cif_file
+from app.cif_importer import (
+    REVIEW_FIELDS,
+    date_yyyymmdd,
+    file_sha256,
+    full_address,
+    import_cif_file,
+    normalized_identity,
+    normalized_status,
+    telephone,
+)
+from app.auth.dependencies import get_current_user
+from app.auth.schemas import CurrentUser
 from app.database import get_db
 from app.models import (
     CifCustomer,
@@ -16,17 +29,43 @@ from app.models import (
     CifIdentityConflict,
     CifImportBatch,
     CifImportError,
+    CifSourceRecord,
+    CifChangeAudit,
+    CifGoldenRule,
 )
 
 
 router = APIRouter(prefix="/api/cif", tags=["cif"])
 CIF_UPLOAD_DIR = Path("/app/uploads/cif")
+ALLOWED_CIF_SUFFIXES = {".csv", ".xls", ".xlsx"}
+MAX_CIF_FILES_PER_UPLOAD = 20
+STUCK_JOB_MINUTES = 20
+
+
+def require_cif_manager(user: CurrentUser) -> None:
+    if "admin" not in user.permissions and "import.manage" not in user.permissions:
+        raise HTTPException(status_code=403, detail="Bạn không có quyền cập nhật kho CIF")
+
+
+def import_cif_files_sequentially(files: list[tuple[str, str]], uploaded_by: str) -> None:
+    """Process large CIF files one at a time to protect database capacity."""
+    for stored_path, original_filename in files:
+        import_cif_file(stored_path, original_filename, uploaded_by)
 
 
 def batch_payload(item: CifImportBatch) -> dict:
+    heartbeat = item.heartbeat_at or item.started_at or item.uploaded_at
+    if heartbeat and heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+    is_stuck = item.status in {"queued", "processing"} and bool(
+        heartbeat and datetime.now(timezone.utc) - heartbeat > timedelta(minutes=STUCK_JOB_MINUTES)
+    )
     return {
         "id": item.id,
         "original_filename": item.original_filename,
+        "stored_filename": item.stored_filename,
+        "content_sha256": item.content_sha256,
+        "actual_format": item.actual_format,
         "branch_code": item.branch_code,
         "sheet_name": item.sheet_name,
         "file_size": item.file_size,
@@ -47,11 +86,51 @@ def batch_payload(item: CifImportBatch) -> dict:
         "review_rows": item.review_rows,
         "conflict_count": item.conflict_count,
         "format_warning": item.format_warning,
+        "uploaded_by": item.uploaded_by,
+        "importer_version": item.importer_version,
+        "column_stats": item.column_stats,
+        "comparison_summary": item.comparison_summary,
+        "stage_history": item.stage_history or [],
+        "heartbeat_at": item.heartbeat_at,
+        "attempt_count": item.attempt_count,
+        "is_stuck": is_stuck,
         "error_message": item.error_message,
         "started_at": item.started_at,
         "finished_at": item.finished_at,
         "uploaded_at": item.uploaded_at,
     }
+
+
+def incoming_identifier_values(raw: dict) -> dict:
+    return {
+        "customer_name": raw.get("nmloc") or raw.get("nm") or None,
+        "customer_name_ascii": raw.get("nm") or None,
+        "short_name": raw.get("shrtnmloc") or raw.get("shrtnm") or None,
+        "customer_type": raw.get("custtpcd") or None,
+        "customer_detail_type": raw.get("custdtltpcd") or None,
+        "registration_number": normalized_identity(raw.get("regno", "")),
+        "passport_number": normalized_identity(raw.get("passno", "")),
+        "driver_license_number": normalized_identity(raw.get("dlno", "")),
+        "tax_number": normalized_identity(raw.get("taxno", "")),
+        "telephone": telephone(raw),
+        "address_type": raw.get("addrtpcd") or None,
+        "full_address": full_address(raw),
+        "province": raw.get("province") or None,
+        "district": raw.get("district") or None,
+        "commune_ward": raw.get("commune_ward") or None,
+        "nationality_code": raw.get("ctrycdnatl") or None,
+        "birth_date": date_yyyymmdd(raw.get("name_1", "")),
+        "gender_code": raw.get("name_3") or None,
+        "establishment_date": date_yyyymmdd(raw.get("incrdt", "")),
+        "occupation": raw.get("profnm") or None,
+        "source_status": raw.get("stscd") or None,
+        "normalized_status": normalized_status(raw.get("stscd", "")),
+        "operator_user": raw.get("usridop1") or None,
+    }
+
+
+def json_safe(value):
+    return value.isoformat() if hasattr(value, "isoformat") else value
 
 
 @router.get("/overview")
@@ -83,6 +162,9 @@ def cif_overview(db: Session = Depends(get_db)):
         .scalar()
         or 0
     )
+    address_count = db.query(func.count(CifCustomer.id)).filter(CifCustomer.full_address.isnot(None), func.trim(CifCustomer.full_address) != "").scalar() or 0
+    birth_count = db.query(func.count(CifCustomer.id)).filter(CifCustomer.birth_date.isnot(None)).scalar() or 0
+    pending_changes = db.query(func.count(CifSourceRecord.id)).filter(CifSourceRecord.review_status == "pending").scalar() or 0
     active_count = db.query(func.count(CifCustomer.id)).filter(CifCustomer.status == "active").scalar() or 0
     branch_rows = (
         db.query(
@@ -105,11 +187,14 @@ def cif_overview(db: Session = Depends(get_db)):
         "total_identifiers": int(total_identifiers),
         "multi_branch_customers": int(multi_branch),
         "pending_conflicts": int(pending_conflicts),
+        "pending_changes": int(pending_changes),
         "latest_updated_at": latest_batch.finished_at if latest_batch else None,
         "quality": {
             "valid_cif_percent": round(total_identifiers * 100 / total_identifiers, 2) if total_identifiers else 0,
             "identity_percent": round(identity_count * 100 / total_customers, 2) if total_customers else 0,
             "telephone_percent": round(telephone_count * 100 / total_customers, 2) if total_customers else 0,
+            "address_percent": round(address_count * 100 / total_customers, 2) if total_customers else 0,
+            "birth_percent": round(birth_count * 100 / total_customers, 2) if total_customers else 0,
             "active_percent": round(active_count * 100 / total_customers, 2) if total_customers else 0,
         },
         "branches": [
@@ -127,22 +212,135 @@ def cif_overview(db: Session = Depends(get_db)):
 def upload_cif(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
+    user: CurrentUser = Depends(get_current_user),
 ):
+    require_cif_manager(user)
     suffix = Path(file.filename or "").suffix.lower()
-    if suffix != ".xls":
-        raise HTTPException(status_code=400, detail="Kho CIF hiện chỉ nhận file XLS")
+    if suffix not in ALLOWED_CIF_SUFFIXES:
+        raise HTTPException(status_code=400, detail="Kho CIF chỉ nhận file CSV, XLS hoặc XLSX")
     CIF_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
     stored_name = f"{uuid.uuid4().hex}_{Path(file.filename).name}"
     stored_path = CIF_UPLOAD_DIR / stored_name
     with stored_path.open("wb") as target:
         shutil.copyfileobj(file.file, target, length=1024 * 1024)
-    background_tasks.add_task(import_cif_file, stored_path, file.filename)
+    background_tasks.add_task(import_cif_file, stored_path, file.filename, user.username)
     return {
         "status": "queued",
         "original_filename": file.filename,
         "stored_filename": stored_name,
         "message": "Đã tiếp nhận file CIF và bắt đầu xử lý nền",
     }
+
+
+@router.post("/imports/bulk")
+def upload_cif_bulk(
+    background_tasks: BackgroundTasks,
+    files: list[UploadFile] = File(...),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_cif_manager(user)
+    if not files:
+        raise HTTPException(status_code=400, detail="Chưa chọn file CIF")
+    if len(files) > MAX_CIF_FILES_PER_UPLOAD:
+        raise HTTPException(status_code=400, detail=f"Mỗi lần chỉ được chọn tối đa {MAX_CIF_FILES_PER_UPLOAD} file CIF")
+    invalid_names = [item.filename or "(không tên)" for item in files if Path(item.filename or "").suffix.lower() not in ALLOWED_CIF_SUFFIXES]
+    if invalid_names:
+        raise HTTPException(status_code=400, detail=f"File không đúng định dạng: {', '.join(invalid_names)}")
+
+    CIF_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    queued: list[tuple[str, str]] = []
+    response_files = []
+    for item in files:
+        original_name = Path(item.filename or "cif").name
+        stored_name = f"{uuid.uuid4().hex}_{original_name}"
+        stored_path = CIF_UPLOAD_DIR / stored_name
+        with stored_path.open("wb") as target:
+            shutil.copyfileobj(item.file, target, length=1024 * 1024)
+        checksum = file_sha256(stored_path)
+        existing = db.query(CifImportBatch).filter(CifImportBatch.content_sha256 == checksum).first()
+        if existing:
+            response_files.append({
+                "batch_id": existing.id, "original_filename": original_name,
+                "stored_filename": stored_name, "file_size": stored_path.stat().st_size,
+                "status": "duplicate" if existing.status == "success" else existing.status,
+            })
+            # Never start the same checksum concurrently. Failed/stuck jobs are
+            # recovered explicitly from their original archived file.
+            stored_path.unlink(missing_ok=True)
+            continue
+        batch = CifImportBatch(
+            original_filename=original_name,
+            stored_filename=stored_name,
+            file_path=str(stored_path),
+            content_sha256=checksum,
+            file_size=stored_path.stat().st_size,
+            actual_format=stored_path.suffix.lower().lstrip("."),
+            status="queued",
+            stage="Đang chờ xử lý",
+            stage_history=[{"key": "queued", "label": "Đã tiếp nhận, đang chờ xử lý", "status": "completed", "progress": 0, "at": datetime.now(timezone.utc).isoformat()}],
+            progress_percent=0,
+            uploaded_by=user.username,
+            importer_version="2.0",
+            heartbeat_at=datetime.now(timezone.utc),
+            attempt_count=0,
+        )
+        db.add(batch)
+        db.flush()
+        queued.append((str(stored_path), original_name))
+        response_files.append({
+            "batch_id": batch.id, "original_filename": original_name,
+            "stored_filename": stored_name, "file_size": stored_path.stat().st_size,
+            "status": "queued",
+        })
+    db.commit()
+    background_tasks.add_task(import_cif_files_sequentially, queued, user.username)
+    return {
+        "status": "queued",
+        "file_count": len(response_files),
+        "files": response_files,
+        "message": f"Đã tiếp nhận {len(response_files)} file CIF; hệ thống sẽ xử lý tuần tự ở nền",
+    }
+
+
+@router.post("/imports/{batch_id}/recover")
+def recover_cif_import(
+    batch_id: int,
+    background_tasks: BackgroundTasks,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    require_cif_manager(user)
+    item = db.query(CifImportBatch).filter(CifImportBatch.id == batch_id).with_for_update().first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Không tìm thấy job CIF")
+    heartbeat = item.heartbeat_at or item.started_at or item.uploaded_at
+    if heartbeat and heartbeat.tzinfo is None:
+        heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+    is_stuck = item.status in {"queued", "processing"} and bool(
+        heartbeat and datetime.now(timezone.utc) - heartbeat > timedelta(minutes=STUCK_JOB_MINUTES)
+    )
+    if item.status not in {"error"} and not is_stuck:
+        raise HTTPException(status_code=409, detail="Job vẫn đang hoạt động hoặc đã hoàn thành; không được chạy trùng")
+    path = Path(item.file_path)
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail="Không còn file nguồn để khôi phục job")
+    now = datetime.now(timezone.utc)
+    history = list(item.stage_history or [])
+    history.append({
+        "key": "recovery_queued", "label": f"Đã yêu cầu khôi phục lần {(item.attempt_count or 0) + 1}",
+        "status": "completed", "progress": item.progress_percent, "at": now.isoformat(),
+        "details": {"requested_by": user.username},
+    })
+    item.stage_history = history
+    item.status = "queued"
+    item.stage = "Đang chờ khôi phục job"
+    item.error_message = None
+    item.heartbeat_at = now
+    item.attempt_count = (item.attempt_count or 0) + 1
+    db.commit()
+    background_tasks.add_task(import_cif_file, str(path), item.original_filename, user.username)
+    return {"status": "queued", "batch_id": item.id, "attempt_count": item.attempt_count}
 
 
 @router.get("/imports")
@@ -160,6 +358,17 @@ def get_cif_import(batch_id: int, db: Session = Depends(get_db)):
     if not item:
         raise HTTPException(status_code=404, detail="Không tìm thấy lần import CIF")
     return batch_payload(item)
+
+
+@router.get("/imports/{batch_id}/file")
+def download_cif_import_file(batch_id: int, db: Session = Depends(get_db)):
+    item = db.query(CifImportBatch).filter(CifImportBatch.id == batch_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Không tìm thấy lần import CIF")
+    path = Path(item.file_path)
+    if not path.is_file():
+        raise HTTPException(status_code=410, detail="File nguồn không còn trên vùng lưu trữ dùng chung")
+    return FileResponse(path, filename=item.original_filename, media_type="application/octet-stream")
 
 
 @router.get("/imports/{batch_id}/issues")
@@ -224,6 +433,7 @@ def list_cif_customers(
     keyword: str | None = None,
     branch_code: str | None = None,
     status: str | None = None,
+    quality_issue: str | None = None,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
@@ -241,6 +451,20 @@ def list_cif_customers(
         )
     if status:
         query = query.filter(CifCustomer.status == status)
+    if quality_issue == "missing_identity":
+        query = query.filter(
+            CifCustomer.registration_number.is_(None),
+            CifCustomer.passport_number.is_(None),
+            CifCustomer.tax_number.is_(None),
+        )
+    elif quality_issue == "missing_phone":
+        query = query.filter(or_(CifCustomer.telephone.is_(None), func.trim(CifCustomer.telephone) == ""))
+    elif quality_issue == "missing_address":
+        query = query.filter(or_(CifCustomer.full_address.is_(None), func.trim(CifCustomer.full_address) == ""))
+    elif quality_issue == "missing_birth_date":
+        query = query.filter(CifCustomer.birth_date.is_(None))
+    elif quality_issue == "inactive":
+        query = query.filter(CifCustomer.status != "active")
     if branch_code:
         query = query.filter(
             CifCustomer.id.in_(
@@ -302,6 +526,157 @@ def list_cif_customers(
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.get("/changes")
+def list_cif_changes(
+    review_status: str = Query(default="pending"),
+    branch_code: str | None = None,
+    batch_id: int | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    query = db.query(CifSourceRecord).filter(CifSourceRecord.comparison_status == "changed")
+    if review_status:
+        query = query.filter(CifSourceRecord.review_status == review_status)
+    if branch_code:
+        query = query.filter(CifSourceRecord.branch_code == branch_code)
+    if batch_id:
+        query = query.filter(CifSourceRecord.import_batch_id == batch_id)
+    total = query.count()
+    rows = query.order_by(desc(CifSourceRecord.imported_at)).offset((page - 1) * page_size).limit(page_size).all()
+    return {
+        "items": [{
+            "id": item.id, "import_batch_id": item.import_batch_id,
+            "source_row_number": item.source_row_number, "full_cif_code": item.full_cif_code,
+            "branch_code": item.branch_code, "customer_core_code": item.customer_core_code,
+            "changed_fields": item.changed_fields or {}, "current_snapshot": item.current_snapshot or {},
+            "incoming": incoming_identifier_values(item.raw_data or {}),
+            "review_status": item.review_status, "reviewed_by": item.reviewed_by,
+            "reviewed_at": item.reviewed_at, "review_note": item.review_note,
+            "imported_at": item.imported_at,
+        } for item in rows],
+        "total": total, "page": page, "page_size": page_size,
+    }
+
+
+@router.post("/changes/{source_record_id}/apply")
+def apply_cif_change(
+    source_record_id: int,
+    payload: dict = Body(default={}),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    require_cif_manager(user)
+    source = db.query(CifSourceRecord).filter(CifSourceRecord.id == source_record_id).first()
+    if not source or source.comparison_status != "changed":
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản thay đổi CIF")
+    if source.review_status != "pending":
+        raise HTTPException(status_code=409, detail="Bản thay đổi này đã được xử lý")
+    identifier = db.query(CifCustomerIdentifier).filter(CifCustomerIdentifier.full_cif_code == source.full_cif_code).first()
+    if not identifier:
+        raise HTTPException(status_code=404, detail="Mã CIF hiện tại không còn tồn tại")
+    incoming = incoming_identifier_values(source.raw_data or {})
+    selected_fields = payload.get("fields") or list((source.changed_fields or {}).keys())
+    selected_fields = [field for field in selected_fields if field in REVIEW_FIELDS]
+    if not selected_fields:
+        raise HTTPException(status_code=400, detail="Chưa chọn trường cần áp dụng")
+    before = {field: json_safe(getattr(identifier, field)) for field in selected_fields}
+    after = {}
+    for field in selected_fields:
+        setattr(identifier, field, incoming.get(field))
+        after[field] = json_safe(incoming.get(field))
+    identifier.import_batch_id = source.import_batch_id
+    identifier.raw_data = source.raw_data
+    customer = db.query(CifCustomer).filter(CifCustomer.id == identifier.customer_id).first()
+    customer_field_map = {
+        "customer_name": "customer_name", "customer_name_ascii": "customer_name_ascii",
+        "customer_type": "customer_type", "customer_detail_type": "customer_detail_type",
+        "registration_number": "registration_number", "passport_number": "passport_number",
+        "tax_number": "tax_number", "telephone": "telephone", "full_address": "full_address",
+        "nationality_code": "nationality_code", "birth_date": "birth_date",
+        "gender_code": "gender_code", "establishment_date": "establishment_date",
+        "occupation": "occupation", "normalized_status": "status",
+    }
+    if customer:
+        for source_field in selected_fields:
+            target = customer_field_map.get(source_field)
+            if target:
+                setattr(customer, target, incoming.get(source_field))
+        customer.last_import_batch_id = source.import_batch_id
+    source.review_status = "applied"
+    source.reviewed_by = user.username
+    source.reviewed_at = datetime.now(timezone.utc)
+    source.review_note = payload.get("note")
+    db.add(CifChangeAudit(
+        source_record_id=source.id, import_batch_id=source.import_batch_id,
+        customer_id=identifier.customer_id, full_cif_code=source.full_cif_code,
+        action="apply_change", before_data=before, after_data=after,
+        changed_fields={field: (source.changed_fields or {}).get(field) for field in selected_fields},
+        performed_by=user.username, note=payload.get("note"),
+    ))
+    db.commit()
+    return {"status": "applied", "source_record_id": source.id, "fields": selected_fields, "reviewed_by": user.username}
+
+
+@router.post("/changes/{source_record_id}/reject")
+def reject_cif_change(
+    source_record_id: int,
+    payload: dict = Body(default={}),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    require_cif_manager(user)
+    source = db.query(CifSourceRecord).filter(CifSourceRecord.id == source_record_id).first()
+    if not source or source.comparison_status != "changed":
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản thay đổi CIF")
+    if source.review_status != "pending":
+        raise HTTPException(status_code=409, detail="Bản thay đổi này đã được xử lý")
+    source.review_status = "rejected"
+    source.reviewed_by = user.username
+    source.reviewed_at = datetime.now(timezone.utc)
+    source.review_note = payload.get("note")
+    db.add(CifChangeAudit(
+        source_record_id=source.id, import_batch_id=source.import_batch_id,
+        full_cif_code=source.full_cif_code, action="reject_change",
+        before_data=source.current_snapshot, after_data=source.current_snapshot,
+        changed_fields=source.changed_fields, performed_by=user.username, note=payload.get("note"),
+    ))
+    db.commit()
+    return {"status": "rejected", "source_record_id": source.id, "reviewed_by": user.username}
+
+
+@router.get("/identifiers/{full_cif_code}/history")
+def cif_identifier_history(full_cif_code: str, db: Session = Depends(get_db)):
+    sources = db.query(CifSourceRecord).filter(CifSourceRecord.full_cif_code == full_cif_code).order_by(desc(CifSourceRecord.imported_at)).all()
+    audits = db.query(CifChangeAudit).filter(CifChangeAudit.full_cif_code == full_cif_code).order_by(desc(CifChangeAudit.performed_at)).all()
+    return {
+        "sources": [{
+            "id": item.id, "import_batch_id": item.import_batch_id,
+            "source_row_number": item.source_row_number, "comparison_status": item.comparison_status,
+            "review_status": item.review_status, "changed_fields": item.changed_fields,
+            "reviewed_by": item.reviewed_by, "reviewed_at": item.reviewed_at,
+            "imported_at": item.imported_at,
+        } for item in sources],
+        "audits": [{
+            "id": item.id, "action": item.action, "before_data": item.before_data,
+            "after_data": item.after_data, "changed_fields": item.changed_fields,
+            "performed_by": item.performed_by, "note": item.note, "performed_at": item.performed_at,
+        } for item in audits],
+    }
+
+
+@router.get("/golden-rules")
+def list_cif_golden_rules(db: Session = Depends(get_db)):
+    rows = db.query(CifGoldenRule).order_by(CifGoldenRule.id).all()
+    return [{
+        "id": row.id, "target_field": row.target_field, "source_columns": row.source_columns,
+        "strategy": row.strategy, "priority_order": row.priority_order,
+        "requires_review_on_conflict": row.requires_review_on_conflict,
+        "is_active": row.is_active, "description": row.description,
+        "updated_by": row.updated_by, "updated_at": row.updated_at,
+    } for row in rows]
 
 
 @router.get("/customers/{customer_id}")
@@ -379,3 +754,31 @@ def list_cif_conflicts(
         ],
         "total": total,
     }
+
+
+@router.post("/conflicts/{conflict_id}/resolve")
+def resolve_cif_conflict(
+    conflict_id: int,
+    payload: dict = Body(default={}),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
+    require_cif_manager(user)
+    item = db.query(CifIdentityConflict).filter(CifIdentityConflict.id == conflict_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Không tìm thấy xung đột CIF")
+    resolution = payload.get("resolution")
+    allowed = {"resolved_keep", "not_conflict", "waiting_branch", "verified_separate"}
+    if resolution not in allowed:
+        raise HTTPException(status_code=400, detail="Hướng xử lý xung đột không hợp lệ")
+    item.status = resolution
+    item.resolution_note = payload.get("note")
+    item.resolved_by = user.username
+    item.resolved_at = datetime.now(timezone.utc)
+    db.add(CifChangeAudit(
+        import_batch_id=item.import_batch_id, full_cif_code=(item.full_cif_codes or [None])[0],
+        action=f"resolve_conflict:{resolution}", before_data={"status": "pending"},
+        after_data={"status": resolution}, performed_by=user.username, note=payload.get("note"),
+    ))
+    db.commit()
+    return {"status": item.status, "resolved_by": item.resolved_by, "resolved_at": item.resolved_at}
