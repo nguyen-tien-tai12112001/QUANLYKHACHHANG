@@ -1,5 +1,6 @@
 ﻿import { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   Button,
   Card,
   Col,
@@ -224,6 +225,10 @@ function CustomerProcessing() {
     () => periods.find((item) => item.period_key === selectedPeriod),
     [periods, selectedPeriod],
   );
+  const periodsNeedingReprocess = useMemo(
+    () => periods.filter((item) => item.needs_reprocess),
+    [periods],
+  );
 
   const isCurrentJobRunning = currentJob && ['queued', 'processing'].includes(currentJob.status);
   const isCurrentJobPossiblyStalled = useMemo(() => {
@@ -361,6 +366,11 @@ function CustomerProcessing() {
         <Space orientation="vertical" size={2}>
           <Text>{money(row.profile_count)} khách hàng đã xử lý</Text>
           {row.last_job ? jobStatusTag(row.last_job.status) : <Tag>Chưa chạy</Tag>}
+          {row.needs_reprocess ? (
+            <Tooltip title={(row.reprocess_reasons || []).join('; ')}>
+              <Tag color="warning" icon={<WarningOutlined />}>Cần chạy lại</Tag>
+            </Tooltip>
+          ) : null}
         </Space>
       ),
     },
@@ -371,6 +381,15 @@ function CustomerProcessing() {
       <div>
         <Title level={2}>Xử lý dữ liệu khách hàng</Title>
       </div>
+
+      {periodsNeedingReprocess.length > 0 ? (
+        <Alert
+          type="warning"
+          showIcon
+          message={`${periodsNeedingReprocess.length} kỳ dữ liệu cần chạy lại`}
+          description={`Kho CIF hoặc dữ liệu nguồn đã thay đổi sau lần xử lý gần nhất: ${periodsNeedingReprocess.map((item) => item.period_key).join(', ')}. Chọn từng kỳ để xem lý do và cập nhật lại C360.`}
+        />
+      ) : null}
 
       <Row gutter={[12, 12]}>
         <Col xs={24} md={6}>
@@ -507,6 +526,25 @@ function CustomerProcessing() {
           >
             {selectedPeriodInfo ? (
               <Space orientation="vertical" size={12} style={{ width: '100%' }}>
+                {selectedPeriodInfo.needs_reprocess ? (
+                  <Alert
+                    type="warning"
+                    showIcon
+                    message={`Kỳ ${selectedPeriodInfo.period_key} đang dùng kết quả cũ`}
+                    description={(
+                      <Space orientation="vertical" size={2}>
+                        {(selectedPeriodInfo.reprocess_reasons || []).map((reason) => (
+                          <Text key={reason}>• {reason}</Text>
+                        ))}
+                        {selectedPeriodInfo.latest_cif_import?.finished_at ? (
+                          <Text type="secondary">
+                            CIF gần nhất: {selectedPeriodInfo.latest_cif_import.original_filename} · {new Date(selectedPeriodInfo.latest_cif_import.finished_at).toLocaleString('vi-VN')}
+                          </Text>
+                        ) : null}
+                      </Space>
+                    )}
+                  />
+                ) : null}
                 <Space size={[6, 6]} wrap>
                   {selectedPeriodInfo.is_ready ? (
                     <Tag color="success" icon={<CheckCircleOutlined />}>Đủ nhóm file chuẩn</Tag>

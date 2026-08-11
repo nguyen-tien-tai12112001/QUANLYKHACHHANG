@@ -23,6 +23,8 @@ from app.models import (
     BC06CustomerClassification,
     BC29CustomerCreditRisk,
     BusinessMatchingRule,
+    CifCustomer,
+    CifImportBatch,
     CustomerPeriodBranchDetail,
     CustomerPeriodExchangeRate,
     CustomerPeriodProfile,
@@ -788,15 +790,25 @@ def list_processing_periods(db: Session = Depends(get_db)):
         .all()
     )
     latest_jobs = {}
+    latest_success_jobs = {}
     latest_success_counts = {}
     all_jobs = db.query(CustomerProcessingJob).order_by(desc(CustomerProcessingJob.created_at)).all()
     for item in all_jobs:
         latest_jobs.setdefault(item.period_key, item)
         if item.status == "success":
+            latest_success_jobs.setdefault(item.period_key, item)
             latest_success_counts.setdefault(
                 item.period_key,
                 int(item.processed_customers or item.total_customers or 0),
             )
+
+    latest_cif_batch = (
+        db.query(CifImportBatch)
+        .filter(CifImportBatch.status == "success")
+        .order_by(desc(CifImportBatch.finished_at), desc(CifImportBatch.id))
+        .first()
+    )
+    current_cif_customer_count = int(db.query(func.count(CifCustomer.id)).scalar() or 0)
 
     result = []
     for batch in batches:
@@ -806,7 +818,31 @@ def list_processing_periods(db: Session = Depends(get_db)):
             batch.period_date,
         )
         last_job = latest_jobs.get(batch.period_key)
+        last_success_job = latest_success_jobs.get(batch.period_key)
         profile_count = latest_success_counts.get(batch.period_key, 0)
+        reprocess_reasons = []
+        cif_changed_since_processing = bool(
+            last_success_job
+            and latest_cif_batch
+            and latest_cif_batch.finished_at
+            and (
+                not last_success_job.finished_at
+                or latest_cif_batch.finished_at > last_success_job.finished_at
+            )
+        )
+        cif_customer_count_changed = bool(
+            last_success_job
+            and current_cif_customer_count
+            and profile_count != current_cif_customer_count
+        )
+        if cif_changed_since_processing:
+            reprocess_reasons.append("Kho CIF đã được cập nhật sau lần xử lý gần nhất")
+        if cif_customer_count_changed:
+            reprocess_reasons.append(
+                f"Kết quả đang có {profile_count:,} KH, khác Kho CIF hiện tại {current_cif_customer_count:,} KH"
+            )
+        if last_success_job and batch.status == "needs_reprocess":
+            reprocess_reasons.append("Dữ liệu nguồn của kỳ đã thay đổi")
         payload = serialize_model(batch, ["id", "period_key", "period_date", "status", "description", "created_at"])
         payload.update(
             {
@@ -829,6 +865,16 @@ def list_processing_periods(db: Session = Depends(get_db)):
                 "is_fully_ready": summary["is_fully_ready"],
                 "profile_count": profile_count,
                 "last_job": serialize_job(last_job),
+                "last_success_job_finished_at": serialize_value(last_success_job.finished_at) if last_success_job else None,
+                "current_cif_customer_count": current_cif_customer_count,
+                "cif_changed_since_processing": cif_changed_since_processing,
+                "cif_customer_count_changed": cif_customer_count_changed,
+                "needs_reprocess": bool(reprocess_reasons),
+                "reprocess_reasons": reprocess_reasons,
+                "latest_cif_import": serialize_model(
+                    latest_cif_batch,
+                    ["id", "original_filename", "branch_code", "new_customers", "new_identifiers", "finished_at"],
+                ) if latest_cif_batch else None,
             }
         )
         result.append(payload)
