@@ -33,7 +33,7 @@ REQUIRED_COLUMNS = {
     "stscd",
 }
 DATE_COLUMNS = ("issuedt1", "issuedt2", "issuedt3", "issuedt4", "issuedt5", "issuedt6", "incrdt")
-IMPORTER_VERSION = "2.0"
+IMPORTER_VERSION = "2.1-multi-branch"
 REVIEW_FIELDS = (
     "customer_name", "customer_name_ascii", "short_name", "customer_type",
     "customer_detail_type", "registration_number", "passport_number",
@@ -530,16 +530,23 @@ def import_cif_file(file_path: str | Path, original_filename: str | None = None,
             source_records.clear()
 
         filename_branch = infer_branch_code(filename)
-        if len(detected_branches) != 1:
-            raise ValueError(f"File CIF phải chứa đúng một chi nhánh, phát hiện: {', '.join(sorted(detected_branches))}")
-        detected_branch = next(iter(detected_branches))
-        if filename_branch and filename_branch != detected_branch:
+        if not detected_branches:
+            raise ValueError("Không xác định được mã chi nhánh từ cột CUSTNO")
+        sorted_branches = sorted(detected_branches)
+        is_multi_branch = len(sorted_branches) > 1
+        detected_branch = sorted_branches[0] if not is_multi_branch else None
+        if filename_branch and not is_multi_branch and filename_branch != detected_branch:
             raise ValueError(f"Chi nhánh trong tên file {filename_branch} không khớp dữ liệu {detected_branch}")
-        batch.branch_code = detected_branch
+        batch.branch_code = "MULTI" if is_multi_branch else detected_branch
+        if is_multi_branch:
+            multi_note = f"File gộp {len(sorted_branches)} chi nhánh: {', '.join(sorted_branches)}."
+            batch.format_warning = " ".join(filter(None, [batch.format_warning, multi_note]))
         batch.total_rows = total_rows
         batch.processed_rows = total_rows
         batch.column_stats = {
             "total_columns": len(source_headers),
+            "branch_codes": sorted_branches,
+            "branch_count": len(sorted_branches),
             "blank_columns": [column for column in source_headers if column_nonblank.get(column, 0) == 0],
             "columns": [
                 {
@@ -552,7 +559,11 @@ def import_cif_file(file_path: str | Path, original_filename: str | None = None,
                 for column in source_headers
             ],
         }
-        set_import_stage(db, batch, "validate_structure", "Đã kiểm tra cấu trúc, chi nhánh và chất lượng cột", 32, {"total_rows": total_rows, "total_columns": len(source_headers), "branch_code": detected_branch})
+        branch_row_counts = {
+            branch: sum(1 for row in parsed_rows if row["branch_code"] == branch)
+            for branch in sorted_branches
+        }
+        set_import_stage(db, batch, "validate_structure", "Đã kiểm tra cấu trúc, chi nhánh và chất lượng cột", 32, {"total_rows": total_rows, "total_columns": len(source_headers), "branch_code": batch.branch_code, "branch_codes": sorted_branches, "branch_row_counts": branch_row_counts})
         set_import_stage(db, batch, "match_customer", "Đang chuẩn hóa mã lõi và đối chiếu khách hàng hiện có", 38, {"unique_core_codes": len({row['customer_core_code'] for row in parsed_rows})})
 
         core_codes = sorted({row["customer_core_code"] for row in parsed_rows})
@@ -603,7 +614,7 @@ def import_cif_file(file_path: str | Path, original_filename: str | None = None,
         existing_branch_codes = {
             code for (code,) in (
                 db.query(CifCustomerIdentifier.full_cif_code)
-                .filter(CifCustomerIdentifier.branch_code == detected_branch)
+                .filter(CifCustomerIdentifier.branch_code.in_(sorted_branches))
                 .all()
             )
         }
