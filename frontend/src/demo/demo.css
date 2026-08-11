@@ -1299,3 +1299,41 @@
     display: none;
   }
 }
+.mapping-lineage {
+  display: grid;
+  gap: 10px;
+}
+
+.mapping-lineage-step {
+  position: relative;
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 14px;
+  border: 1px solid #e5eaf1;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #fff, #f7faff);
+}
+
+.mapping-lineage-step:not(:last-child)::after {
+  content: '';
+  position: absolute;
+  left: 32px;
+  bottom: -11px;
+  width: 2px;
+  height: 11px;
+  background: #91b5e8;
+}
+
+.mapping-lineage-index {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  color: #fff;
+  font-weight: 700;
+  background: #3567a8;
+  box-shadow: 0 4px 10px rgba(53, 103, 168, .22);
+}

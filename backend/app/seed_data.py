@@ -28,12 +28,33 @@ ROLE_DEFINITIONS = [
 
 PERMISSION_DEFINITIONS = [
     ("dashboard:view", "Xem Dashboard", "Tổng quan"),
+    ("dashboard:drilldown", "Xem danh sách chi tiết tạo ra KPI", "Tổng quan"),
+    ("dashboard:export", "Xuất dữ liệu Dashboard", "Tổng quan"),
     ("dashboard:health", "Xem trạng thái hệ thống", "Tổng quan"),
+    ("customer:view", "Xem danh sách khách hàng", "Khách hàng C360"),
+    ("customer:profile:view", "Xem hồ sơ khách hàng", "Khách hàng C360"),
+    ("customer:deposit:view", "Xem tiền gửi khách hàng", "Khách hàng C360"),
+    ("customer:credit:view", "Xem tiền vay và rủi ro", "Khách hàng C360"),
+    ("customer:income:view", "Xem phí và thu nhập", "Khách hàng C360"),
+    ("customer:export", "Xuất dữ liệu khách hàng", "Khách hàng C360"),
+    ("analytics:view", "Xem phân tích nghiệp vụ", "Phân tích nghiệp vụ"),
+    ("analytics:export", "Xuất phân tích nghiệp vụ", "Phân tích nghiệp vụ"),
     ("warehouse:view", "Xem kho dữ liệu", "Kho dữ liệu"),
     ("warehouse:import", "Import dữ liệu", "Kho dữ liệu"),
     ("warehouse:replace", "Thay thế file dữ liệu", "Kho dữ liệu"),
     ("warehouse:delete", "Xóa file dữ liệu", "Kho dữ liệu"),
     ("warehouse:summarize", "Tổng hợp kỳ dữ liệu", "Kho dữ liệu"),
+    ("cif:view", "Xem Kho CIF", "Kho CIF"),
+    ("cif:import", "Import dữ liệu CIF", "Kho CIF"),
+    ("cif:review", "Rà soát và xác nhận xung đột CIF", "Kho CIF"),
+    ("cif:override", "Ghi đè thủ công dữ liệu CIF", "Kho CIF"),
+    ("processing:view", "Xem trạng thái xử lý khách hàng", "Xử lý dữ liệu"),
+    ("processing:run", "Chạy xử lý khách hàng", "Xử lý dữ liệu"),
+    ("processing:recover", "Khôi phục job bị lỗi hoặc bị kẹt", "Xử lý dữ liệu"),
+    ("reconciliation:view", "Xem khách hàng chưa khớp CIF", "Đối chiếu dữ liệu"),
+    ("reconciliation:review", "Cập nhật kết quả đối chiếu CIF", "Đối chiếu dữ liệu"),
+    ("mapping:view", "Xem từ điển và mapping", "Quản trị dữ liệu"),
+    ("mapping:write", "Cấu hình mapping và công thức", "Quản trị dữ liệu"),
     ("report:view", "Xem báo cáo", "Báo cáo"),
     ("report:summarize", "Chạy tổng hợp báo cáo", "Báo cáo"),
     ("report:export", "Xuất báo cáo", "Báo cáo"),
@@ -45,6 +66,9 @@ PERMISSION_DEFINITIONS = [
     ("admin:user:write", "Thêm/sửa/xóa người dùng", "Quản trị hệ thống"),
     ("admin:role:view", "Xem nhóm quyền", "Quản trị hệ thống"),
     ("admin:role:write", "Cấu hình nhóm quyền", "Quản trị hệ thống"),
+    ("admin:config:view", "Xem cấu hình nghiệp vụ", "Quản trị hệ thống"),
+    ("admin:config:write", "Thêm sửa xóa cấu hình nghiệp vụ", "Quản trị hệ thống"),
+    ("admin:audit:view", "Xem nhật ký thao tác", "Quản trị hệ thống"),
 ]
 
 
@@ -110,12 +134,17 @@ def seed_roles_permissions(db: Session) -> dict[str, SystemRole]:
         "ADMIN": list(permissions.keys()),
         "MANAGER": [
             "dashboard:view",
+            "dashboard:drilldown",
+            "dashboard:export",
             "dashboard:health",
+            "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "customer:export",
+            "analytics:view", "analytics:export",
             "warehouse:view",
+            "cif:view", "processing:view", "reconciliation:view", "reconciliation:review", "mapping:view",
             "report:view",
             "report:summarize",
         ],
-        "USER": ["dashboard:view", "warehouse:view", "report:view"],
+        "USER": ["dashboard:view", "dashboard:drilldown", "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "analytics:view", "warehouse:view", "cif:view", "processing:view", "mapping:view", "report:view"],
     }
     for role_code, permission_codes in role_permission_codes.items():
         role = roles[role_code]

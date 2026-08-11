@@ -4,6 +4,7 @@ import {
   Card,
   Col,
   Empty,
+  Modal,
   Popover,
   Progress,
   Row,
@@ -22,6 +23,7 @@ import {
   CheckCircleOutlined,
   CloudUploadOutlined,
   DatabaseOutlined,
+  DeleteOutlined,
   FileDoneOutlined,
   InboxOutlined,
   PlayCircleOutlined,
@@ -298,6 +300,16 @@ function CustomerProcessing() {
     }
   }
 
+  async function deleteOptionalFile(item) {
+    try {
+      await client.delete(`/customer-processing/optional-files/${item.id}`);
+      message.success(`Đã xóa file ${item.original_filename}`);
+      await refreshAll(selectedPeriod);
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    }
+  }
+
   const periodColumns = [
     {
       title: 'Kỳ dữ liệu',
@@ -398,18 +410,6 @@ function CustomerProcessing() {
 
       <Card
         title="Các kỳ dữ liệu có thể xử lý"
-        extra={
-          <Space>
-            <Select
-              value={selectedPeriod}
-              placeholder="Chọn kỳ dữ liệu"
-              style={{ width: 170 }}
-              options={periods.map((item) => ({ value: item.period_key, label: item.period_key }))}
-              onChange={selectPeriod}
-            />
-            <Button icon={<ReloadOutlined />} onClick={() => refreshAll()} loading={loading}>Tải lại</Button>
-          </Space>
-        }
       >
         <Table
           size="small"
@@ -457,10 +457,13 @@ function CustomerProcessing() {
                   items={optionalFiles.slice(0, 5).map((item) => ({
                     color: 'blue',
                     children: (
-                      <Space orientation="vertical" size={0}>
-                        <Text strong>{item.original_filename}</Text>
-                        <Text type="secondary">{fileSize(item.file_size)} · {item.status}</Text>
-                      </Space>
+                      <div className="optional-file-row">
+                        <Space orientation="vertical" size={0}>
+                          <Text strong>{item.original_filename}</Text>
+                          <Text type="secondary">{fileSize(item.file_size)} · {item.status}</Text>
+                        </Space>
+                        <Button danger type="text" size="small" icon={<DeleteOutlined />} disabled={isCurrentJobRunning} onClick={() => Modal.confirm({ title: 'Xóa file bổ sung?', content: 'Dữ liệu đã bóc tách từ file này cũng sẽ bị xóa. Sau đó bạn có thể tải file thay thế.', okText: 'Xóa file', okButtonProps: { danger: true }, cancelText: 'Hủy', onOk: () => deleteOptionalFile(item) })}>Xóa</Button>
+                      </div>
                     ),
                   }))}
                 />

@@ -8,7 +8,7 @@ from urllib.parse import unquote
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import desc, func, or_
+from sqlalchemy import desc, distinct, func, or_
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
@@ -45,6 +45,8 @@ from app.models import (
     PF10LoanProfitability,
     PF14AccountBalance,
     ReportSourceStatus,
+    RR01HandledRiskLoan,
+    GL02LedgerTransaction,
     SupplementalBaoLanhRecord,
     SupplementalOABRecord,
 )
@@ -234,6 +236,8 @@ def delete_period_data(db: Session, period_key: str) -> dict:
         BC29CustomerCreditRisk,
         KH02CustomerTransaction,
         FTPLNDailyLoanFTP,
+        RR01HandledRiskLoan,
+        GL02LedgerTransaction,
         CustomerProcessingOptionalFile,
         CustomerProcessingJob,
         ImportFile,
@@ -263,7 +267,7 @@ def upload_import_file(
     except Exception as exc:
         raise HTTPException(status_code=500, detail=compact_error_message(exc)) from exc
 
-    affects_profile = import_file.file_type in {"DP01", "LN01", "CN05", "PF14"}
+    affects_profile = import_file.file_type in {"DP01", "LN01", "CN05", "PF14", "RR01", "GL02"}
     needs_reprocess = mark_period_needs_reprocess(db, import_file.period_key) if affects_profile else False
     if needs_reprocess:
         db.commit()
@@ -498,7 +502,7 @@ def delete_import_file(
         raise HTTPException(status_code=409, detail="Không thể xóa vì kỳ dữ liệu đang có job import hoặc xử lý đang chạy")
 
     period_key = import_file.period_key
-    affects_profile = import_file.file_type in {"DP01", "LN01", "CN05", "PF14"}
+    affects_profile = import_file.file_type in {"DP01", "LN01", "CN05", "PF14", "RR01", "GL02"}
     original_filename = import_file.original_filename
     was_processed = processed_customer_count(db, period_key) > 0
     delete_file_record_and_rows(db, import_file)
@@ -633,12 +637,12 @@ def source_readiness(period_key: str = Query(...), db: Session = Depends(get_db)
         .all()
     )
     source_rows = []
-    for source_code in ("DP01", "LN01", "CN05", "PF10", "PF14", "BC06", "BC29", "KH02"):
+    for source_code in ("DP01", "LN01", "CN05", "PF10", "PF14", "BC06", "BC29", "KH02", "RR01", "GL02"):
         source_files = [item for item in files if item.file_type == source_code]
         success_files = [item for item in source_files if item.status == "success"]
         source_rows.append({
             "source_code": source_code,
-            "frequency": "MONTH_RANGE" if source_code == "KH02" else "PERIOD",
+            "frequency": "MONTH_RANGE" if source_code in {"KH02", "GL02"} else "PERIOD",
             "expected_file_count": None,
             "received_file_count": len(source_files),
             "success_file_count": len(success_files),
@@ -647,6 +651,80 @@ def source_readiness(period_key: str = Query(...), db: Session = Depends(get_db)
             "branches": sorted({item.branch_code for item in success_files}),
             "missing_dates": [],
         })
+
+    expected_branches = sorted({
+        item.branch_code for item in files
+        if item.status == "success" and item.file_type in {"DP01", "LN01", "CN05", "PF10", "PF14", "BC06", "BC29", "KH02"}
+    })
+
+    rr_source = next(item for item in source_rows if item["source_code"] == "RR01")
+    rr_branch_readiness = []
+    for branch_code in expected_branches:
+        branch_files = [item for item in files if item.file_type == "RR01" and item.branch_code == branch_code]
+        successful = [item for item in branch_files if item.status == "success"]
+        errors = [item for item in branch_files if item.status == "error"]
+        ready = len(successful) == 1 and not errors
+        rr_branch_readiness.append({
+            "branch_code": branch_code, "expected_file_count": 1,
+            "success_file_count": len(successful), "error_file_count": len(errors),
+            "is_ready": ready,
+            "message": "Đã đủ một snapshot RR01 cuối kỳ." if ready else (
+                "Thiếu file RR01 cuối kỳ." if not successful else "Có nhiều file RR01 hoặc file lỗi; cần kiểm tra."
+            ),
+        })
+    rr_source["expected_file_count"] = len(expected_branches)
+    rr_source["is_ready"] = bool(rr_branch_readiness) and all(item["is_ready"] for item in rr_branch_readiness)
+    rr_source["branch_readiness"] = rr_branch_readiness
+
+    gl_source = next(item for item in source_rows if item["source_code"] == "GL02")
+    gl_branch_readiness = []
+    expected_days = calendar.monthrange(batch.period_date.year, batch.period_date.month)[1]
+    for branch_code in expected_branches:
+        branch_files = [item for item in files if item.file_type == "GL02" and item.branch_code == branch_code]
+        successful = [item for item in branch_files if item.status == "success"]
+        errors = [item for item in branch_files if item.status == "error"]
+        suffix_numbers = sorted(int(item.filename_suffix[1:]) for item in successful if item.filename_suffix)
+        expected_suffixes = list(range(1, max(suffix_numbers) + 1)) if suffix_numbers else []
+        missing_parts = sorted(set(expected_suffixes) - set(suffix_numbers))
+        has_base = any(not item.filename_suffix for item in successful)
+        stats = None
+        if successful:
+            ids = [item.id for item in successful]
+            stats = db.query(
+                func.min(GL02LedgerTransaction.transaction_date),
+                func.max(GL02LedgerTransaction.transaction_date),
+                func.count(distinct(GL02LedgerTransaction.transaction_date)),
+                func.coalesce(func.sum(GL02LedgerTransaction.debit_amount), 0),
+                func.coalesce(func.sum(GL02LedgerTransaction.credit_amount), 0),
+            ).filter(GL02LedgerTransaction.import_file_id.in_(ids)).one()
+        first_date = stats[0] if stats else None
+        last_date = stats[1] if stats else None
+        day_count = int(stats[2] or 0) if stats else 0
+        debit_total = Decimal(stats[3] or 0) if stats else Decimal(0)
+        credit_total = Decimal(stats[4] or 0) if stats else Decimal(0)
+        date_ready = bool(first_date and last_date and first_date.day == 1 and last_date.day == expected_days and day_count == expected_days)
+        balanced = bool(stats) and debit_total == credit_total
+        ready = bool(successful) and has_base and not missing_parts and not errors and date_ready and balanced
+        issues = []
+        if not successful: issues.append("Thiếu bộ file GL02")
+        if successful and not has_base: issues.append("Thiếu file gốc")
+        if missing_parts: issues.append("Thiếu phần " + ", ".join(f"_{item}" for item in missing_parts))
+        if successful and not date_ready: issues.append(f"Chưa đủ ngày 01-{expected_days:02d}")
+        if successful and not balanced: issues.append(f"Lệch Nợ/Có {debit_total - credit_total}")
+        if errors: issues.append(f"{len(errors)} file lỗi")
+        gl_branch_readiness.append({
+            "branch_code": branch_code, "success_file_count": len(successful),
+            "part_count": len(successful), "missing_parts": [f"_{item}" for item in missing_parts],
+            "first_date": first_date.isoformat() if first_date else None,
+            "last_date": last_date.isoformat() if last_date else None,
+            "success_days": day_count, "expected_days": expected_days,
+            "debit_total": serialize_value(debit_total), "credit_total": serialize_value(credit_total),
+            "is_balanced": balanced, "error_file_count": len(errors), "is_ready": ready,
+            "message": "Đủ ngày, đủ phần và cân bằng Nợ/Có." if ready else "; ".join(issues),
+        })
+    gl_source["expected_file_count"] = None
+    gl_source["is_ready"] = bool(gl_branch_readiness) and all(item["is_ready"] for item in gl_branch_readiness)
+    gl_source["branch_readiness"] = gl_branch_readiness
 
     ftpln_files = [item for item in files if item.file_type == "FTPLN"]
     ftpln_branches = sorted({item.branch_code for item in ftpln_files})

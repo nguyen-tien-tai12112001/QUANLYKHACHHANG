@@ -5,6 +5,7 @@ import {
   ClockCircleOutlined,
   CloseCircleFilled,
   DatabaseOutlined,
+  DownloadOutlined,
   PlayCircleOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
@@ -13,6 +14,7 @@ import {
   Button,
   Card,
   Col,
+  Drawer,
   Empty,
   Input,
   Progress,
@@ -124,15 +126,17 @@ function useGovernanceData() {
     let active = true;
     setLoading(true);
     setError('');
-    Promise.all([
+    Promise.allSettled([
       client.get('/customer-processing/periods'),
       client.get('/customer-processing/jobs'),
     ])
-      .then(([periodResponse, jobResponse]) => {
+      .then(([periodResult, jobResult]) => {
         if (!active) return;
+        if (periodResult.status === 'rejected') throw periodResult.reason;
+        const periodResponse = periodResult.value;
         const nextPeriods = Array.isArray(periodResponse.data) ? periodResponse.data : [];
         setPeriods(nextPeriods);
-        setJobs(Array.isArray(jobResponse.data) ? jobResponse.data : []);
+        setJobs(jobResult.status === 'fulfilled' && Array.isArray(jobResult.value.data) ? jobResult.value.data : []);
         setPeriodKey((current) => current || nextPeriods[0]?.period_key || '');
       })
       .catch((requestError) => {
@@ -154,18 +158,20 @@ function useGovernanceData() {
     }
     let active = true;
     setLoading(true);
-    Promise.all([
+    Promise.allSettled([
       client.get('/imports/report-sources', { params: { period_key: periodKey } }),
       client.get('/imports/source-readiness', { params: { period_key: periodKey } }),
       client.get('/imports/files', { params: { period_key: periodKey, compact: true } }),
       client.get('/imports/jobs/stalled', { params: { period_key: periodKey } }),
     ])
-      .then(([sourceResponse, readinessResponse, fileResponse, stalledResponse]) => {
+      .then(([sourceResult, readinessResult, fileResult, stalledResult]) => {
         if (!active) return;
-        setSources(Array.isArray(sourceResponse.data) ? sourceResponse.data : []);
-        setReadiness(readinessResponse.data || { sources: [] });
-        setFiles(Array.isArray(fileResponse.data) ? fileResponse.data : []);
-        setStalledJobs(Array.isArray(stalledResponse.data) ? stalledResponse.data : []);
+        if (readinessResult.status === 'rejected' && sourceResult.status === 'rejected') throw readinessResult.reason;
+        setSources(sourceResult.status === 'fulfilled' && Array.isArray(sourceResult.value.data) ? sourceResult.value.data : []);
+        setReadiness(readinessResult.status === 'fulfilled' ? readinessResult.value.data || { sources: [] } : { sources: [] });
+        setFiles(fileResult.status === 'fulfilled' && Array.isArray(fileResult.value.data) ? fileResult.value.data : []);
+        setStalledJobs(stalledResult.status === 'fulfilled' && Array.isArray(stalledResult.value.data) ? stalledResult.value.data : []);
+        setError('');
       })
       .catch((requestError) => {
         if (active) setError(requestError.response?.data?.detail || requestError.message || 'Không tải được trạng thái nguồn');
@@ -281,10 +287,11 @@ function SourceTable({ sources }) {
 const REQUIRED_PROFILE_SOURCES = ['DP01', 'LN01', 'CN05', 'PF10', 'PF14', 'BC06', 'BC29', 'KH02', 'FTPLN'];
 
 function isRequiredSourceReady(files, readiness, sourceCode, branchCode) {
-  if (sourceCode === 'FTPLN') {
-    return Boolean(readiness.sources
-      ?.find((item) => item.source_code === 'FTPLN')
-      ?.branch_readiness?.find((item) => item.branch_code === branchCode)?.is_ready);
+  const monitoredBranch = readiness.sources
+    ?.find((item) => item.source_code === sourceCode)
+    ?.branch_readiness?.find((item) => item.branch_code === branchCode);
+  if (monitoredBranch) {
+    return Boolean(monitoredBranch.is_ready);
   }
   return files.some(
     (item) => item.file_type === sourceCode && item.branch_code === branchCode && item.status === 'success',
@@ -296,24 +303,26 @@ function sourceCell(files, sourceCode, branchCode, readiness) {
   const successful = rows.filter((item) => item.status === 'success');
   const errors = rows.filter((item) => item.status === 'error');
   const running = rows.filter((item) => ['queued', 'processing'].includes(item.status));
-  if (sourceCode === 'FTPLN') {
+  if (['FTPLN', 'RR01', 'GL02'].includes(sourceCode)) {
     const branch = readiness.sources
-      ?.find((item) => item.source_code === 'FTPLN')
+      ?.find((item) => item.source_code === sourceCode)
       ?.branch_readiness?.find((item) => item.branch_code === branchCode);
     if (branch) {
       const missingDates = branch.missing_dates || [];
       const duplicateDates = branch.duplicate_dates || [];
       const issueDetails = [
+        branch.message || '',
         missingDates.length ? `Thiếu ngày: ${missingDates.map((value) => sourceDateLabel(value)).join(', ')}` : '',
         duplicateDates.length ? `Trùng ngày: ${duplicateDates.map((value) => sourceDateLabel(value)).join(', ')}` : '',
+        branch.missing_parts?.length ? `Thiếu phần: ${branch.missing_parts.join(', ')}` : '',
         branch.error_file_count ? `${branch.error_file_count} file lỗi` : '',
       ].filter(Boolean);
       return branch.is_ready
         ? (
-          <Tooltip title={`Đủ ${branch.success_days}/${branch.expected_days} ngày`}>
+          <Tooltip title={branch.message || (branch.expected_days ? `Đủ ${branch.success_days}/${branch.expected_days} ngày` : 'Nguồn đã đầy đủ')}>
             <span className="matrix-state matrix-state--success">
               <CheckCircleFilled />
-              <small>{branch.success_days}/{branch.expected_days}</small>
+              <small>{sourceCode === 'GL02' ? `${branch.part_count} phần` : sourceCode === 'RR01' ? '1 file' : `${branch.success_days}/${branch.expected_days}`}</small>
             </span>
           </Tooltip>
         )
@@ -322,7 +331,7 @@ function sourceCell(files, sourceCode, branchCode, readiness) {
             <span className="matrix-state matrix-state--missing">
               <CloseCircleFilled />
               <small>
-                {missingDates.length === 1
+                {sourceCode === 'GL02' ? 'Chưa đủ bộ' : sourceCode === 'RR01' ? 'Thiếu file' : missingDates.length === 1
                   ? `Thiếu ${sourceDateLabel(missingDates[0], true)}`
                   : `Thiếu ${missingDates.length || Math.max(0, branch.expected_days - branch.success_days)} ngày`}
               </small>
@@ -659,6 +668,7 @@ function MappingPage({ data }) {
   const [status, setStatus] = useState('all');
   const [coverage, setCoverage] = useState({ total_profiles: 0, fields: {} });
   const [coverageLoading, setCoverageLoading] = useState(false);
+  const [selectedField, setSelectedField] = useState(null);
   const [visibleColumns, setVisibleColumns] = useState(() => {
     const defaults = [
       'order', 'code', 'label', 'group', 'actualSource', 'profileField',
@@ -801,14 +811,192 @@ function MappingPage({ data }) {
       </Card>
       <Card className="demo-table-card">
         <Table
-          rowKey="code"
+          rowKey={(row) => `${row.code}-${row.group}-${row.order}`}
           dataSource={filtered}
           loading={coverageLoading}
           pagination={{ defaultPageSize: 20, showSizeChanger: true, pageSizeOptions: [20, 50, 84], showTotal: (total) => `${total} trường` }}
           scroll={{ x: columns.reduce((sum, column) => sum + Number(column.width || 180), 0) }}
           columns={columns}
+          onRow={(row) => ({ onClick: () => setSelectedField(row), style: { cursor: 'pointer' } })}
         />
       </Card>
+      <Drawer
+        title={selectedField ? `${selectedField.code} · ${selectedField.label}` : 'Luồng dữ liệu'}
+        width={680}
+        open={Boolean(selectedField)}
+        onClose={() => setSelectedField(null)}
+      >
+        {selectedField ? (
+          <Space orientation="vertical" size={18} style={{ width: '100%' }}>
+            <Alert type="info" showIcon message="Luồng tạo dữ liệu thực tế" description="Theo dõi từ file nguồn, quy tắc xử lý, bước đối chiếu đến cột Profile C360." />
+            <div className="mapping-lineage">
+              {[
+                ['1. Nguồn', selectedField.actualSource || 'Chưa xác định'],
+                ['2. Cách lấy / công thức', selectedField.calculation || 'Chưa có công thức'],
+                ['3. Đối chiếu', selectedField.reconciliation || 'Không yêu cầu đối chiếu'],
+                ['4. Trường đích', selectedField.profileField || 'Chưa triển khai'],
+              ].map(([label, value], index) => (
+                <div className="mapping-lineage-step" key={label}>
+                  <div className="mapping-lineage-index">{index + 1}</div>
+                  <div><Text type="secondary">{label}</Text><div><Text strong>{value}</Text></div></div>
+                </div>
+              ))}
+            </div>
+            <Card size="small" title="Trạng thái dữ liệu">
+              <Space wrap size="large">
+                {runtimeStatusTag(selectedField.runtimeStatus)}
+                <Text>Độ phủ: <Text strong>{Number(selectedField.coverage_percent || 0)}%</Text></Text>
+                <Text>{numberLabel(selectedField.populated_count)}/{numberLabel(selectedField.total_count)} hồ sơ</Text>
+              </Space>
+            </Card>
+          </Space>
+        ) : null}
+      </Drawer>
+    </div>
+  );
+}
+
+const reconciliationReasonLabels = {
+  NOT_FOUND_IN_CIF: 'Không tìm thấy mã khách hàng trong Kho CIF',
+  INVALID_CUSTOMER_CODE: 'Mã khách hàng không đúng định dạng',
+  MISSING_CORE_CODE: 'Thiếu mã khách hàng lõi',
+  MISSING_CUSTOMER_CODE: 'Thiếu mã khách hàng',
+  DUPLICATE_CIF: 'Mã khách hàng trùng trong Kho CIF',
+  BRANCH_CONFLICT: 'Chi nhánh nguồn không khớp thông tin quản lý',
+};
+
+function ReconciliationPage({ data }) {
+  const [rows, setRows] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [page, setPage] = useState(1);
+  const [keyword, setKeyword] = useState('');
+  const [sourceType, setSourceType] = useState('');
+  const [reasonCode, setReasonCode] = useState('');
+  const [detailRow, setDetailRow] = useState(null);
+
+  const loadRows = async (nextPage = page) => {
+    if (!data.periodKey) return;
+    setLoading(true);
+    try {
+      const { data: response } = await client.get('/customer-processing/reconciliations', {
+        params: {
+          period_key: data.periodKey,
+          latest_job_only: true,
+          page: nextPage,
+          page_size: 50,
+          keyword: keyword || undefined,
+          source_type: sourceType || undefined,
+          reason_code: reasonCode || undefined,
+        },
+      });
+      setRows(response?.items || []);
+      setTotal(Number(response?.total || 0));
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    setPage(1);
+    const timer = window.setTimeout(() => loadRows(1), 250);
+    return () => window.clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data.periodKey, keyword, sourceType, reasonCode]);
+
+  const updateStatus = async (row, status) => {
+    try {
+      await client.patch(`/customer-processing/reconciliations/${row.id}`, { status });
+      message.success('Đã cập nhật trạng thái đối chiếu');
+      await loadRows(page);
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    }
+  };
+
+  const exportExcel = async () => {
+    const hide = message.loading('Đang tạo file Excel đối chiếu CIF…', 0);
+    try {
+      const response = await client.get('/customer-processing/reconciliations-export', {
+        params: {
+          period_key: data.periodKey,
+          latest_job_only: true,
+          keyword: keyword || undefined,
+          source_type: sourceType || undefined,
+          reason_code: reasonCode || undefined,
+        },
+        responseType: 'blob',
+      });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `doi_chieu_cif_${data.periodKey}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      message.success('Đã xuất danh sách đối chiếu CIF');
+    } catch (error) {
+      message.error(error.response?.data?.detail || 'Không xuất được file Excel');
+    } finally {
+      hide();
+    }
+  };
+
+  const statusTag = (value) => {
+    if (value === 'resolved') return <Tag color="success">Đã xử lý</Tag>;
+    if (value === 'reviewed') return <Tag color="processing">Đã rà soát</Tag>;
+    if (value === 'ignored') return <Tag>Đã bỏ qua</Tag>;
+    return <Tag color="warning">Chờ xử lý</Tag>;
+  };
+
+  return (
+    <div className="demo-page">
+      <PageHeading
+        title="Đối chiếu khách hàng với Kho CIF"
+        description="Hàng đợi các mã khách hàng xuất hiện trong nguồn nghiệp vụ nhưng chưa ghép được với CIF. Dữ liệu nguồn vẫn được giữ nguyên để rà soát."
+        extra={<Space><Button icon={<DownloadOutlined />} onClick={exportExcel} disabled={!total}>Xuất Excel</Button><PeriodActions data={data} /></Space>}
+      />
+      <Row gutter={[16, 16]}>
+        <Col xs={24} md={8}><Metric label="Cần rà soát" value={numberLabel(total)} note={`Kỳ ${periodLabel(data.periodKey)}`} color="#b54708" icon={<AlertOutlined />} /></Col>
+        <Col xs={24} md={8}><Metric label="Nguồn đang hiển thị" value={new Set(rows.map((row) => row.source_type)).size} note="Theo bộ lọc hiện tại" color="#3567a8" icon={<DatabaseOutlined />} /></Col>
+        <Col xs={24} md={8}><Metric label="Đã xử lý trên trang" value={rows.filter((row) => row.status === 'resolved').length} note="Có thể tiếp tục rà soát từng bản ghi" color="#218653" icon={<CheckCircleFilled />} /></Col>
+      </Row>
+      <Card className="demo-filter-card demo-section">
+        <Space wrap>
+          <Input allowClear value={keyword} onChange={(event) => setKeyword(event.target.value)} placeholder="Tìm mã hoặc tên khách hàng..." style={{ width: 280 }} />
+          <Select allowClear value={sourceType || undefined} onChange={(value) => setSourceType(value || '')} placeholder="Tất cả nguồn" style={{ width: 170 }} options={[...new Set(rows.map((row) => row.source_type))].filter(Boolean).map((value) => ({ value, label: value }))} />
+          <Select allowClear value={reasonCode || undefined} onChange={(value) => setReasonCode(value || '')} placeholder="Tất cả lý do" style={{ width: 290 }} options={Object.entries(reconciliationReasonLabels).map(([value, label]) => ({ value, label }))} />
+          <Button icon={<ReloadOutlined />} onClick={() => loadRows(page)}>Làm mới</Button>
+        </Space>
+      </Card>
+      <Card className="demo-table-card">
+        <Table
+          rowKey="id"
+          loading={loading}
+          dataSource={rows}
+          scroll={{ x: 1250 }}
+          pagination={{ current: page, pageSize: 50, total, showSizeChanger: false, showTotal: (value) => `${numberLabel(value)} bản ghi`, onChange: (value) => { setPage(value); loadRows(value); } }}
+          columns={[
+            { title: 'Mã KH lõi', dataIndex: 'customer_core_code', width: 145, fixed: 'left', render: (value) => <Text code copyable>{value || '—'}</Text> },
+            { title: 'Tên khách hàng', dataIndex: 'customer_name', width: 220, ellipsis: true },
+            { title: 'Nguồn', dataIndex: 'source_type', width: 95, render: (value) => <Tag color="blue">{value}</Tag> },
+            { title: 'Chi nhánh', dataIndex: 'branch_code', width: 105 },
+            { title: 'Lý do chưa khớp', dataIndex: 'reason_code', width: 310, render: (value) => <Space orientation="vertical" size={0}><Text>{reconciliationReasonLabels[value] || value}</Text><Text type="secondary" code>{value}</Text></Space> },
+            { title: 'Dòng nguồn', dataIndex: 'source_row_count', width: 105, align: 'right', render: numberLabel },
+            { title: 'Trạng thái', dataIndex: 'status', width: 125, render: statusTag },
+            { title: 'Xử lý', width: 245, fixed: 'right', render: (_, row) => <Space><Button size="small" onClick={() => setDetailRow(row)}>Chi tiết</Button><Select size="small" value={row.status || 'pending'} onChange={(value) => updateStatus(row, value)} style={{ width: 135 }} options={[{ value: 'pending', label: 'Chờ xử lý' }, { value: 'reviewed', label: 'Đã rà soát' }, { value: 'resolved', label: 'Đã xử lý' }, { value: 'ignored', label: 'Bỏ qua' }]} /></Space> },
+          ]}
+        />
+      </Card>
+      <Drawer title="Chi tiết đối chiếu CIF" width={620} open={Boolean(detailRow)} onClose={() => setDetailRow(null)}>
+        {detailRow ? <Space orientation="vertical" size={14} style={{ width: '100%' }}>
+          <Alert type="warning" showIcon message={reconciliationReasonLabels[detailRow.reason_code] || detailRow.reason_code} description={`Nguồn ${detailRow.source_type || '—'} · Chi nhánh ${detailRow.branch_code || '—'}`} />
+          <Card size="small"><Space orientation="vertical"><Text>Mã KH lõi: <Text code copyable>{detailRow.customer_core_code || '—'}</Text></Text><Text>Tên khách hàng: <Text strong>{detailRow.customer_name || '—'}</Text></Text><Text>Số dòng nguồn: {numberLabel(detailRow.source_row_count)}</Text><Text>Chi tiết: {JSON.stringify(detailRow.details || {})}</Text><Text type="secondary">Người rà soát: {detailRow.reviewed_by || 'Chưa có'} · {dateTimeLabel(detailRow.reviewed_at)}</Text></Space></Card>
+        </Space> : null}
+      </Drawer>
     </div>
   );
 }
@@ -869,6 +1057,7 @@ export default function DataGovernance({ mode = 'sources' }) {
       {data.error ? <Alert closable type="warning" showIcon message={data.error} style={{ marginBottom: 16 }} /> : null}
       {mode === 'quality' ? <QualityPage data={data} />
         : mode === 'mapping' ? <MappingPage data={data} />
+          : mode === 'reconciliation' ? <ReconciliationPage data={data} />
           : mode === 'history' ? <HistoryPage data={data} />
             : <SourcesPage data={data} />}
     </>

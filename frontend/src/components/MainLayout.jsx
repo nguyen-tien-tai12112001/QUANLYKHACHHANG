@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ApartmentOutlined,
   AuditOutlined,
+  BankOutlined,
   BarChartOutlined,
   BranchesOutlined,
   DashboardOutlined,
@@ -12,6 +13,7 @@ import {
   SafetyCertificateOutlined,
   SettingOutlined,
   TeamOutlined,
+  WalletOutlined,
 } from '@ant-design/icons';
 import { Avatar, Badge, Breadcrumb, Button, Layout, Menu, Space, Tooltip, Typography } from 'antd';
 
@@ -29,7 +31,6 @@ const baseMenuItems = [
     children: [
       { key: 'c360-dashboard', icon: <DashboardOutlined />, label: 'Dashboard điều hành' },
       { key: 'c360-insights', icon: <BarChartOutlined />, label: 'Cảnh báo & phân nhóm' },
-      { key: 'dashboard', icon: <BarChartOutlined />, label: 'Dashboard nghiệp vụ' },
     ],
   },
   {
@@ -38,7 +39,17 @@ const baseMenuItems = [
     label: 'Quản lý khách hàng',
     children: [
       { key: 'c360-customers', icon: <TeamOutlined />, label: 'Danh sách khách hàng' },
-      { key: 'reports', icon: <BarChartOutlined />, label: 'Báo cáo khách hàng' },
+    ],
+  },
+  {
+    key: 'analytics',
+    icon: <BarChartOutlined />,
+    label: 'Phân tích nghiệp vụ',
+    children: [
+      { key: 'analysis-deposit', icon: <WalletOutlined />, label: 'Tiền gửi & dòng tiền' },
+      { key: 'analysis-credit', icon: <BankOutlined />, label: 'Tiền vay & rủi ro' },
+      { key: 'analysis-income', icon: <BarChartOutlined />, label: 'Thu nhập & sản phẩm' },
+      { key: 'analysis-unit', icon: <ApartmentOutlined />, label: 'Đơn vị & cán bộ' },
     ],
   },
   {
@@ -50,6 +61,7 @@ const baseMenuItems = [
       { key: 'data-cif', icon: <TeamOutlined />, label: 'Kho dữ liệu CIF' },
       { key: 'customer-processing', icon: <BranchesOutlined />, label: 'Xử lý dữ liệu KH' },
       { key: 'data-sources', icon: <DatabaseOutlined />, label: 'Giám sát nguồn dữ liệu' },
+      { key: 'data-reconciliation', icon: <AuditOutlined />, label: 'Đối chiếu CIF' },
       { key: 'data-mapping', icon: <BranchesOutlined />, label: 'Từ điển & mapping' },
     ],
   },
@@ -62,6 +74,7 @@ const baseMenuItems = [
       { key: 'admin-departments', icon: <ApartmentOutlined />, label: 'Phòng ban' },
       { key: 'admin-users', icon: <TeamOutlined />, label: 'Người dùng' },
       { key: 'admin-roles', icon: <SafetyCertificateOutlined />, label: 'Nhóm quyền' },
+      { key: 'admin-configuration', icon: <SettingOutlined />, label: 'Cấu hình hệ thống' },
       { key: 'admin-audit-logs', icon: <AuditOutlined />, label: 'Nhật ký thao tác' },
     ],
   },
@@ -140,7 +153,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
       >
         <div className="app-logo">
           <img className="app-logo-image" src={logoUrl} alt="C360" />
-          {!collapsed ? <span>C360</span> : null}
+          {!collapsed ? <div className="app-brand"><strong>Customer 360</strong><small>Quản trị khách hàng</small></div> : null}
           <Tooltip title={collapsed ? 'Mở rộng menu' : 'Thu gọn menu'}>
             <Button
               type="text"
@@ -162,10 +175,16 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
             localStorage.setItem('c360_open_menu_groups', JSON.stringify(keys));
           }}
           onClick={({ key }) => {
-            if (['overview', 'customers', 'data', 'admin'].includes(key)) return;
+            if (['overview', 'customers', 'analytics', 'data', 'admin'].includes(key)) return;
             onMenuChange(key);
           }}
         />
+        {!collapsed ? (
+          <div className="app-sidebar-footer">
+            <span className="app-sidebar-live"><i /> Hệ thống trực tuyến</span>
+            <small>Dữ liệu được phân quyền theo đơn vị</small>
+          </div>
+        ) : null}
       </Sider>
       <Layout className="app-main" style={{ marginLeft: siderWidth }}>
         <Header className="app-header">

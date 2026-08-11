@@ -1,12 +1,13 @@
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from io import BytesIO
+from pathlib import Path
 from time import monotonic
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Query, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from sqlalchemy import and_, asc, case, desc, func, or_, text
+from sqlalchemy import DateTime as SQLDateTime, Float, Integer, Numeric, and_, asc, case, desc, distinct, func, or_, text
 from sqlalchemy.orm import Session
 
 from app.customer_processing import (
@@ -21,6 +22,7 @@ from app.database import get_db
 from app.models import (
     BC06CustomerClassification,
     BC29CustomerCreditRisk,
+    BusinessMatchingRule,
     CustomerPeriodBranchDetail,
     CustomerPeriodExchangeRate,
     CustomerPeriodProfile,
@@ -28,6 +30,7 @@ from app.models import (
     CustomerProcessingOptionalFile,
     CustomerSourceReconciliation,
     DP01DepositAccount,
+    GL02LedgerTransaction,
     ImportFile,
     ImportBatch,
     LN01Loan,
@@ -35,7 +38,12 @@ from app.models import (
     OrgDepartment,
     PF10LoanProfitability,
     PF14AccountBalance,
+    RR01HandledRiskLoan,
+    SupplementalBaoLanhRecord,
+    SupplementalBillPaymentTransaction,
+    SupplementalOABRecord,
     SystemUser,
+    SystemConfigurationEntry,
 )
 
 
@@ -57,7 +65,15 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "MPGD": "primary_pgd_code",
     "MKH": "ma_kh",
     "TENKH": "ten_kh",
+    "TEN_CHUDN": "ten_chu_doanh_nghiep",
+    "CCCD": "so_cccd",
+    "MST": "ma_so_thue",
+    "NGAY_THANHLAP": "ngay_thanh_lap",
+    "DIACHI": "dia_chi",
     "LOAIKH": "loai_khach_hang",
+    "GIOITINH": "gioi_tinh",
+    "NAM_SINH": "ngay_sinh",
+    "NGHE NGHIEP": "nghe_nghiep",
     "DIEN_THOAI": "telephone",
     "MACB": "ma_cb",
     "TENCB": "ten_can_bo",
@@ -74,10 +90,17 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "PHI_CHUYENTIEN": "phi_chuyen_tien",
     "PHI_NHDT": "phi_nhdt",
     "ABIC_BATD": "abic_batd",
+    "PHI_KDNT": "phi_kdnt",
+    "PHI_LC": "phi_lc",
+    "PHI_TTQT": "phi_ttqt",
+    "TTQT": "ttqt",
     "DPRR_CHUNG_TT": "dprr_chung_tt",
     "DPRR_CHUNG_LK": "dprr_chung_lk",
     "DPRR_CUTHE_TT": "dprr_cuthe_tt",
     "DPRR_CUTHE_LK": "dprr_cuthe_lk",
+    "DUNO_XLRR": "du_no_xlrr",
+    "DS_THUNO_XLRR": "ds_thu_no_xlrr",
+    "NGAY_UPDATE": "last_tktt_transaction_at",
     "TKSODEP": "tk_so_dep",
     "AGRIBANKPLUS": "agribank_plus",
     "OTT": "tin_nhan_ott",
@@ -88,6 +111,12 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "THE_LOCVIET": "the_td_loc_viet",
     "THE_TDQT": "the_td_quoc_te",
     "LOATHANTAI": "loa_bien_dong_so_du",
+    "THUHO_DIEN": "thuho_dien",
+    "THUHO_NUOC": "thuho_nuoc",
+    "THUHO_DT": "thuho_dt",
+    "HKD_TK": "hkd_tk",
+    "ABIC_BATK": "abic_batk",
+    "ABIC_BATHE": "abic_bathe",
 }
 
 
@@ -129,12 +158,22 @@ def _source_dictionary_coverage(db: Session, period_key: str) -> dict[str, tuple
             func.coalesce(BC29CustomerCreditRisk.period_provision_amount, 0) != 0,
         ),
     ).filter(BC29CustomerCreditRisk.period_key == period_key).one()
+    rr01 = db.query(
+        func.count(func.distinct(RR01HandledRiskLoan.customer_code)).filter(
+            func.coalesce(RR01HandledRiskLoan.current_principal, 0) != 0,
+        ),
+        func.count(func.distinct(RR01HandledRiskLoan.customer_code)).filter(
+            (func.coalesce(RR01HandledRiskLoan.recovered_principal_period, 0)
+             + func.coalesce(RR01HandledRiskLoan.recovered_interest_period, 0)) != 0,
+        ),
+    ).filter(RR01HandledRiskLoan.period_key == period_key).one()
     return {
         "SODU_TKTT": ("pf14_account_balances.monthlyendbalance", int(pf14[0] or 0)),
         "SODU_TGCKHBQ": ("pf14_account_balances.averagebalance", int(pf14[1] or 0)),
         "PHAN_LOAIKH": ("bc06_customer_classifications.segment_branch", int(bc06_segment)),
         "DUNO_XAU": ("bc29_customer_credit_risks.total_outstanding", int(bc29[0] or 0)),
-        "DUNO_XLRR": ("bc29_customer_credit_risks.handled_risk_amount", int(bc29[1] or 0)),
+        "DUNO_XLRR": ("rr01_handled_risk_loans.current_principal", int(rr01[0] or 0)),
+        "DS_THUNO_XLRR": ("rr01_handled_risk_loans.recovered_principal_period + recovered_interest_period", int(rr01[1] or 0)),
         "DPRR_TT": ("bc29_customer_credit_risks.period_provision_amount", int(bc29[2] or 0)),
     }
 _PROFILE_COVERAGE_CACHE: dict[str, tuple[float, dict]] = {}
@@ -269,6 +308,13 @@ PROFILE_SERVICE_FIELDS = {
     "bao_lanh",
     "loa_bien_dong_so_du",
     "phat_hanh_lc",
+    "thuho_dien",
+    "thuho_nuoc",
+    "thuho_dt",
+    "ttqt",
+    "hkd_tk",
+    "abic_batk",
+    "abic_bathe",
 }
 
 GROUP_DEPOSIT_THRESHOLD = 1_000_000_000
@@ -455,6 +501,9 @@ def profile_brief_fields() -> list[str]:
         "phi_chuyen_tien",
         "phi_nhdt",
         "abic_batd",
+        "phi_kdnt",
+        "phi_lc",
+        "phi_ttqt",
         "dprr_chung_tt",
         "dprr_chung_lk",
         "dprr_cuthe_tt",
@@ -807,6 +856,8 @@ def profile_field_coverage(
         condition = column.isnot(None)
         if hasattr(column.type, "length"):
             condition = and_(condition, func.trim(column) != "")
+        elif isinstance(column.type, (Integer, Numeric, Float)):
+            condition = and_(condition, column != 0)
         expressions.append(func.count(CustomerPeriodProfile.id).filter(condition).label(code))
         codes.append(code)
     row = (
@@ -986,6 +1037,8 @@ def list_source_reconciliations(
     source_type: str | None = None,
     branch_code: str | None = None,
     reason_code: str | None = None,
+    keyword: str | None = None,
+    latest_job_only: bool = False,
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=100, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -993,12 +1046,24 @@ def list_source_reconciliations(
     query = db.query(CustomerSourceReconciliation).filter(
         CustomerSourceReconciliation.period_key == period_key
     )
+    if latest_job_only:
+        latest_job_id = db.query(func.max(CustomerSourceReconciliation.processing_job_id)).filter(
+            CustomerSourceReconciliation.period_key == period_key
+        ).scalar()
+        if latest_job_id is not None:
+            query = query.filter(CustomerSourceReconciliation.processing_job_id == latest_job_id)
     if source_type:
         query = query.filter(CustomerSourceReconciliation.source_type == source_type.strip().upper())
     if branch_code:
         query = query.filter(CustomerSourceReconciliation.branch_code == branch_code.strip())
     if reason_code:
         query = query.filter(CustomerSourceReconciliation.reason_code == reason_code.strip().upper())
+    if keyword and keyword.strip():
+        pattern = f"%{keyword.strip()}%"
+        query = query.filter(or_(
+            CustomerSourceReconciliation.customer_core_code.ilike(pattern),
+            CustomerSourceReconciliation.customer_name.ilike(pattern),
+        ))
     total = query.count()
     rows = (
         query.order_by(
@@ -1021,6 +1086,148 @@ def list_source_reconciliations(
         "page": page,
         "page_size": page_size,
     }
+
+
+@router.delete("/optional-files/{optional_file_id}")
+def delete_optional_file(optional_file_id: int, db: Session = Depends(get_db)):
+    item = db.query(CustomerProcessingOptionalFile).filter(
+        CustomerProcessingOptionalFile.id == optional_file_id
+    ).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Không tìm thấy file bổ sung")
+    running_job = db.query(CustomerProcessingJob.id).filter(
+        CustomerProcessingJob.period_key == item.period_key,
+        CustomerProcessingJob.status.in_(["queued", "processing"]),
+    ).first()
+    if running_job:
+        raise HTTPException(status_code=409, detail="Không thể xóa khi kỳ đang có job xử lý")
+    for model in (SupplementalBaoLanhRecord, SupplementalOABRecord, SupplementalBillPaymentTransaction):
+        db.query(model).filter(model.optional_file_id == item.id).delete(synchronize_session=False)
+    file_path = Path(item.file_path) if item.file_path else None
+    period_key = item.period_key
+    db.delete(item)
+    db.commit()
+    if file_path and file_path.is_file():
+        try:
+            file_path.unlink()
+        except OSError:
+            pass
+    return {"deleted": True, "id": optional_file_id, "period_key": period_key}
+
+
+RECONCILIATION_REASON_LABELS = {
+    "NOT_FOUND_IN_CIF": "Không tìm thấy mã khách hàng trong Kho CIF",
+    "INVALID_CUSTOMER_CODE": "Mã khách hàng không đúng định dạng",
+    "MISSING_CORE_CODE": "Thiếu mã khách hàng lõi",
+    "MISSING_CUSTOMER_CODE": "Thiếu mã khách hàng",
+    "DUPLICATE_CIF": "Mã khách hàng trùng trong Kho CIF",
+    "BRANCH_CONFLICT": "Chi nhánh nguồn không khớp thông tin quản lý",
+}
+
+
+@router.get("/reconciliations-export")
+def export_source_reconciliations(
+    period_key: str = Query(...),
+    source_type: str | None = None,
+    branch_code: str | None = None,
+    reason_code: str | None = None,
+    keyword: str | None = None,
+    latest_job_only: bool = True,
+    db: Session = Depends(get_db),
+):
+    query = db.query(CustomerSourceReconciliation).filter(
+        CustomerSourceReconciliation.period_key == period_key
+    )
+    if latest_job_only:
+        latest_job_id = db.query(func.max(CustomerSourceReconciliation.processing_job_id)).filter(
+            CustomerSourceReconciliation.period_key == period_key
+        ).scalar()
+        if latest_job_id is not None:
+            query = query.filter(CustomerSourceReconciliation.processing_job_id == latest_job_id)
+    if source_type:
+        query = query.filter(CustomerSourceReconciliation.source_type == source_type.strip().upper())
+    if branch_code:
+        query = query.filter(CustomerSourceReconciliation.branch_code == branch_code.strip())
+    if reason_code:
+        query = query.filter(CustomerSourceReconciliation.reason_code == reason_code.strip().upper())
+    if keyword and keyword.strip():
+        pattern = f"%{keyword.strip()}%"
+        query = query.filter(or_(
+            CustomerSourceReconciliation.customer_core_code.ilike(pattern),
+            CustomerSourceReconciliation.customer_name.ilike(pattern),
+        ))
+    rows = query.order_by(
+        CustomerSourceReconciliation.source_type,
+        CustomerSourceReconciliation.branch_code,
+        CustomerSourceReconciliation.customer_core_code,
+    ).all()
+
+    workbook = Workbook()
+    worksheet = workbook.active
+    worksheet.title = "Doi chieu CIF"
+    headers = [
+        "STT", "Kỳ dữ liệu", "Mã KH lõi", "Tên khách hàng", "Nguồn", "Chi nhánh",
+        "Lý do chưa khớp", "Mã lý do", "Số dòng nguồn", "Số tiền nguồn",
+        "Trạng thái", "Người rà soát", "Thời gian rà soát", "Thời gian ghi nhận",
+    ]
+    worksheet.append(headers)
+    for index, row in enumerate(rows, 1):
+        worksheet.append([
+            index, row.period_key, row.customer_core_code, row.customer_name, row.source_type,
+            row.branch_code, RECONCILIATION_REASON_LABELS.get(row.reason_code, row.reason_code),
+            row.reason_code, row.source_row_count, float(row.source_amount or 0), row.status,
+            row.reviewed_by, row.reviewed_at.isoformat() if row.reviewed_at else None,
+            row.created_at.isoformat() if row.created_at else None,
+        ])
+    worksheet.freeze_panes = "A2"
+    worksheet.auto_filter.ref = worksheet.dimensions
+    widths = [8, 14, 18, 34, 12, 12, 48, 25, 16, 20, 16, 24, 22, 22]
+    for index, width in enumerate(widths, 1):
+        worksheet.column_dimensions[chr(64 + index)].width = width
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    filename = f"doi_chieu_cif_{period_key}.xlsx"
+    return StreamingResponse(
+        output,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.patch("/reconciliations/{reconciliation_id}")
+def review_source_reconciliation(
+    reconciliation_id: int,
+    payload: dict = Body(...),
+    db: Session = Depends(get_db),
+):
+    row = db.query(CustomerSourceReconciliation).filter(
+        CustomerSourceReconciliation.id == reconciliation_id
+    ).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Không tìm thấy bản ghi đối chiếu")
+
+    next_status = str(payload.get("status") or "").strip().lower()
+    allowed_statuses = {"pending", "reviewed", "resolved", "ignored"}
+    if next_status not in allowed_statuses:
+        raise HTTPException(status_code=400, detail="Trạng thái xử lý không hợp lệ")
+
+    details = dict(row.details or {})
+    note = str(payload.get("note") or "").strip()
+    if note:
+        details["review_note"] = note
+    row.details = details
+    row.status = next_status
+    row.reviewed_by = str(payload.get("reviewed_by") or "Người dùng hệ thống").strip()
+    row.reviewed_at = datetime.now(timezone.utc) if next_status != "pending" else None
+    db.commit()
+    db.refresh(row)
+    fields = [
+        "id", "processing_job_id", "period_key", "source_type", "branch_code",
+        "customer_core_code", "customer_name", "source_row_count", "source_amount",
+        "reason_code", "status", "details", "reviewed_by", "reviewed_at", "created_at",
+    ]
+    return serialize_model(row, fields)
 
 
 @router.get("/profiles")
@@ -1118,6 +1325,9 @@ def list_profiles(
         "managing_department_name",
         "so_du_tien_gui",
         "doanh_so_chuyen_tien_ve_tk",
+        "last_tktt_transaction_at",
+        "tktt_inactive_days",
+        "tktt_activity_status",
         "so_du_tien_vay",
         "du_no_ngan_han",
         "du_no_ngan_han_bq",
@@ -1129,6 +1339,8 @@ def list_profiles(
         "pf10_interest",
         "pf10_accruals",
         "pf10_book_correction_interest",
+        "du_no_xlrr",
+        "ds_thu_no_xlrr",
         "loai_vay",
         "so_du_tgtt_binh_quan",
         "thau_chi",
@@ -1145,6 +1357,12 @@ def list_profiles(
         "bao_lanh",
         "loa_bien_dong_so_du",
         "phat_hanh_lc",
+        "thuho_dien",
+        "thuho_nuoc",
+        "hkd_tk",
+        "hkd_account_numbers",
+        "abic_batk",
+        "abic_bathe",
         "ma_cb",
         "ten_can_bo",
         "officer_employee_code",
@@ -1185,7 +1403,7 @@ def get_customer_financial_metrics(
     db: Session = Depends(get_db),
 ):
     metric_fields = [
-        "phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd",
+        "phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt",
         "dprr_chung_tt", "dprr_chung_lk", "dprr_cuthe_tt", "dprr_cuthe_lk",
     ]
     query = db.query(CustomerPeriodBranchDetail).filter(
@@ -1213,6 +1431,121 @@ def get_customer_financial_metrics(
         for field in metric_fields
     }
     return {"period_key": period_key, "ma_kh": ma_kh, "totals": totals, "branches": branches}
+
+
+@router.get("/rr01-handled-risk")
+def get_rr01_handled_risk(
+    period_key: str = Query(...), ma_kh: str = Query(...), branch_code: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(RR01HandledRiskLoan).filter(
+        RR01HandledRiskLoan.period_key == period_key,
+        RR01HandledRiskLoan.customer_code == ma_kh,
+    )
+    if branch_code:
+        query = query.filter(RR01HandledRiskLoan.branch_code == branch_code)
+    rows = query.order_by(RR01HandledRiskLoan.lav_number, RR01HandledRiskLoan.lds_number).all()
+    fields = [
+        "id", "branch_code", "customer_code", "customer_name", "lav_number", "lds_number", "currency_code",
+        "customer_type", "disbursement_date", "maturity_date", "vamc_flag", "risk_handling_date",
+        "original_principal", "original_accrued_interest", "recovered_principal_before_period",
+        "current_principal", "current_interest", "short_term_principal", "medium_term_principal",
+        "long_term_principal", "recovered_principal_period", "recovered_interest_period",
+        "real_estate_amount", "movable_asset_amount", "other_asset_amount",
+    ]
+    groups = {}
+    for row in rows:
+        key = row.lav_number or "CHUA_XAC_DINH"
+        item = groups.setdefault(key, {"lav_number": row.lav_number, "lds_count": 0, "current_principal": Decimal(0), "recovered_amount": Decimal(0)})
+        item["lds_count"] += 1
+        item["current_principal"] += row.current_principal or 0
+        item["recovered_amount"] += (row.recovered_principal_period or 0) + (row.recovered_interest_period or 0)
+    return {
+        "period_key": period_key, "ma_kh": ma_kh,
+        "total_current_principal": serialize_value(sum((row.current_principal or 0 for row in rows), Decimal(0))),
+        "total_recovered_amount": serialize_value(sum(((row.recovered_principal_period or 0) + (row.recovered_interest_period or 0) for row in rows), Decimal(0))),
+        "lav_groups": [{**value, "current_principal": serialize_value(value["current_principal"]), "recovered_amount": serialize_value(value["recovered_amount"])} for value in groups.values()],
+        "items": [serialize_model(row, fields) for row in rows],
+    }
+
+
+@router.get("/gl02-account-activity")
+def get_gl02_account_activity(
+    period_key: str = Query(...), ma_kh: str = Query(...), branch_code: str | None = None,
+    db: Session = Depends(get_db),
+):
+    base_filters = [
+        GL02LedgerTransaction.period_key == period_key,
+        GL02LedgerTransaction.customer_code == ma_kh,
+        GL02LedgerTransaction.account_code == "421101",
+        func.coalesce(GL02LedgerTransaction.transaction_type, "Normal") == "Normal",
+    ]
+    if branch_code:
+        base_filters.append(GL02LedgerTransaction.customer_branch_code == branch_code)
+
+    daily_rows = db.query(
+        GL02LedgerTransaction.transaction_date.label("transaction_date"),
+        func.sum(func.coalesce(GL02LedgerTransaction.credit_amount, 0)).label("credit_amount"),
+        func.sum(func.coalesce(GL02LedgerTransaction.debit_amount, 0)).label("debit_amount"),
+        func.count(GL02LedgerTransaction.id).label("transaction_count"),
+        func.max(func.coalesce(GL02LedgerTransaction.created_datetime, func.cast(GL02LedgerTransaction.transaction_date, SQLDateTime))).label("last_transaction_at"),
+    ).filter(*base_filters).group_by(GL02LedgerTransaction.transaction_date).order_by(GL02LedgerTransaction.transaction_date).all()
+
+    branch_rows = db.query(
+        GL02LedgerTransaction.customer_branch_code.label("branch_code"),
+        func.sum(func.coalesce(GL02LedgerTransaction.credit_amount, 0)).label("credit_amount"),
+        func.sum(func.coalesce(GL02LedgerTransaction.debit_amount, 0)).label("debit_amount"),
+        func.count(GL02LedgerTransaction.id).label("transaction_count"),
+        func.count(distinct(GL02LedgerTransaction.transaction_date)).label("active_days"),
+        func.max(func.coalesce(GL02LedgerTransaction.created_datetime, func.cast(GL02LedgerTransaction.transaction_date, SQLDateTime))).label("last_transaction_at"),
+    ).filter(*base_filters).group_by(GL02LedgerTransaction.customer_branch_code).order_by(GL02LedgerTransaction.customer_branch_code).all()
+
+    history_rows = db.query(
+        GL02LedgerTransaction.period_key.label("period_key"),
+        ImportBatch.period_date.label("period_date"),
+        func.sum(func.coalesce(GL02LedgerTransaction.credit_amount, 0)).label("credit_amount"),
+        func.sum(func.coalesce(GL02LedgerTransaction.debit_amount, 0)).label("debit_amount"),
+        func.count(GL02LedgerTransaction.id).label("transaction_count"),
+        func.count(distinct(GL02LedgerTransaction.transaction_date)).label("active_days"),
+        func.max(func.coalesce(GL02LedgerTransaction.created_datetime, func.cast(GL02LedgerTransaction.transaction_date, SQLDateTime))).label("last_transaction_at"),
+    ).join(ImportBatch, ImportBatch.id == GL02LedgerTransaction.import_batch_id).filter(
+        GL02LedgerTransaction.customer_code == ma_kh,
+        GL02LedgerTransaction.account_code == "421101",
+        func.coalesce(GL02LedgerTransaction.transaction_type, "Normal") == "Normal",
+        *([GL02LedgerTransaction.customer_branch_code == branch_code] if branch_code else []),
+    ).group_by(GL02LedgerTransaction.period_key, ImportBatch.period_date).order_by(GL02LedgerTransaction.period_key.desc()).limit(12).all()
+
+    def activity(period_date, last_transaction_at):
+        if not period_date or not last_transaction_at:
+            return None, "inactive"
+        days = max(0, (period_date - last_transaction_at.date()).days)
+        return days, "active" if days <= 7 else "low_activity" if days <= 30 else "inactive"
+
+    daily = [{
+        "transaction_date": serialize_value(row.transaction_date),
+        "credit_amount": serialize_value(row.credit_amount), "debit_amount": serialize_value(row.debit_amount),
+        "net_amount": serialize_value((row.credit_amount or 0) - (row.debit_amount or 0)),
+        "transaction_count": row.transaction_count, "last_transaction_at": serialize_value(row.last_transaction_at),
+    } for row in daily_rows]
+    branches = [{
+        "branch_code": row.branch_code, "credit_amount": serialize_value(row.credit_amount),
+        "debit_amount": serialize_value(row.debit_amount),
+        "net_amount": serialize_value((row.credit_amount or 0) - (row.debit_amount or 0)),
+        "transaction_count": row.transaction_count, "active_days": row.active_days,
+        "last_transaction_at": serialize_value(row.last_transaction_at),
+    } for row in branch_rows if row.branch_code]
+    history = []
+    for row in history_rows:
+        inactive_days, status = activity(row.period_date, row.last_transaction_at)
+        history.append({
+            "period_key": row.period_key, "credit_amount": serialize_value(row.credit_amount),
+            "debit_amount": serialize_value(row.debit_amount),
+            "net_amount": serialize_value((row.credit_amount or 0) - (row.debit_amount or 0)),
+            "transaction_count": row.transaction_count, "active_days": row.active_days,
+            "last_transaction_at": serialize_value(row.last_transaction_at),
+            "inactive_days": inactive_days, "activity_status": status,
+        })
+    return {"period_key": period_key, "ma_kh": ma_kh, "daily": daily, "branches": branches, "history": history}
 
 
 @router.get("/pf10-loans")
@@ -1390,45 +1723,75 @@ def get_pf10_customer_loans(
     if branch_code:
         ln_scope = ln_scope.filter(LN01Loan.brcd == branch_code)
     ln_rows = ln_scope.all()
+    for item in items:
+        candidates = [row for row in ln_rows if row.brcd == item.get("branch_code")]
+        if len(candidates) > 1:
+            target = Decimal(str(item.get("end_of_month_balance") or 0))
+            candidates.sort(key=lambda row: abs(Decimal(row.du_no or 0) - target))
+        matched_ln = candidates[0] if candidates else None
+        item["lds_number"] = matched_ln.dsbsseq if matched_ln else None
+        item["approval_number"] = matched_ln.apprseq if matched_ln else None
+    def ln_raw(row, key):
+        return (row.raw_data or {}).get(key)
+
+    def ln_decimal(row, attr, raw_key):
+        value = getattr(row, attr, None)
+        if value is not None:
+            return value
+        raw = str(ln_raw(row, raw_key) or "").strip().strip("'")
+        try:
+            return Decimal(raw) if raw else Decimal(0)
+        except Exception:
+            return Decimal(0)
+
+    def ln_date(row, attr, raw_key):
+        value = getattr(row, attr, None)
+        if value is not None:
+            return value
+        raw = str(ln_raw(row, raw_key) or "").strip().strip("'")
+        try:
+            return date(int(raw[:4]), int(raw[4:6]), int(raw[6:8])) if len(raw) == 8 and raw != "00000000" else None
+        except Exception:
+            return None
+
     principal_due = sum(
-        (row.next_repayment_amount or 0)
+        ln_decimal(row, "next_repayment_amount", "NEXT_REPAY_AMOUNT")
         for row in ln_rows
-        if row.next_repayment_date and next_month_start <= row.next_repayment_date < next_month_end
+        if (next_date := ln_date(row, "next_repayment_date", "NEXT_REPAY_DATE"))
+        and next_month_start <= next_date < next_month_end
     )
     interest_due = sum(
-        (row.total_interest_repayment_amount or row.interest_amount or 0)
+        (ln_decimal(row, "total_interest_repayment_amount", "TOTAL_INTEREST_REPAY_AMOUNT")
+         or ln_decimal(row, "interest_amount", "INTEREST_AMOUNT"))
         for row in ln_rows
-        if row.next_interest_repayment_date
-        and next_month_start <= row.next_interest_repayment_date < next_month_end
+        if (next_date := ln_date(row, "next_interest_repayment_date", "NEXT_INT_REPAY_DATE"))
+        and next_month_start <= next_date < next_month_end
     )
-    overdue_interest = sum((row.pastdue_interest_amount or 0) for row in ln_rows)
-    current_groups = sorted({str(row.debt_group) for row in ln_rows if row.debt_group})
+    overdue_interest = sum(ln_decimal(row, "pastdue_interest_amount", "PASTDUE_INTEREST_AMOUNT") for row in ln_rows)
+    current_groups = sorted({str(row.debt_group or str(ln_raw(row, "NHOM_NO") or "").strip().strip("'")).lstrip("0") or "0" for row in ln_rows if row.debt_group or ln_raw(row, "NHOM_NO")})
     previous_ln_period = (
         db.query(func.max(LN01Loan.period_key))
         .filter(LN01Loan.period_key < period_key, LN01Loan.custseq == ma_kh)
         .scalar()
     )
-    previous_group_query = db.query(LN01Loan.debt_group).filter(
+    previous_group_query = db.query(LN01Loan).filter(
         LN01Loan.period_key == previous_ln_period,
         LN01Loan.custseq == ma_kh,
-        LN01Loan.debt_group.isnot(None),
     ) if previous_ln_period else None
     if previous_group_query is not None and branch_code:
         previous_group_query = previous_group_query.filter(LN01Loan.brcd == branch_code)
-    previous_groups = sorted({str(row[0]) for row in previous_group_query.all()}) if previous_group_query is not None else []
+    previous_groups = sorted({
+        str(row.debt_group or str((row.raw_data or {}).get("NHOM_NO") or "").strip().strip("'")).lstrip("0") or "0"
+        for row in previous_group_query.all()
+        if row.debt_group or (row.raw_data or {}).get("NHOM_NO")
+    }) if previous_group_query is not None else []
     obligations = {
-        "source_available": any(
-            row.next_repayment_date
-            or row.next_interest_repayment_date
-            or row.pastdue_interest_amount is not None
-            or row.debt_group
-            for row in ln_rows
-        ),
+        "source_available": bool(ln_rows),
         "next_month": next_month_start.strftime("%m/%Y"),
         "principal_due": serialize_value(principal_due),
         "interest_due": serialize_value(interest_due),
         "overdue_interest": serialize_value(overdue_interest),
-        "overdue_loan_count": sum(1 for row in ln_rows if (row.pastdue_interest_amount or 0) > 0),
+        "overdue_loan_count": sum(1 for row in ln_rows if ln_decimal(row, "pastdue_interest_amount", "PASTDUE_INTEREST_AMOUNT") > 0),
         "current_debt_groups": current_groups,
         "previous_period": previous_ln_period,
         "previous_debt_groups": previous_groups,
@@ -1690,6 +2053,112 @@ def get_customer_deposit_accounts(
         "low_average_high_end_count": sum(1 for item in items if item["low_average_high_end"]),
         "high_average_end_drop_count": sum(1 for item in items if item["high_average_end_drop"]),
     }
+
+    # DP01 contains the real customer account/passbook number. PF14 ACCOUNTNO can
+    # be an analytical identifier, so it must not be presented as the account number.
+    dp_current = db.query(DP01DepositAccount).filter(
+        DP01DepositAccount.period_key == period_key,
+        DP01DepositAccount.ma_kh == ma_kh,
+        DP01DepositAccount.so_tai_khoan.isnot(None),
+    )
+    dp_previous = db.query(DP01DepositAccount).filter(
+        DP01DepositAccount.period_key == previous_period,
+        DP01DepositAccount.ma_kh == ma_kh,
+        DP01DepositAccount.so_tai_khoan.isnot(None),
+    ) if previous_period else None
+    if branch_code:
+        dp_current = dp_current.filter(DP01DepositAccount.branch_code == branch_code)
+        if dp_previous is not None:
+            dp_previous = dp_previous.filter(DP01DepositAccount.branch_code == branch_code)
+    # OSB is still a payment-account product and must remain in the TKTT group.
+    dp_current_rows = dp_current.all()
+    dp_previous_rows = dp_previous.all() if dp_previous is not None else []
+    dp_current_map = {(row.branch_code, row.so_tai_khoan): row for row in dp_current_rows}
+    dp_previous_map = {(row.branch_code, row.so_tai_khoan): row for row in dp_previous_rows}
+    dp_keys = set(dp_current_map) | set(dp_previous_map)
+
+    def dp_is_term(row):
+        try:
+            return int(str(row.month_term or "0").strip().strip("'") or 0) > 0
+        except ValueError:
+            return False
+
+    if category == "demand":
+        dp_keys = {key for key in dp_keys if not dp_is_term(dp_current_map.get(key) or dp_previous_map.get(key))}
+    elif category == "term":
+        dp_keys = {key for key in dp_keys if dp_is_term(dp_current_map.get(key) or dp_previous_map.get(key))}
+
+    pf_by_account = {(row.trbrcd, row.accountno): row for row in current_rows if row.accountno}
+    pf_by_product = {}
+    for row in current_rows:
+        if row.productcode:
+            pf_by_product.setdefault((row.trbrcd, str(row.productcode).strip()), []).append(row)
+
+    dp_items = []
+    for key in dp_keys:
+        current_dp, previous_dp = dp_current_map.get(key), dp_previous_map.get(key)
+        row = current_dp or previous_dp
+        pf = pf_by_account.get(key)
+        if not pf:
+            product_matches = pf_by_product.get((row.branch_code, str(row.dp_type_code or "").strip()), [])
+            pf = product_matches[0] if len(product_matches) == 1 else None
+        current_original = current_dp.current_balance if current_dp else Decimal(0)
+        previous_original = previous_dp.current_balance if previous_dp else Decimal(0)
+        current_rate = exchange_rate(period_key, (current_dp or row).ccy)
+        previous_rate = exchange_rate(previous_period, (previous_dp or row).ccy)
+        end_balance = (current_original or 0) * current_rate
+        previous_balance = (previous_original or 0) * previous_rate
+        average_original = pf.averagebalance if pf else None
+        average_balance = (average_original or 0) * current_rate
+        status = "closed" if current_dp is None else "new" if previous_dp is None else "active"
+        if current_dp and current_dp.close_date and current_dp.close_date <= profile.period_date:
+            status = "closed"
+        elif current_dp and str(current_dp.account_status or "").strip().lower() == "inactive":
+            status = "inactive"
+        dp_items.append({
+            "id": current_dp.id if current_dp else f"closed-dp-{previous_dp.id}",
+            "branch_code": row.branch_code,
+            "account_number": row.so_tai_khoan,
+            "product_code": row.dp_type_code,
+            "deposit_type": row.dp_type_name,
+            "deposit_type_source": "DP01",
+            "deposit_type_match": "account_number",
+            "account_source": "DP01",
+            "currency_code": row.ccy or "VND",
+            "exchange_rate": serialize_value(current_rate if current_dp else previous_rate),
+            "month_term": int(str(row.month_term or "0").strip().strip("'") or 0),
+            "opening_date": serialize_value(row.opening_date),
+            "maturity_date": serialize_value(row.maturity_date),
+            "end_balance": serialize_value(end_balance),
+            "end_balance_original": serialize_value(current_original),
+            "average_balance": serialize_value(average_balance) if pf else None,
+            "average_balance_original": serialize_value(average_original) if pf else None,
+            "previous_balance": serialize_value(previous_balance),
+            "previous_balance_original": serialize_value(previous_original),
+            "balance_change": serialize_value(end_balance - previous_balance),
+            "account_status": status,
+            "source_account_status": row.account_status,
+            "retention_rate": round(float(average_balance) * 100 / float(end_balance), 2) if pf and end_balance > 0 else None,
+            "low_average_high_end": False,
+            "high_average_end_drop": False,
+        })
+    dp_items.sort(key=lambda item: (status_order.get(item["account_status"], 9), item["branch_code"] or "", item["account_number"] or ""))
+    items = dp_items
+    total = len(items)
+    categories = []
+    for key, wants_term in (("demand", False), ("term", True)):
+        rows_for_category = [row for row in dp_current_rows if dp_is_term(row) == wants_term]
+        categories.append({
+            "key": key,
+            "account_count": len({row.so_tai_khoan for row in rows_for_category}),
+            "end_balance": serialize_value(sum(((row.current_balance or 0) * exchange_rate(period_key, row.ccy) for row in rows_for_category), Decimal(0))),
+            "average_balance": serialize_value(sum((Decimal(str(item.get("average_balance") or 0)) for item in dp_items if dp_is_term(dp_current_map.get((item["branch_code"], item["account_number"])) or dp_previous_map.get((item["branch_code"], item["account_number"]))) == wants_term), Decimal(0))),
+            "branch_count": len({row.branch_code for row in rows_for_category}),
+        })
+    analytics["active"] = sum(1 for item in dp_items if item["account_status"] == "active")
+    analytics["inactive"] = sum(1 for item in dp_items if item["account_status"] == "inactive")
+    analytics["new"] = sum(1 for item in dp_items if item["account_status"] == "new")
+    analytics["closed"] = sum(1 for item in dp_items if item["account_status"] == "closed")
     start = (page - 1) * page_size
     items = items[start:start + page_size]
 
@@ -2127,7 +2596,178 @@ def get_profile_history(
             "pf10_lds_count", "pf10_interest", "so_du_tgtt_binh_quan",
             *sorted(PROFILE_SERVICE_FIELDS),
         ]
-        return [serialize_model(item, fields) for item in rows]
+    else:
+        rows = (
+            db.query(CustomerPeriodProfile)
+            .filter(CustomerPeriodProfile.ma_kh == ma_kh)
+            .order_by(CustomerPeriodProfile.period_key)
+            .all()
+        )
+        fields = [
+            "id", "period_key", "period_date", "ma_kh", "primary_branch_code",
+            "ten_kh", "loai_khach_hang", "so_du_tien_gui", "so_du_tien_vay",
+            "du_no_ngan_han", "du_no_ngan_han_bq", "du_no_trung_dai_han",
+            "du_no_trung_dai_han_bq", "du_no_thau_chi", "du_no_thau_chi_bq",
+            "pf10_lds_count", "pf10_interest", "so_du_tgtt_binh_quan",
+            "doanh_so_chuyen_tien_ve_tk", "phi_bao_lanh", "phi_chuyen_tien",
+            "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt", "dprr_chung_tt", "dprr_chung_lk",
+            "dprr_cuthe_tt", "dprr_cuthe_lk", "du_no_xlrr", "ds_thu_no_xlrr",
+            *sorted(PROFILE_SERVICE_FIELDS),
+        ]
+    return [serialize_model(item, fields) for item in rows]
+
+
+@router.get("/business-matching-rules")
+def list_business_matching_rules(source_type: str | None = None, db: Session = Depends(get_db)):
+    query = db.query(BusinessMatchingRule)
+    if source_type:
+        query = query.filter(BusinessMatchingRule.source_type == source_type.strip().upper())
+    rows = query.order_by(BusinessMatchingRule.rule_code, desc(BusinessMatchingRule.effective_from)).all()
+    fields = ["id", "rule_code", "rule_name", "source_type", "service_codes", "amount_equals",
+              "effective_from", "effective_to", "priority", "active", "description", "updated_by", "updated_at"]
+    return [serialize_model(row, fields) for row in rows]
+
+
+@router.get("/configuration-catalog")
+def get_configuration_catalog(db: Session = Depends(get_db)):
+    source_names = {
+        "DP01": "Tiền gửi và tài khoản", "LN01": "Dư nợ và khoản vay",
+        "CN05": "Sản phẩm dịch vụ", "PF10": "Hiệu quả khoản vay",
+        "PF14": "Số dư tài khoản", "BC06": "Phân hạng khách hàng",
+        "BC29": "Rủi ro tín dụng", "KH02": "Phát sinh phí",
+        "FTPLN": "FTP khoản vay theo ngày",
+    }
+    sources = [{
+        "code": code, "name": source_names.get(code, code), "required": True,
+        "extensions": ["csv", "xlsx"], "configuration_status": "code_config",
+    } for code in REQUIRED_FILE_TYPES]
+    sources.extend([
+        {"code": "CIF", "name": "Kho khách hàng nền", "required": False, "extensions": ["csv", "xls", "xlsx"], "configuration_status": "code_config"},
+        {"code": "RR01", "name": "Nợ xử lý rủi ro", "required": False, "extensions": ["csv", "xlsx"], "configuration_status": "code_config"},
+        {"code": "GL02", "name": "Giao dịch sổ cái", "required": False, "extensions": ["csv", "xlsx"], "configuration_status": "code_config"},
+        {"code": "BILLPAYMENT", "name": "Giao dịch Bill Payment", "required": False, "extensions": ["xls", "xlsx"], "configuration_status": "database_config"},
+        {"code": "BAO_LANH", "name": "Bảo lãnh và LC bổ sung", "required": False, "extensions": ["xls", "xlsx"], "configuration_status": "code_config"},
+        {"code": "OAB_LOA", "name": "Loa biến động số dư", "required": False, "extensions": ["xlsx"], "configuration_status": "code_config"},
+    ])
+    formulas = [
+        {"code": "DS_TKTT", "source": "GL02", "condition": "LOCAC = 421101; TRTP = Normal", "formula": "SUM(CRAMOUNT)", "status": "code_config"},
+        {"code": "PHI_BAOLANH", "source": "KH02", "condition": "ACCTCD LIKE 7040%", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
+        {"code": "PHI_CHUYENTIEN", "source": "KH02", "condition": "ACCTCD bắt đầu 711001 hoặc 711002", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
+        {"code": "PHI_NHDT", "source": "KH02", "condition": "ACCTCD bắt đầu 711036, 711037, 711039", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
+        {"code": "ABIC_BATD", "source": "KH02", "condition": "ACCTCD LIKE 714%", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
+        {"code": "DPRR_CHUNG", "source": "LN01", "condition": "Nhóm nợ 1–4", "formula": "Dư nợ × 0,75%", "status": "code_config"},
+    ]
+    catalogs = [
+        {"group": "Loại vay PF10", "values": [{"code": key, "label": value} for key, value in PF10_LOAN_TYPE_LABELS.items()], "status": "code_config"},
+        {"group": "Trạng thái TKTT", "values": [{"code": "0–7", "label": "Đang hoạt động"}, {"code": "8–30", "label": "Ít hoạt động"}, {"code": ">30", "label": "Không hoạt động"}], "status": "code_config"},
+        {"group": "Ngưỡng phân nhóm", "values": [{"code": "DEPOSIT", "label": "1 tỷ"}, {"code": "LOAN", "label": "1 tỷ"}, {"code": "CASA", "label": "500 triệu"}], "status": "code_config"},
+        {"group": "Loại khách hàng bán lẻ", "values": [{"code": value, "label": value} for value in RETAIL_CUSTOMER_TYPES], "status": "code_config"},
+    ]
+    return {"sources": sources, "formulas": formulas, "catalogs": catalogs,
+            "rule_count": db.query(func.count(BusinessMatchingRule.id)).scalar() or 0}
+
+
+@router.put("/business-matching-rules/{rule_id}")
+def update_business_matching_rule(rule_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    row = db.query(BusinessMatchingRule).filter(BusinessMatchingRule.id == rule_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Không tìm thấy quy tắc nghiệp vụ")
+    if "service_codes" in payload:
+        codes = payload.get("service_codes") or []
+        row.service_codes = sorted({str(code).strip() for code in codes if str(code).strip()})
+    if "amount_equals" in payload:
+        row.amount_equals = Decimal(str(payload["amount_equals"])) if payload["amount_equals"] not in (None, "") else None
+    for key in ("rule_name", "description", "updated_by"):
+        if key in payload:
+            setattr(row, key, payload[key])
+    for key in ("active", "priority"):
+        if key in payload:
+            setattr(row, key, payload[key])
+    for key in ("effective_from", "effective_to"):
+        if key in payload:
+            setattr(row, key, date.fromisoformat(payload[key]) if payload[key] else None)
+    db.commit()
+    db.refresh(row)
+    return serialize_model(row, ["id", "rule_code", "rule_name", "source_type", "service_codes",
+                                 "amount_equals", "effective_from", "effective_to", "priority", "active",
+                                 "description", "updated_by", "updated_at"])
+
+
+@router.post("/business-matching-rules")
+def create_business_matching_rule(payload: dict = Body(...), db: Session = Depends(get_db)):
+    code = str(payload.get("rule_code") or "").strip().upper()
+    if not code or not payload.get("rule_name"):
+        raise HTTPException(status_code=400, detail="Mã và tên quy tắc là bắt buộc")
+    row = BusinessMatchingRule(
+        rule_code=code, rule_name=str(payload["rule_name"]).strip(),
+        source_type=str(payload.get("source_type") or "BILLPAYMENT").strip().upper(),
+        service_codes=sorted({str(value).strip() for value in payload.get("service_codes", []) if str(value).strip()}),
+        amount_equals=Decimal(str(payload["amount_equals"])) if payload.get("amount_equals") not in (None, "") else None,
+        effective_from=date.fromisoformat(payload["effective_from"]) if payload.get("effective_from") else None,
+        effective_to=date.fromisoformat(payload["effective_to"]) if payload.get("effective_to") else None,
+        priority=int(payload.get("priority") or 100), active=bool(payload.get("active", True)),
+        description=payload.get("description"), updated_by=payload.get("updated_by"),
+    )
+    db.add(row); db.commit(); db.refresh(row)
+    return serialize_model(row, ["id", "rule_code", "rule_name", "source_type", "service_codes", "amount_equals", "effective_from", "effective_to", "priority", "active", "description"])
+
+
+@router.delete("/business-matching-rules/{rule_id}")
+def delete_business_matching_rule(rule_id: int, db: Session = Depends(get_db)):
+    row = db.query(BusinessMatchingRule).filter(BusinessMatchingRule.id == rule_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Không tìm thấy quy tắc nghiệp vụ")
+    db.delete(row); db.commit()
+    return {"deleted": True, "id": rule_id}
+
+
+SYSTEM_CONFIG_FIELDS = ["id", "category", "config_code", "config_name", "source_type", "config_value",
+                        "description", "effective_from", "effective_to", "active", "updated_by", "updated_at"]
+
+
+@router.get("/system-configuration-entries")
+def list_system_configuration_entries(category: str | None = None, db: Session = Depends(get_db)):
+    query = db.query(SystemConfigurationEntry)
+    if category:
+        query = query.filter(SystemConfigurationEntry.category == category.strip().upper())
+    return [serialize_model(row, SYSTEM_CONFIG_FIELDS) for row in query.order_by(SystemConfigurationEntry.category, SystemConfigurationEntry.config_code).all()]
+
+
+@router.post("/system-configuration-entries")
+def create_system_configuration_entry(payload: dict = Body(...), db: Session = Depends(get_db)):
+    category = str(payload.get("category") or "").strip().upper()
+    code = str(payload.get("config_code") or "").strip().upper()
+    if category not in {"ACCOUNT_FORMULA", "BUSINESS_CATALOG"} or not code or not payload.get("config_name"):
+        raise HTTPException(status_code=400, detail="Nhóm, mã và tên cấu hình không hợp lệ")
+    row = SystemConfigurationEntry(category=category, config_code=code, config_name=str(payload["config_name"]).strip(),
+        source_type=str(payload.get("source_type") or "").strip().upper() or None,
+        config_value=payload.get("config_value") or {}, description=payload.get("description"),
+        effective_from=date.fromisoformat(payload["effective_from"]) if payload.get("effective_from") else None,
+        effective_to=date.fromisoformat(payload["effective_to"]) if payload.get("effective_to") else None,
+        active=bool(payload.get("active", True)), updated_by=payload.get("updated_by"))
+    db.add(row); db.commit(); db.refresh(row)
+    return serialize_model(row, SYSTEM_CONFIG_FIELDS)
+
+
+@router.put("/system-configuration-entries/{entry_id}")
+def update_system_configuration_entry(entry_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
+    row = db.query(SystemConfigurationEntry).filter(SystemConfigurationEntry.id == entry_id).first()
+    if not row:
+        raise HTTPException(status_code=404, detail="Không tìm thấy cấu hình")
+    for key in ("config_name", "source_type", "config_value", "description", "active", "updated_by"):
+        if key in payload: setattr(row, key, payload[key])
+    for key in ("effective_from", "effective_to"):
+        if key in payload: setattr(row, key, date.fromisoformat(payload[key]) if payload[key] else None)
+    db.commit(); db.refresh(row)
+    return serialize_model(row, SYSTEM_CONFIG_FIELDS)
+
+
+@router.delete("/system-configuration-entries/{entry_id}")
+def delete_system_configuration_entry(entry_id: int, db: Session = Depends(get_db)):
+    row = db.query(SystemConfigurationEntry).filter(SystemConfigurationEntry.id == entry_id).first()
+    if not row: raise HTTPException(status_code=404, detail="Không tìm thấy cấu hình")
+    db.delete(row); db.commit()
+    return {"deleted": True, "id": entry_id}
     rows = (
         db.query(CustomerPeriodProfile)
         .filter(CustomerPeriodProfile.ma_kh == ma_kh)
@@ -2426,13 +3066,23 @@ def get_profile_filter_options(
         .limit(1000)
         .all()
     )
+    active_users = db.query(SystemUser).filter(SystemUser.is_active.is_(True)).all()
+    configured_officer_codes = {
+        str(code).strip()
+        for user in active_users
+        for code in (user.credit_officer_code, user.employee_code)
+        if code and str(code).strip()
+    }
     officers = [
         {
             "value": row[0],
             "label": f"{row[1] or row[0]} ({row[2] or '-'} - {row[0]})",
         }
         for row in officer_rows
-        if row[0]
+        if row[0] and (
+            str(row[0]).strip() in configured_officer_codes
+            or (row[2] and str(row[2]).strip() in configured_officer_codes)
+        )
     ]
 
     return {
@@ -2490,6 +3140,7 @@ def list_branch_details(period_key: str = Query(...), ma_kh: str = Query(...), d
         "bao_lanh",
         "loa_bien_dong_so_du",
         "phat_hanh_lc",
+        "thuho_dien", "thuho_nuoc", "thuho_dt", "ttqt", "hkd_tk", "hkd_account_numbers", "abic_batk", "abic_bathe",
         "ma_cb",
         "ten_can_bo",
         "officer_employee_code",

@@ -1,8 +1,11 @@
 from datetime import date, datetime
 from decimal import Decimal
+from io import BytesIO
 from time import monotonic
 
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import StreamingResponse
+from openpyxl import Workbook
 from sqlalchemy import and_, case, desc, func, or_, text
 from sqlalchemy.orm import Query as OrmQuery, Session
 from sqlalchemy.orm import aliased
@@ -16,12 +19,15 @@ from app.models import (
     CustomerPeriodProfile,
     LN01Loan,
     PF14AccountBalance,
+    ReportSourceStatus,
 )
 
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 _INSIGHTS_CACHE: dict[tuple[str, str | None, str | None], tuple[float, dict]] = {}
 _SUMMARY_CACHE: dict[tuple[str, str | None, str | None], tuple[float, dict]] = {}
+_BUSINESS_CACHE: dict[tuple[str, str | None, str | None], tuple[float, dict]] = {}
+_BUSINESS_TREND_CACHE: dict[tuple[int, str | None, str | None], tuple[float, dict]] = {}
 _INSIGHTS_CACHE_TTL_SECONDS = 60
 
 ACTIVE_SERVICE_KEYS = [
@@ -37,7 +43,10 @@ ACTIVE_SERVICE_KEYS = [
     "bao_lanh",
     "loa_bien_dong_so_du",
     "phat_hanh_lc",
+    "ttqt",
+    "thuho_dt",
 ]
+FEE_FIELDS = ("phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt")
 
 # Đồng bộ với quy tắc cơ hội bán chéo / loại KH thực tế từ DP01.
 RETAIL_CUSTOMER_TYPES = ("Cá nhân", "KHCN")
@@ -55,6 +64,8 @@ SERVICE_LABELS = {
     "bao_lanh": "Bảo lãnh",
     "loa_bien_dong_so_du": "Loa biến động số dư",
     "phat_hanh_lc": "Phát hành LC",
+    "ttqt": "LC/TTQT/KDNT",
+    "thuho_dt": "Thu hộ điện thoại/viễn thông",
 }
 
 SERVICE_GROUPS = {
@@ -70,6 +81,8 @@ SERVICE_GROUPS = {
     "bao_lanh": "Bảo lãnh/TTQT",
     "loa_bien_dong_so_du": "Khác",
     "phat_hanh_lc": "Bảo lãnh/TTQT",
+    "ttqt": "Bảo lãnh/TTQT",
+    "thuho_dt": "Thanh toán",
 }
 
 CAMPAIGN_GROUP_PRIORITY = {
@@ -742,14 +755,402 @@ def dashboard_trends(
     }
 
 
+def _analytics_source(db: Session, period_key: str, ma_cn: str | None, ma_pgd: str | None):
+    """Return the correctly scoped, non-duplicated source for executive analytics."""
+    if ma_cn:
+        return _branch_detail_query(db, period_key, ma_cn, ma_pgd), CustomerPeriodBranchDetail
+    return _base_query(db, period_key, None, ma_pgd), CustomerPeriodProfile
+
+
+@router.get("/business-analytics")
+def dashboard_business_analytics(
+    period_key: str = Query(...),
+    include_rankings: bool = Query(default=True),
+    scope: BranchScope = Depends(get_branch_scope),
+    db: Session = Depends(get_db),
+):
+    """Compact aggregate shared by the executive dashboard and four domain pages."""
+    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:{int(include_rankings)}")
+    cached = _BUSINESS_CACHE.get(cache_key)
+    if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
+        return cached[1]
+    query, model = _analytics_source(db, period_key, scope.ma_cn, scope.ma_pgd)
+    fee_expr = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
+    service_expr = sum(func.coalesce(getattr(model, field), 0) for field in ACTIVE_SERVICE_KEYS)
+    service_count_exprs = []
+    for key in ACTIVE_SERVICE_KEYS:
+        condition = getattr(model, key) > 0
+        base_kind = SERVICE_PENETRATION_BASE.get(key)
+        if base_kind == "loan":
+            condition = and_(condition, func.coalesce(model.so_du_tien_vay, 0) > 0)
+        elif base_kind == "agribank_plus":
+            condition = and_(condition, model.agribank_plus > 0)
+        service_count_exprs.append(func.sum(case((condition, 1), else_=0)))
+    fee_count_exprs = [
+        func.sum(case((func.coalesce(getattr(model, field), 0) != 0, 1), else_=0))
+        for field in FEE_FIELDS
+    ]
+    totals = query.with_entities(
+        func.count(func.distinct(model.ma_kh)),
+        func.coalesce(func.sum(model.so_du_tien_gui), 0),
+        func.coalesce(func.sum(model.so_du_tgtt_binh_quan), 0),
+        func.coalesce(func.sum(model.doanh_so_chuyen_tien_ve_tk if model is CustomerPeriodProfile else model.doanh_so_cramt), 0),
+        func.coalesce(func.sum(model.so_du_tien_vay), 0),
+        func.coalesce(func.sum(model.du_no_ngan_han), 0),
+        func.coalesce(func.sum(model.du_no_trung_dai_han), 0),
+        func.coalesce(func.sum(model.du_no_thau_chi), 0),
+        func.coalesce(func.sum(model.dprr_chung_tt), 0),
+        func.coalesce(func.sum(model.dprr_chung_lk), 0),
+        func.coalesce(func.sum(model.dprr_cuthe_tt), 0),
+        func.coalesce(func.sum(model.dprr_cuthe_lk), 0),
+        func.coalesce(func.sum(getattr(model, "du_no_xlrr", 0)), 0) if model is CustomerPeriodProfile else 0,
+        func.coalesce(func.sum(getattr(model, "ds_thu_no_xlrr", 0)), 0) if model is CustomerPeriodProfile else 0,
+        func.coalesce(func.sum(model.phi_bao_lanh), 0),
+        func.coalesce(func.sum(model.phi_chuyen_tien), 0),
+        func.coalesce(func.sum(model.phi_nhdt), 0),
+        func.coalesce(func.sum(model.abic_batd), 0),
+        func.coalesce(func.sum(model.phi_kdnt), 0),
+        func.coalesce(func.sum(model.phi_lc), 0),
+        func.coalesce(func.sum(model.phi_ttqt), 0),
+        func.sum(case((service_expr > 0, 1), else_=0)),
+        func.sum(case((func.coalesce(model.so_du_tien_gui, 0) + func.coalesce(model.so_du_tgtt_binh_quan, 0) > 0, 1), else_=0)),
+        func.sum(case((func.coalesce(model.so_du_tien_vay, 0) > 0, 1), else_=0)),
+        *service_count_exprs,
+        func.sum(case((model.agribank_plus > 0, 1), else_=0)),
+        *fee_count_exprs,
+    ).one()
+
+    fee_count_start = 25 + len(ACTIVE_SERVICE_KEYS)
+    fee_rows = [
+        {"key": "phi_bao_lanh", "label": "Phí bảo lãnh", "value": float(totals[14] or 0), "customers": int(totals[fee_count_start] or 0)},
+        {"key": "phi_chuyen_tien", "label": "Phí chuyển tiền", "value": float(totals[15] or 0), "customers": int(totals[fee_count_start + 1] or 0)},
+        {"key": "phi_nhdt", "label": "Phí ngân hàng điện tử", "value": float(totals[16] or 0), "customers": int(totals[fee_count_start + 2] or 0)},
+        {"key": "abic_batd", "label": "Phí ABIC/BATĐ", "value": float(totals[17] or 0), "customers": int(totals[fee_count_start + 3] or 0)},
+        {"key": "phi_kdnt", "label": "Phí kinh doanh ngoại tệ", "value": float(totals[18] or 0), "customers": int(totals[fee_count_start + 4] or 0)},
+        {"key": "phi_lc", "label": "Phí LC", "value": float(totals[19] or 0), "customers": int(totals[fee_count_start + 5] or 0)},
+        {"key": "phi_ttqt", "label": "Phí thanh toán quốc tế", "value": float(totals[20] or 0), "customers": int(totals[fee_count_start + 6] or 0)},
+    ]
+    for item in fee_rows:
+        item["average"] = item["value"] / item["customers"] if item["customers"] else 0
+
+    branch_rows_query = db.query(
+        CustomerPeriodBranchDetail.branch_code,
+        func.count(func.distinct(CustomerPeriodBranchDetail.ma_kh)),
+        func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_gui), 0),
+        func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tgtt_binh_quan), 0),
+        func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_vay), 0),
+        func.coalesce(func.sum(
+            func.coalesce(CustomerPeriodBranchDetail.phi_bao_lanh, 0)
+            + func.coalesce(CustomerPeriodBranchDetail.phi_chuyen_tien, 0)
+            + func.coalesce(CustomerPeriodBranchDetail.phi_nhdt, 0)
+            + func.coalesce(CustomerPeriodBranchDetail.abic_batd, 0)
+            + func.coalesce(CustomerPeriodBranchDetail.phi_kdnt, 0)
+            + func.coalesce(CustomerPeriodBranchDetail.phi_lc, 0)
+            + func.coalesce(CustomerPeriodBranchDetail.phi_ttqt, 0)
+        ), 0),
+        func.count(func.distinct(CustomerPeriodBranchDetail.ma_cb)),
+    ).filter(CustomerPeriodBranchDetail.period_key == period_key)
+    if scope.ma_cn:
+        branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.branch_code == scope.ma_cn)
+    if scope.ma_pgd:
+        branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.ma_pgd == scope.ma_pgd)
+    branch_rows = branch_rows_query.group_by(CustomerPeriodBranchDetail.branch_code).all()
+
+    loan_group_rows = (
+        _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd)
+        .with_entities(
+            LN01Loan.debt_group,
+            func.count(func.distinct(LN01Loan.custseq)),
+            func.coalesce(func.sum(LN01Loan.du_no), 0),
+        )
+        .group_by(LN01Loan.debt_group)
+        .order_by(LN01Loan.debt_group)
+        .all()
+    )
+
+    service_counts = {key: int(totals[24 + index] or 0) for index, key in enumerate(ACTIVE_SERVICE_KEYS)}
+    result = {
+        "period_key": period_key,
+        "scope": {"branch_code": scope.ma_cn, "pgd_code": scope.ma_pgd},
+        "customer": {
+            "total": int(totals[0] or 0), "with_deposit": int(totals[22] or 0),
+            "with_loan": int(totals[23] or 0), "with_service": int(totals[21] or 0),
+        },
+        "deposit": {"term": float(totals[1] or 0), "casa_average": float(totals[2] or 0), "payment_turnover": float(totals[3] or 0)},
+        "credit": {
+            "total": float(totals[4] or 0), "short_term": float(totals[5] or 0),
+            "medium_long_term": float(totals[6] or 0), "overdraft": float(totals[7] or 0),
+        },
+        "risk": {
+            "general_period": float(totals[8] or 0), "general_accumulated": float(totals[9] or 0),
+            "specific_period": float(totals[10] or 0), "specific_accumulated": float(totals[11] or 0),
+            "written_off_balance": float(totals[12] or 0), "written_off_recovery": float(totals[13] or 0),
+            "debt_groups": [{"group": str(group or "Chưa xác định"), "customers": int(count or 0), "balance": float(balance or 0)} for group, count, balance in loan_group_rows],
+        },
+        "income": {"total_fee": float(sum(item["value"] for item in fee_rows)), "fees": fee_rows},
+        "services": _build_service_penetration_rows(
+            count_fn=lambda key, _base_kind: service_counts[key],
+            loan_base=int(totals[23] or 0), plus_base=int(totals[24 + len(ACTIVE_SERVICE_KEYS)] or 0),
+            total_customers=int(totals[0] or 0),
+        ),
+        "branches": [{
+            "branch_code": row[0], "customers": int(row[1] or 0), "deposit": float(row[2] or 0),
+            "casa": float(row[3] or 0), "loan": float(row[4] or 0), "fee": float(row[5] or 0),
+            "officers": int(row[6] or 0),
+        } for row in branch_rows],
+        "officers": _build_officer_leaderboard(db, period_key, scope.ma_cn, scope.ma_pgd) if include_rankings else [],
+    }
+    _BUSINESS_CACHE[cache_key] = (monotonic(), result)
+    return result
+
+
+@router.get("/business-trends")
+def dashboard_business_trends(
+    periods: int = Query(default=6, ge=2, le=24),
+    scope: BranchScope = Depends(get_branch_scope),
+    db: Session = Depends(get_db),
+):
+    cache_key = (periods, scope.ma_cn, scope.ma_pgd)
+    cached = _BUSINESS_TREND_CACHE.get(cache_key)
+    if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
+        return cached[1]
+    period_keys = [row[0] for row in (
+        db.query(CustomerPeriodProfile.period_key)
+        .distinct().order_by(desc(CustomerPeriodProfile.period_key)).limit(periods).all()
+    )]
+    period_keys.reverse()
+    model = CustomerPeriodBranchDetail if scope.ma_cn else CustomerPeriodProfile
+    query = db.query(model).filter(model.period_key.in_(period_keys))
+    if scope.ma_cn:
+        query = query.filter(CustomerPeriodBranchDetail.branch_code == scope.ma_cn)
+    if scope.ma_pgd:
+        query = query.filter(
+            CustomerPeriodBranchDetail.ma_pgd == scope.ma_pgd
+            if model is CustomerPeriodBranchDetail
+            else CustomerPeriodProfile.pgd_codes.ilike(f"%{scope.ma_pgd}%")
+        )
+    aggregate_rows = query.with_entities(
+        model.period_key,
+        func.count(func.distinct(model.ma_kh)),
+        func.coalesce(func.sum(model.so_du_tien_gui), 0),
+        func.coalesce(func.sum(model.so_du_tgtt_binh_quan), 0),
+        func.coalesce(func.sum(model.so_du_tien_vay), 0),
+        func.coalesce(func.sum(model.phi_bao_lanh), 0),
+        func.coalesce(func.sum(model.phi_chuyen_tien), 0),
+        func.coalesce(func.sum(model.phi_nhdt), 0),
+        func.coalesce(func.sum(model.abic_batd), 0),
+        func.coalesce(func.sum(model.phi_kdnt), 0),
+        func.coalesce(func.sum(model.phi_lc), 0),
+        func.coalesce(func.sum(model.phi_ttqt), 0),
+        func.coalesce(func.sum(model.dprr_chung_lk), 0),
+        func.coalesce(func.sum(model.dprr_cuthe_lk), 0),
+    ).group_by(model.period_key).all()
+    values_by_period = {row[0]: row for row in aggregate_rows}
+    source_rows = db.query(ReportSourceStatus.period_key, ReportSourceStatus.source_code, ReportSourceStatus.status).filter(
+        ReportSourceStatus.period_key.in_(period_keys)
+    ).all()
+    ready_sources: dict[str, set[str]] = {}
+    for source_period, source_code, source_status in source_rows:
+        if source_status in {"ready", "success", "partial"}:
+            ready_sources.setdefault(source_period, set()).add(source_code)
+    rows = []
+    for key in period_keys:
+        values = values_by_period.get(key)
+        if not values:
+            continue
+        rows.append({
+            "period_key": key, "customers": int(values[1] or 0),
+            "deposit": float(values[2] or 0), "casa": float(values[3] or 0),
+            "loan": float(values[4] or 0),
+            "fee": float(sum(float(value or 0) for value in values[5:12])),
+            "provision": float((values[12] or 0) + (values[13] or 0)),
+            "availability": {
+                "deposit": "PF14" in ready_sources.get(key, set()),
+                "casa": "PF14" in ready_sources.get(key, set()),
+                "loan": bool({"LN01", "PF10"} & ready_sources.get(key, set())),
+                "fee": "KH02" in ready_sources.get(key, set()),
+                "provision": bool({"LN01", "BC29"} & ready_sources.get(key, set())),
+                "customers": True,
+            },
+        })
+    result = {"items": rows, "scope": {"branch_code": scope.ma_cn, "pgd_code": scope.ma_pgd}}
+    _BUSINESS_TREND_CACHE[cache_key] = (monotonic(), result)
+    return result
+
+
+BUSINESS_DRILLDOWN_LABELS = {
+    "all": "Toàn bộ khách hàng trong phạm vi",
+    "deposit": "Khách hàng có tiền gửi",
+    "term_deposit": "Khách hàng có tiền gửi có kỳ hạn",
+    "casa": "Khách hàng có TGTT bình quân",
+    "payment_turnover": "Khách hàng có doanh số TKTT",
+    "loan": "Khách hàng có dư nợ",
+    "short_loan": "Khách hàng có dư nợ ngắn hạn",
+    "medium_long_loan": "Khách hàng có dư nợ trung dài hạn",
+    "overdraft": "Khách hàng có dư nợ thấu chi",
+    "fee": "Khách hàng phát sinh phí",
+    "guarantee_fee": "Khách hàng phát sinh phí bảo lãnh",
+    "transfer_fee": "Khách hàng phát sinh phí chuyển tiền",
+    "digital_fee": "Khách hàng phát sinh phí NHĐT",
+    "abic_fee": "Khách hàng phát sinh phí ABIC/BATĐ",
+    "fx_fee": "Khách hàng phát sinh phí kinh doanh ngoại tệ",
+    "lc_fee": "Khách hàng phát sinh phí LC",
+    "international_fee": "Khách hàng phát sinh phí thanh toán quốc tế",
+    "service": "Khách hàng sử dụng sản phẩm",
+    "no_service": "Khách hàng chưa sử dụng sản phẩm",
+    "risk": "Khách hàng có dự phòng",
+    "written_off": "Khách hàng có dư nợ XLRR",
+}
+
+
+def _business_drilldown_condition(model, metric: str):
+    deposit = func.coalesce(model.so_du_tien_gui, 0) + func.coalesce(model.so_du_tgtt_binh_quan, 0)
+    fee = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
+    services = sum(func.coalesce(getattr(model, field), 0) for field in ACTIVE_SERVICE_KEYS)
+    conditions = {
+        "all": text("1=1"),
+        "deposit": deposit > 0,
+        "term_deposit": func.coalesce(model.so_du_tien_gui, 0) > 0,
+        "casa": func.coalesce(model.so_du_tgtt_binh_quan, 0) > 0,
+        "payment_turnover": func.coalesce(
+            model.doanh_so_chuyen_tien_ve_tk if model is CustomerPeriodProfile else model.doanh_so_cramt, 0
+        ) > 0,
+        "loan": func.coalesce(model.so_du_tien_vay, 0) > 0,
+        "short_loan": func.coalesce(model.du_no_ngan_han, 0) > 0,
+        "medium_long_loan": func.coalesce(model.du_no_trung_dai_han, 0) > 0,
+        "overdraft": func.coalesce(model.du_no_thau_chi, 0) > 0,
+        "fee": fee != 0,
+        "guarantee_fee": func.coalesce(model.phi_bao_lanh, 0) != 0,
+        "transfer_fee": func.coalesce(model.phi_chuyen_tien, 0) != 0,
+        "digital_fee": func.coalesce(model.phi_nhdt, 0) != 0,
+        "abic_fee": func.coalesce(model.abic_batd, 0) != 0,
+        "fx_fee": func.coalesce(model.phi_kdnt, 0) != 0,
+        "lc_fee": func.coalesce(model.phi_lc, 0) != 0,
+        "international_fee": func.coalesce(model.phi_ttqt, 0) != 0,
+        "service": services > 0,
+        "no_service": services == 0,
+        "risk": (func.abs(func.coalesce(model.dprr_chung_lk, 0)) + func.abs(func.coalesce(model.dprr_cuthe_lk, 0))) > 0,
+    }
+    if model is CustomerPeriodProfile:
+        conditions["written_off"] = func.coalesce(model.du_no_xlrr, 0) > 0
+    if metric.startswith("service:"):
+        key = metric.split(":", 1)[1]
+        return func.coalesce(getattr(model, key), 0) > 0 if key in ACTIVE_SERVICE_KEYS else services > 0
+    if metric.startswith("no_service:"):
+        key = metric.split(":", 1)[1]
+        return func.coalesce(getattr(model, key), 0) == 0 if key in ACTIVE_SERVICE_KEYS else services == 0
+    return conditions.get(metric, or_(deposit > 0, func.coalesce(model.so_du_tien_vay, 0) > 0))
+
+
+@router.get("/business-drilldown")
+def dashboard_business_drilldown(
+    period_key: str = Query(...),
+    metric: str = Query(default="deposit"),
+    keyword: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=500),
+    scope: BranchScope = Depends(get_branch_scope),
+    db: Session = Depends(get_db),
+):
+    query, model = _analytics_source(db, period_key, scope.ma_cn, scope.ma_pgd)
+    query = query.filter(_business_drilldown_condition(model, metric))
+    if keyword:
+        pattern = f"%{keyword.strip()}%"
+        query = query.filter(or_(model.ma_kh.ilike(pattern), model.ten_kh.ilike(pattern)))
+    total = query.with_entities(func.count(func.distinct(model.ma_kh))).scalar() or 0
+    fee_expr = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
+    risk_expr = func.coalesce(model.dprr_chung_lk, 0) + func.coalesce(model.dprr_cuthe_lk, 0)
+    service_expr = sum(func.coalesce(getattr(model, field), 0) for field in ACTIVE_SERVICE_KEYS)
+    order_expr = {
+        "all": func.cast(0, model.so_du_tien_vay.type),
+        "deposit": func.coalesce(model.so_du_tien_gui, 0) + func.coalesce(model.so_du_tgtt_binh_quan, 0),
+        "term_deposit": model.so_du_tien_gui,
+        "casa": model.so_du_tgtt_binh_quan,
+        "payment_turnover": model.doanh_so_chuyen_tien_ve_tk if model is CustomerPeriodProfile else model.doanh_so_cramt,
+        "loan": model.so_du_tien_vay, "fee": fee_expr, "risk": risk_expr,
+        "short_loan": model.du_no_ngan_han,
+        "medium_long_loan": model.du_no_trung_dai_han,
+        "overdraft": model.du_no_thau_chi,
+        "guarantee_fee": model.phi_bao_lanh,
+        "transfer_fee": model.phi_chuyen_tien,
+        "digital_fee": model.phi_nhdt,
+        "abic_fee": model.abic_batd,
+        "fx_fee": model.phi_kdnt,
+        "lc_fee": model.phi_lc,
+        "international_fee": model.phi_ttqt,
+        "written_off": getattr(model, "du_no_xlrr", model.so_du_tien_vay),
+    }.get(metric, service_expr)
+    selected = query.with_entities(
+        model.ma_kh, model.ten_kh, model.loai_khach_hang,
+        model.so_du_tien_gui, model.so_du_tgtt_binh_quan, model.so_du_tien_vay,
+        fee_expr.label("fee"), risk_expr.label("provision"), service_expr.label("service_count"),
+        getattr(model, "du_no_xlrr", func.cast(0, model.so_du_tien_vay.type)).label("written_off"),
+        (model.branch_code if model is CustomerPeriodBranchDetail else model.primary_branch_code).label("branch_code"),
+        model.ma_cb, model.ten_can_bo,
+    ).order_by(desc(order_expr), model.ma_kh).offset((page - 1) * page_size).limit(page_size).all()
+    items = [{
+        "ma_kh": row[0], "ten_kh": row[1], "customer_type": row[2],
+        "deposit": float(row[3] or 0), "casa": float(row[4] or 0), "loan": float(row[5] or 0),
+        "fee": float(row[6] or 0), "provision": float(row[7] or 0), "service_count": int(row[8] or 0),
+        "written_off": float(row[9] or 0), "branch_code": row[10], "officer_code": row[11], "officer_name": row[12],
+    } for row in selected]
+    if metric.startswith("service:"):
+        label = f"Khách hàng đang dùng {SERVICE_LABELS.get(metric.split(':', 1)[1], metric)}"
+    elif metric.startswith("no_service:"):
+        label = f"Khách hàng chưa dùng {SERVICE_LABELS.get(metric.split(':', 1)[1], metric)}"
+    else:
+        label = BUSINESS_DRILLDOWN_LABELS.get(metric, metric)
+    total_value = query.with_entities(func.coalesce(func.sum(order_expr), 0)).scalar() or 0
+    return {"metric": metric, "label": label, "total": int(total), "total_value": float(total_value), "page": page, "page_size": page_size, "items": items}
+
+
+@router.get("/business-export")
+def dashboard_business_export(
+    period_key: str = Query(...),
+    metric: str = Query(default="deposit"),
+    scope: BranchScope = Depends(get_branch_scope),
+    db: Session = Depends(get_db),
+):
+    payload = dashboard_business_drilldown(
+        period_key=period_key, metric=metric, keyword=None, page=1, page_size=50_000,
+        scope=scope, db=db,
+    )
+    workbook = Workbook()
+    info = workbook.active
+    info.title = "Thong tin"
+    info.append(["Chỉ tiêu", BUSINESS_DRILLDOWN_LABELS.get(metric, metric)])
+    info.append(["Kỳ dữ liệu", period_key])
+    info.append(["Tổng số bản ghi theo bộ lọc", payload["total"]])
+    info.append(["Số bản ghi trong file", len(payload["items"])])
+    if payload["total"] > len(payload["items"]):
+        info.append(["Lưu ý", "File giới hạn 50.000 dòng để bảo đảm hiệu năng; hãy thu hẹp chi nhánh/PGD trước khi xuất."])
+    sheet = workbook.create_sheet()
+    sheet.title = "Phan tich nghiep vu"
+    headers = ["Mã KH", "Tên khách hàng", "Loại KH", "Chi nhánh", "Cán bộ", "Tiền gửi CKH", "TGTT bình quân", "Dư nợ", "Thu phí", "Dự phòng", "Số SP", "Dư nợ XLRR"]
+    sheet.append(headers)
+    for item in payload["items"]:
+        sheet.append([item["ma_kh"], item["ten_kh"], item["customer_type"], item["branch_code"], item["officer_name"] or item["officer_code"], item["deposit"], item["casa"], item["loan"], item["fee"], item["provision"], item["service_count"], item["written_off"]])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for column in sheet.columns:
+        sheet.column_dimensions[column[0].column_letter].width = min(max(len(str(cell.value or "")) for cell in column) + 2, 36)
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    filename = f"phan_tich_{metric}_{period_key}.xlsx"
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+
+
 @router.get("/insights")
 def dashboard_insights(
     period_key: str = Query(...),
+    include_top_changes: bool = Query(default=False),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
-    cache_key = (period_key, scope.ma_cn, scope.ma_pgd)
+    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:top={int(include_top_changes)}")
     cached = _INSIGHTS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
@@ -844,6 +1245,35 @@ def dashboard_insights(
             "flags": flags,
         })
 
+    def serialize_change_rows(rows, value_kind: str):
+        items = []
+        for row, old in rows:
+            if value_kind == "deposit":
+                current_value = float((row.so_du_tien_gui or 0) + (row.so_du_tgtt_binh_quan or 0))
+                previous_value = float((old.so_du_tien_gui or 0) + (old.so_du_tgtt_binh_quan or 0)) if old else 0
+            elif value_kind == "loan":
+                current_value = float(row.so_du_tien_vay or 0)
+                previous_value = float(old.so_du_tien_vay or 0) if old else 0
+            else:
+                current_value = float(sum(getattr(row, key) or 0 for key in FEE_FIELDS))
+                previous_value = float(sum(getattr(old, key) or 0 for key in FEE_FIELDS)) if old else 0
+            items.append({
+                "ma_kh": row.ma_kh, "ten_kh": row.ten_kh,
+                "primary_branch_code": row.primary_branch_code,
+                "current": current_value, "previous": previous_value,
+                "change": current_value - previous_value,
+                "change_pct": ((current_value - previous_value) / abs(previous_value) * 100) if previous_value else None,
+            })
+        return items
+
+    deposit_difference = current_deposit - previous_deposit
+    loan_difference = func.coalesce(current.so_du_tien_vay, 0) - func.coalesce(previous.so_du_tien_vay, 0)
+    top_deposit_increase = joined.filter(previous.id.isnot(None), deposit_difference > 0).order_by(desc(deposit_difference)).limit(10).all() if include_top_changes else []
+    top_deposit_decrease = joined.filter(previous.id.isnot(None), deposit_difference < 0).order_by(deposit_difference).limit(10).all() if include_top_changes else []
+    top_loan_increase = joined.filter(previous.id.isnot(None), loan_difference > 0).order_by(desc(loan_difference)).limit(10).all() if include_top_changes else []
+    fee_current = sum(func.coalesce(getattr(current, key), 0) for key in FEE_FIELDS)
+    top_fee = joined.filter(fee_current != 0).order_by(desc(func.abs(fee_current))).limit(10).all() if include_top_changes else []
+
     pf_previous_period = (
         db.query(func.max(PF14AccountBalance.period_key))
         .filter(PF14AccountBalance.period_key < period_key)
@@ -932,6 +1362,12 @@ def dashboard_insights(
             "loan_increase_count": int(overview[10] or 0),
             "service_drop_count": int(overview[11] or 0),
             "items": anomalies,
+        },
+        "top_changes": {
+            "deposit_increase": serialize_change_rows(top_deposit_increase, "deposit"),
+            "deposit_decrease": serialize_change_rows(top_deposit_decrease, "deposit"),
+            "loan_increase": serialize_change_rows(top_loan_increase, "loan"),
+            "fee": serialize_change_rows(top_fee, "fee"),
         },
     }
     _INSIGHTS_CACHE[cache_key] = (monotonic(), result)

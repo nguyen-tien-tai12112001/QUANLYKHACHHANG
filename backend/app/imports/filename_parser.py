@@ -8,7 +8,7 @@ from app.imports.cleaners import parse_yyyymmdd
 
 
 STANDARD_PATTERN = re.compile(
-    r"^(?P<branch_code>\d+)_(?P<file_type>CN05|DP01|LN01|PF10|PF14|BC29)_(?P<period_key>\d{8})\.(?P<ext>csv|xlsx)$",
+    r"^(?P<branch_code>\d+)_(?P<file_type>CN05|DP01|LN01|PF10|PF14|BC29|RR01)_(?P<period_key>\d{8})\.(?P<ext>csv|xlsx)$",
     re.IGNORECASE,
 )
 BC06_PATTERN = re.compile(
@@ -17,6 +17,10 @@ BC06_PATTERN = re.compile(
 )
 KH02_PATTERN = re.compile(
     r"^(?P<branch_code>\d+)_(?P<file_type>KH02)_(?P<period_start>\d{8})(?P<period_end>\d{8})\.(?P<ext>csv|xlsx)$",
+    re.IGNORECASE,
+)
+GL02_PATTERN = re.compile(
+    r"^(?P<branch_code>\d+)_(?P<file_type>GL02)_(?P<period_start>\d{8})(?P<period_end>\d{8})(?P<suffix>_\d+)?\.(?P<ext>csv|xlsx)$",
     re.IGNORECASE,
 )
 FTPLN_PATTERN = re.compile(
@@ -48,6 +52,22 @@ def month_end(value: date) -> date:
 
 def parse_import_filename(filename: str) -> ImportFileMeta:
     name = Path(filename).name
+
+    match = GL02_PATTERN.match(name)
+    if match:
+        values = match.groupdict()
+        period_start = parse_yyyymmdd(values["period_start"])
+        period_end = parse_yyyymmdd(values["period_end"])
+        if not period_start or not period_end or period_start > period_end:
+            raise ValueError("Khoảng ngày GL02 trong tên file không hợp lệ")
+        if period_start.year != period_end.year or period_start.month != period_end.month:
+            raise ValueError("File GL02 phải nằm trong cùng một tháng")
+        return ImportFileMeta(
+            branch_code=values["branch_code"], file_type="GL02",
+            period_key=period_end.strftime("%Y%m%d"), file_ext=values["ext"].lower(),
+            period_start=period_start, period_end=period_end,
+            filename_suffix=values.get("suffix"), frequency="MONTH_RANGE_PART",
+        )
 
     match = KH02_PATTERN.match(name)
     if match:
@@ -115,5 +135,5 @@ def parse_import_filename(filename: str) -> ImportFileMeta:
         )
 
     raise ValueError(
-        "Tên file không đúng quy tắc DP01/LN01/CN05/PF10/PF14/BC06/BC29/KH02/FTPLN đã cấu hình"
+        "Tên file không đúng quy tắc DP01/LN01/CN05/PF10/PF14/BC06/BC29/RR01/KH02/GL02/FTPLN đã cấu hình"
     )

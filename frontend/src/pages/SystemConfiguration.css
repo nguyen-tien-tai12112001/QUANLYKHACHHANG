@@ -1,0 +1,19 @@
+.system-configuration-page { padding: 4px 0 24px; }
+.system-config-header { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:16px; }
+.system-config-header h2 { margin:2px 0 2px !important; color:#34251e; }
+.system-config-kicker { color:#8f1438; font-size:11px; font-weight:800; letter-spacing:1px; }
+.system-config-metrics { margin-bottom:14px; }
+.system-config-metrics .ant-card { height:100%; border-radius:12px; border-color:#eadfda; }
+.system-config-metrics .ant-statistic-content { color:#8f1438; font-size:25px; }
+.system-config-tabs > .ant-tabs-nav { margin-bottom:12px; }
+.system-config-card { border-radius:14px; border-color:#e8ded9; }
+.system-config-card .ant-alert { margin-bottom:14px; }
+.system-config-section-title { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; margin-bottom:14px; }
+.system-config-section-title h4 { margin:0 !important; }
+.system-config-catalogs { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.system-config-catalogs .ant-card { border-radius:14px; border-color:#e8ded9; }
+.system-config-values { display:grid; gap:8px; }
+.system-config-values > div { display:grid; grid-template-columns:110px minmax(0,1fr); align-items:center; gap:10px; padding:8px 10px; border-radius:8px; background:#faf7f5; }
+.system-config-json { display:block; max-width:310px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.system-config-json-editor { font-family:Consolas, 'Courier New', monospace; font-size:12px; }
+@media (max-width: 850px) { .system-config-catalogs { grid-template-columns:1fr; } .system-config-header { flex-direction:column; } }

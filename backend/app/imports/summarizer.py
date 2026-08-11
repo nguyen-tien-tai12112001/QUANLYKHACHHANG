@@ -18,6 +18,8 @@ from app.models import (
     PF10LoanProfitability,
     PF14AccountBalance,
     ReportSourceStatus,
+    RR01HandledRiskLoan,
+    GL02LedgerTransaction,
 )
 
 
@@ -113,6 +115,16 @@ SOURCE_CONFIGS = [
         "fields": ["TRDT", "CUSTSEQ", "FTPCD", "FTP", "LDRBAL", "CPAMT", "CPLKAMT"],
     },
     {
+        "code": "RR01", "name": "Nợ xử lý rủi ro và thu hồi nợ", "table": "rr01_handled_risk_loans",
+        "model": RR01HandledRiskLoan, "customer_field": "customer_code",
+        "fields": ["MA_KH", "SO_LAV", "SO_LDS", "DUNO_GOC_HIENTAI", "THU_GOC", "THU_LAI"],
+    },
+    {
+        "code": "GL02", "name": "Giao dịch sổ cái và doanh số TKTT", "table": "gl02_ledger_transactions",
+        "model": GL02LedgerTransaction, "customer_field": "customer_code",
+        "fields": ["TRDATE", "LOCAC", "CUSTOMER", "TRTP", "DRAMOUNT", "CRAMOUNT"],
+    },
+    {
         "code": "MANUAL",
         "name": "Dữ liệu bổ sung",
         "table": None,
@@ -147,6 +159,10 @@ def refresh_report_sources(
     batch = db.query(ImportBatch).filter(ImportBatch.period_key == period_key).first()
     period_date = batch.period_date if batch else None
     period_files = db.query(ImportFile).filter(ImportFile.period_key == period_key).all()
+    expected_branches = sorted({
+        item.branch_code for item in period_files
+        if item.status == "success" and item.file_type in {"DP01", "LN01", "CN05", "PF10", "PF14", "BC06", "BC29", "KH02"}
+    })
     source_rows = []
 
     for config in SOURCE_CONFIGS:
@@ -172,6 +188,24 @@ def refresh_report_sources(
         if source_code == "MANUAL":
             status = "planned"
             message = "Nguồn bổ sung thủ công sẽ cấu hình ở giai đoạn sau."
+        elif source_code in {"RR01", "GL02"}:
+            successful_branches = {file.branch_code for file in success_files}
+            missing_branches = [code for code in expected_branches if code not in successful_branches]
+            if waiting_files:
+                status = "processing"
+                message = "Đang có file chờ xử lý hoặc đang xử lý."
+            elif error_files:
+                status = "partial" if success_files else "error"
+                message = f"Có {len(error_files)} file lỗi; cần kiểm tra lại."
+            elif success_files and not missing_branches:
+                status = "ready"
+                message = f"Đã có {source_code} cho đủ {len(expected_branches)} chi nhánh; xem ma trận để kiểm tra chi tiết."
+            elif success_files:
+                status = "partial"
+                message = f"Thiếu {source_code} tại chi nhánh: {', '.join(missing_branches)}."
+            else:
+                status = "missing"
+                message = f"Chưa có file {source_code} thành công cho kỳ này."
         elif source_code == "FTPLN" and success_files:
             branch_codes = {file.branch_code for file in success_files}
             expected_days = (

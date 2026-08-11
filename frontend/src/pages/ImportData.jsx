@@ -10,6 +10,7 @@ import {
   Form,
   Input,
   Modal,
+  Pagination,
   Progress,
   Row,
   Select,
@@ -35,7 +36,6 @@ import {
   FileTextOutlined,
   FilterOutlined,
   FolderOpenOutlined,
-  HistoryOutlined,
   LoadingOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -282,6 +282,7 @@ function ImportData() {
   const [fileList, setFileListState] = useState(warehouseSession.fileList);
   const [files, setFiles] = useState([]);
   const [periods, setPeriods] = useState([]);
+  const [periodPage, setPeriodPage] = useState(1);
   const [stalledJobs, setStalledJobs] = useState([]);
   const [loadingFiles, setLoadingFiles] = useState(false);
   const [loadingPeriods, setLoadingPeriods] = useState(false);
@@ -480,6 +481,10 @@ function ImportData() {
       const { data } = await client.get('/imports/periods');
       const nextPeriods = getArrayPayload(data);
       setPeriods(nextPeriods);
+      if (!form.getFieldValue('period_key') && nextPeriods.length) {
+        form.setFieldsValue({ period_key: nextPeriods[0].period_key, file_type: '' });
+        setPeriodPage(1);
+      }
       return nextPeriods;
     } catch (error) {
       if (!silent) {
@@ -924,29 +929,24 @@ function ImportData() {
       </section>
 
       <Row gutter={[16, 16]}>
-        <Col xs={24} md={8} xl={5}>
+        <Col xs={24} md={12} xl={6}>
           <Card className="metric-card warehouse-metric warehouse-metric--blue">
             <Statistic title="Kỳ dữ liệu" value={periods.length} prefix={<FolderOpenOutlined />} loading={loadingPeriods} />
           </Card>
         </Col>
-        <Col xs={24} md={8} xl={5}>
+        <Col xs={24} md={12} xl={6}>
           <Card className="metric-card warehouse-metric warehouse-metric--green">
             <Statistic title="File đang dùng" value={activeFiles.length} prefix={<FileDoneOutlined />} loading={loadingFiles} />
           </Card>
         </Col>
-        <Col xs={24} md={8} xl={5}>
+        <Col xs={24} md={12} xl={6}>
           <Card className="metric-card warehouse-metric warehouse-metric--purple">
             <Statistic title="Chi nhánh" value={branchCount} prefix={<BankOutlined />} loading={loadingFiles} />
           </Card>
         </Col>
-        <Col xs={24} md={8} xl={5}>
+        <Col xs={24} md={12} xl={6}>
           <Card className="metric-card warehouse-metric warehouse-metric--gold">
             <Statistic title="Tổng dung lượng" value={formatBytes(totalActiveSize)} prefix={<DatabaseOutlined />} loading={loadingFiles} />
-          </Card>
-        </Col>
-        <Col xs={24} md={8} xl={4}>
-          <Card className="metric-card warehouse-metric warehouse-metric--red">
-            <Statistic title="Lịch sử xóa/thay thế" value={deletedFiles.length} prefix={<HistoryOutlined />} loading={loadingFiles} />
           </Card>
         </Col>
       </Row>
@@ -1130,7 +1130,7 @@ function ImportData() {
       <Card title="Các kỳ dữ liệu">
         <Row gutter={[12, 12]}>
           {periods.length ? (
-            periods.map((period) => (
+            periods.slice((periodPage - 1) * 12, periodPage * 12).map((period) => (
               <Col xs={24} md={12} xl={6} key={period.period_key}>
                 <div
                   role="button"
@@ -1215,6 +1215,7 @@ function ImportData() {
             </Col>
           )}
         </Row>
+        {periods.length > 12 ? <div className="period-pagination"><Pagination current={periodPage} pageSize={12} total={periods.length} showSizeChanger={false} onChange={setPeriodPage} showTotal={(total) => `${total} kỳ · 12 kỳ/trang`} /></div> : null}
       </Card>
 
       <Card

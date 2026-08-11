@@ -30,6 +30,7 @@ import {
   CloudUploadOutlined,
   DatabaseOutlined,
   FileSearchOutlined,
+  DownloadOutlined,
   HistoryOutlined,
   InboxOutlined,
   SafetyCertificateOutlined,
@@ -474,7 +475,7 @@ function ChangeReviewTab() {
         ]} />}
       >
         <Alert showIcon type="info" style={{ marginBottom: 14 }} message="Import không tự ghi đè CIF đã tồn tại" description="Mọi giá trị thay đổi được giữ thành một phiên bản nguồn. Người dùng chọn từng trường cần cập nhật; hệ thống lưu giá trị trước/sau, thời gian và tài khoản thực hiện." />
-        <Table loading={loading} rowKey="id" dataSource={data.items || []} scroll={{ x: 1050 }} pagination={{ current: page, pageSize: 20, total: data.total || 0, showSizeChanger: false, onChange: setPage }} columns={[
+        <Table loading={loading} rowKey="id" dataSource={data?.items || []} scroll={{ x: 1050 }} pagination={{ current: page, pageSize: 20, total: data?.total || 0, showSizeChanger: false, onChange: setPage }} columns={[
           { title: 'Mã CIF', dataIndex: 'full_cif_code', width: 160, fixed: 'left', render: (value) => <Text code>{value}</Text> },
           { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100, render: (value) => <Tag color="blue">{value}</Tag> },
           { title: 'Dòng nguồn', dataIndex: 'source_row_number', width: 105 },
@@ -511,13 +512,24 @@ function ReconciliationTab() {
   const [selected, setSelected] = useState(null);
   const [resolution, setResolution] = useState('waiting_branch');
   const [note, setNote] = useState('');
+  const [page, setPage] = useState(1);
   async function load() {
     setLoading(true);
-    try { const { data: response } = await client.get('/cif/conflicts'); setData(response || { items: [], total: 0 }); }
+    try { const { data: response } = await client.get('/cif/conflicts', { params: { page, page_size: 10 } }); setData(response || { items: [], total: 0 }); }
     catch (error) { message.error(error.response?.data?.detail || error.message); }
     finally { setLoading(false); }
   }
-  useEffect(() => { load(); }, []);
+  useEffect(() => { load(); }, [page]);
+  async function exportExcel() {
+    const hide = message.loading('Đang tạo file Excel xung đột CIF…', 0);
+    try {
+      const response = await client.get('/cif/conflicts-export', { responseType: 'blob' });
+      const url = URL.createObjectURL(response.data); const link = document.createElement('a');
+      link.href = url; link.download = 'doi_chieu_xung_dot_cif.xlsx'; link.click(); URL.revokeObjectURL(url);
+      message.success('Đã xuất danh sách xung đột CIF');
+    } catch (error) { message.error(error.response?.data?.detail || error.message); }
+    finally { hide(); }
+  }
   async function resolveConflict() {
     try {
       await client.post(`/cif/conflicts/${selected.id}/resolve`, { resolution, note });
@@ -527,15 +539,15 @@ function ReconciliationTab() {
   return (
     <Row gutter={[14, 14]}>
       <Col xs={24} md={8}><Card className="cif-status-card"><WarningOutlined /><strong>Mã không hợp lệ</strong><span>Được theo dõi trong lịch sử import</span></Card></Col>
-      <Col xs={24} md={8}><Card className="cif-status-card"><SafetyCertificateOutlined /><strong>Nghi trùng khách hàng</strong><span>{data.total || 0} trường hợp chờ xử lý</span></Card></Col>
+      <Col xs={24} md={8}><Card className="cif-status-card"><SafetyCertificateOutlined /><strong>Nghi trùng khách hàng</strong><span>{data?.total || 0} trường hợp chờ xử lý</span></Card></Col>
       <Col xs={24} md={8}><Card className="cif-status-card"><AuditOutlined /><strong>Xung đột định danh</strong><span>Đối chiếu giấy tờ trên nhiều mã lõi</span></Card></Col>
       <Col span={24}>
-        <Card title="Danh sách cần đối chiếu" className="cif-panel">
+        <Card title="Danh sách cần đối chiếu" className="cif-panel" extra={<Button icon={<DownloadOutlined />} onClick={exportExcel} disabled={!data?.total}>Xuất Excel</Button>}>
           <Table
             loading={loading}
             rowKey="id"
-            dataSource={data.items || []}
-            pagination={false}
+            dataSource={data?.items || []}
+            pagination={{ current: page, pageSize: 10, total: data?.total || 0, showSizeChanger: false, onChange: setPage, showTotal: (total) => `${total} trường hợp` }}
             columns={[
               { title: 'Loại xung đột', dataIndex: 'conflict_type', width: 210, render: () => <Tag color="error">Trùng giấy tờ</Tag> },
               { title: 'Giá trị định danh', dataIndex: 'identity_value', width: 180, render: (value) => <Text code>{value}</Text> },
@@ -741,7 +753,6 @@ export default function CifDataWarehouse() {
     { key: 'customers', label: 'Danh sách khách hàng', children: <CustomerListTab /> },
     { key: 'changes', label: 'Duyệt thay đổi', children: <ChangeReviewTab /> },
     { key: 'reconciliation', label: 'Đối chiếu & xung đột', children: <ReconciliationTab /> },
-    { key: 'rules', label: 'Quy tắc bản ghi chuẩn', children: <GoldenRulesTab /> },
     { key: 'history', label: 'Lịch sử cập nhật', children: <HistoryTab /> },
   ];
   return (

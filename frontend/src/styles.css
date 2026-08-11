@@ -559,7 +559,75 @@ body {
 }
 
 .app-content {
+  min-width: 0;
+  max-width: 100%;
   padding: 24px;
+}
+
+/* Chuẩn hóa mọi bảng Ant Design: phần thân không được phủ lên tiêu đề khi cuộn. */
+.app-content .ant-table-wrapper {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.app-content .ant-table-container {
+  max-width: 100%;
+  isolation: isolate;
+}
+
+.app-content .ant-table-header,
+.app-content .ant-table-sticky-holder {
+  position: relative;
+  z-index: 12 !important;
+  background: #f7f9fc !important;
+  box-shadow: 0 1px 0 #dfe6ef;
+}
+
+.app-content .ant-table-thead > tr > th,
+.app-content .ant-table-thead > tr > td {
+  position: relative;
+  z-index: 4;
+  overflow: hidden;
+  box-sizing: border-box;
+  background: #f7f9fc;
+  vertical-align: middle !important;
+}
+
+.app-content .ant-table-thead > tr > .ant-table-cell-fix-left,
+.app-content .ant-table-thead > tr > .ant-table-cell-fix-right,
+.app-content .ant-table-sticky-holder .ant-table-cell-fix-left,
+.app-content .ant-table-sticky-holder .ant-table-cell-fix-right {
+  z-index: 16 !important;
+}
+
+.app-content .ant-table-body,
+.app-content .ant-table-content {
+  position: relative;
+  z-index: 1;
+  max-width: 100%;
+  scrollbar-gutter: stable;
+}
+
+.app-content .ant-table-tbody > tr > .ant-table-cell-fix-left,
+.app-content .ant-table-tbody > tr > .ant-table-cell-fix-right {
+  z-index: 3 !important;
+  background: #fff;
+}
+
+.app-content .ant-table-cell-scrollbar {
+  z-index: 15 !important;
+  background: #f7f9fc !important;
+}
+
+.app-content .ant-card-body,
+.app-content .ant-tabs-tabpane {
+  min-width: 0;
+}
+
+@media (max-width: 900px) {
+  .app-content {
+    padding: 14px;
+  }
 }
 
 .app-breadcrumb {
@@ -595,6 +663,190 @@ body {
 .app-sidebar .ant-menu-item-selected .menu-label-with-badge .ant-badge-count {
   color: #fff;
   background: #8f1438;
+}
+
+/* Professional navigation shell */
+.app-sidebar.ant-layout-sider {
+  background:
+    radial-gradient(circle at 12% 0%, rgba(214, 160, 51, 0.16), transparent 28%),
+    linear-gradient(180deg, #5b0c24 0%, #72112f 48%, #4a091d 100%) !important;
+  border-right: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 8px 0 30px rgba(40, 8, 18, 0.14);
+}
+
+.app-sidebar .ant-layout-sider-children {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.app-logo {
+  height: 76px;
+  min-height: 76px;
+  padding: 0 16px 0 18px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(25, 3, 10, 0.13);
+}
+
+.app-logo-image {
+  width: 40px;
+  height: 40px;
+  padding: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.32);
+  border-radius: 11px;
+  box-shadow: 0 5px 16px rgba(25, 3, 10, 0.24);
+}
+
+.app-brand {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  line-height: 1.15;
+}
+
+.app-brand strong {
+  overflow: hidden;
+  color: #fff;
+  font-size: 15px;
+  font-weight: 750;
+  letter-spacing: 0.15px;
+  text-overflow: ellipsis;
+}
+
+.app-brand small {
+  margin-top: 5px;
+  color: rgba(255, 255, 255, 0.62);
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.7px;
+  text-transform: uppercase;
+}
+
+.app-sidebar .ant-menu-dark,
+.app-sidebar .ant-menu-dark > .ant-menu,
+.app-sidebar .ant-menu-dark .ant-menu-sub {
+  background: transparent !important;
+}
+
+.app-sidebar > .ant-layout-sider-children > .ant-menu {
+  flex: 1;
+  padding: 12px 9px 20px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+  scrollbar-width: thin;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-submenu-title,
+.app-sidebar .ant-menu-dark .ant-menu-item {
+  height: 42px;
+  margin-block: 3px;
+  border-radius: 9px;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 13px;
+  font-weight: 520;
+  line-height: 42px;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-submenu-title {
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.25px;
+}
+
+.app-sidebar .ant-menu-submenu-title:hover,
+.app-sidebar .ant-menu-item:hover {
+  color: #fff !important;
+  background: rgba(255, 255, 255, 0.085) !important;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-sub .ant-menu-item {
+  width: calc(100% - 16px);
+  margin-inline: 8px;
+  padding-left: 42px !important;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-sub .ant-menu-item-selected,
+.app-sidebar .ant-menu-dark .ant-menu-item-selected {
+  position: relative;
+  color: #fff !important;
+  background: linear-gradient(90deg, rgba(214, 160, 51, 0.28), rgba(255, 255, 255, 0.1)) !important;
+  box-shadow: inset 0 0 0 1px rgba(255, 222, 151, 0.15), 0 5px 14px rgba(31, 3, 12, 0.12);
+  font-weight: 650;
+}
+
+.app-sidebar .ant-menu-dark .ant-menu-item-selected::before {
+  position: absolute;
+  top: 9px;
+  bottom: 9px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 3px 3px 0;
+  background: #efc46d;
+  content: '';
+}
+
+.app-sidebar .ant-menu-item .anticon,
+.app-sidebar .ant-menu-submenu-title .anticon {
+  font-size: 16px;
+}
+
+.sidebar-logo-toggle {
+  width: 30px;
+  min-width: 30px;
+  height: 30px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.app-sidebar-footer {
+  display: flex;
+  min-height: 68px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 11px 18px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(30, 3, 12, 0.16);
+}
+
+.app-sidebar-footer small {
+  margin-top: 5px;
+  color: rgba(255, 255, 255, 0.48);
+  font-size: 10px;
+}
+
+.app-sidebar-live {
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.app-sidebar-live i {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: #5ee38f;
+  box-shadow: 0 0 0 4px rgba(94, 227, 143, 0.11);
+}
+
+.app-sidebar.ant-layout-sider-collapsed .app-logo {
+  justify-content: center;
+  padding: 0;
+}
+
+.app-sidebar.ant-layout-sider-collapsed .app-logo-image {
+  width: 38px;
+  height: 38px;
+}
+
+.app-sidebar.ant-layout-sider-collapsed .sidebar-logo-toggle {
+  display: none;
 }
 
 .app-user {
@@ -856,6 +1108,44 @@ body {
 
 .compact-metric .ant-card-body {
   padding: 14px 16px;
+}
+
+.compact-metric {
+  position: relative;
+  overflow: hidden;
+  min-height: 92px;
+  border: 1px solid #e3e9f1;
+  border-radius: 14px;
+  background: linear-gradient(135deg, #fff, #f7faff);
+  box-shadow: 0 7px 20px rgba(31, 57, 91, .06);
+  transition: transform .18s ease, box-shadow .18s ease;
+}
+
+.compact-metric:hover {
+  box-shadow: 0 12px 28px rgba(31, 57, 91, .1);
+  transform: translateY(-2px);
+}
+
+.compact-metric::after {
+  content: '';
+  position: absolute;
+  right: -24px;
+  bottom: -34px;
+  width: 90px;
+  height: 90px;
+  border-radius: 50%;
+  background: currentColor;
+  opacity: .06;
+}
+
+.page-stack > .ant-row:nth-child(2) > .ant-col:nth-child(1) .compact-metric { color: #8f1438; border-top: 4px solid #8f1438; }
+.page-stack > .ant-row:nth-child(2) > .ant-col:nth-child(2) .compact-metric { color: #b7791f; border-top: 4px solid #d6a033; }
+.page-stack > .ant-row:nth-child(2) > .ant-col:nth-child(3) .compact-metric { color: #167553; border-top: 4px solid #218653; }
+.page-stack > .ant-row:nth-child(2) > .ant-col:nth-child(4) .compact-metric { color: #3567a8; border-top: 4px solid #3567a8; }
+
+.compact-metric .ant-statistic-content-prefix {
+  margin-right: 10px;
+  color: currentColor;
 }
 
 .admin-filter-card .ant-card-body {
@@ -2810,4 +3100,47 @@ body {
   .login-card .ant-card-body {
     padding: 26px;
   }
+}
+.period-pagination {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f4;
+}
+
+.optional-file-row {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 10px;
+  border: 1px solid #e7ebf1;
+  border-radius: 9px;
+  background: #fafcff;
+}
+
+.cif-panel {
+  overflow: hidden;
+  border: 1px solid #e1e8f0;
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgba(31, 57, 91, .06);
+}
+
+.cif-panel > .ant-card-head {
+  min-height: 52px;
+  border-bottom-color: #e4eaf1;
+  background: linear-gradient(90deg, #fff, #f6f9fd);
+}
+
+.cif-panel .ant-table-thead > tr > th {
+  color: #43536a;
+  background: #f4f7fb !important;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.cif-panel .ant-table-tbody > tr:hover > td {
+  background: #f6f9fe !important;
 }

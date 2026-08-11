@@ -17,9 +17,11 @@ from app.models import (
     CustomerPeriodProfile,
     CustomerProcessingJob,
     CustomerProcessingOptionalFile,
+    CustomerSourceReconciliation,
     ImportBatch,
     ImportFile,
     SupplementalBaoLanhRecord,
+    SupplementalBillPaymentTransaction,
     SupplementalOABRecord,
 )
 
@@ -169,33 +171,68 @@ def get_previous_period_key(db: Session, period_key: str) -> str | None:
 
 
 def apply_transfer_inflow_to_profiles(db: Session, period_key: str) -> None:
-    previous_period_key = get_previous_period_key(db, period_key)
-    if not previous_period_key:
-        db.execute(
-            text("UPDATE customer_period_profiles SET doanh_so_chuyen_tien_ve_tk = 0 WHERE period_key = :period_key"),
-            {"period_key": period_key},
-        )
-        return
     db.execute(text(f"SET LOCAL work_mem = '{settings.PROCESSING_WORK_MEM}'"))
     db.execute(
-        UPDATE_PROFILES_TRANSFER_INFLOW_SQL,
-        {"period_key": period_key, "previous_period_key": previous_period_key},
+        text("""
+            WITH gl AS (
+                SELECT customer_code,
+                       SUM(COALESCE(credit_amount, 0)) AS amount,
+                       MAX(COALESCE(created_datetime, transaction_date::timestamp)) AS last_transaction_at
+                FROM gl02_ledger_transactions tx
+                WHERE tx.period_key = :period_key AND tx.account_code = '421101'
+                  AND COALESCE(tx.transaction_type, 'Normal') = 'Normal'
+                  AND tx.customer_code IS NOT NULL AND tx.customer_code <> '000000000'
+                GROUP BY customer_code
+            )
+            UPDATE customer_period_profiles profile
+            SET doanh_so_chuyen_tien_ve_tk = gl.amount,
+                last_tktt_transaction_at = gl.last_transaction_at,
+                tktt_inactive_days = GREATEST(0, profile.period_date - gl.last_transaction_at::date),
+                tktt_activity_status = CASE
+                    WHEN profile.period_date - gl.last_transaction_at::date <= 7 THEN 'active'
+                    WHEN profile.period_date - gl.last_transaction_at::date <= 30 THEN 'low_activity'
+                    ELSE 'inactive'
+                END
+            FROM gl WHERE profile.period_key = :period_key AND profile.ma_kh = gl.customer_code
+        """),
+        {"period_key": period_key},
     )
 
 
-def apply_transfer_inflow_to_summaries(db: Session, period_key: str) -> None:
-    previous_period_key = get_previous_period_key(db, period_key)
-    if not previous_period_key:
-        db.execute(
-            text(
-                "UPDATE customer_period_summaries SET doanh_so_chuyen_tien_ve_tai_khoan = 0 WHERE period_key = :period_key"
-            ),
-            {"period_key": period_key},
+def apply_rr01_metrics_to_profiles(db: Session, period_key: str) -> None:
+    db.execute(text("""
+        WITH rr AS (
+            SELECT customer_code,
+                   SUM(COALESCE(current_principal, 0)) AS du_no_xlrr,
+                   SUM(COALESCE(recovered_principal_period, 0) + COALESCE(recovered_interest_period, 0)) AS ds_thu_no_xlrr
+            FROM rr01_handled_risk_loans src
+            WHERE src.period_key = :period_key AND src.customer_code IS NOT NULL
+            GROUP BY customer_code
         )
-        return
+        UPDATE customer_period_profiles profile
+        SET du_no_xlrr = rr.du_no_xlrr, ds_thu_no_xlrr = rr.ds_thu_no_xlrr
+        FROM rr WHERE profile.period_key = :period_key AND profile.ma_kh = rr.customer_code
+    """), {"period_key": period_key})
+
+
+def apply_transfer_inflow_to_summaries(db: Session, period_key: str) -> None:
     db.execute(
-        UPDATE_SUMMARIES_TRANSFER_INFLOW_SQL,
-        {"period_key": period_key, "previous_period_key": previous_period_key},
+        text("""
+            WITH gl AS (
+                SELECT customer_code, SUM(COALESCE(credit_amount, 0)) AS amount
+                FROM gl02_ledger_transactions
+                WHERE period_key = :period_key AND account_code = '421101'
+                  AND COALESCE(transaction_type, 'Normal') = 'Normal'
+                  AND customer_code IS NOT NULL AND customer_code <> '000000000'
+                GROUP BY customer_code
+            )
+            UPDATE customer_period_summaries summary
+            SET doanh_so_chuyen_tien_ve_tai_khoan = gl.amount
+            FROM gl
+            WHERE summary.period_key = :period_key
+              AND (summary.ma_kh = gl.customer_code OR summary.ma_kh_chuan = gl.customer_code)
+        """),
+        {"period_key": period_key},
     )
 
 
@@ -213,6 +250,10 @@ BRANCH_DETAIL_SQL = text(
         JOIN cif_customers customer ON customer.id = identifier.customer_id
         WHERE identifier.customer_core_code IS NOT NULL
           AND identifier.branch_code IS NOT NULL
+    ),
+    cif_master AS (
+        SELECT id AS customer_id, customer_core_code AS ma_kh
+        FROM cif_customers
     ),
     dp AS (
         SELECT
@@ -389,6 +430,7 @@ BRANCH_DETAIL_SQL = text(
     INSERT INTO customer_period_branch_details (
         period_key,
         period_date,
+        customer_id,
         ma_kh,
         branch_code,
         ma_pgd,
@@ -431,6 +473,7 @@ BRANCH_DETAIL_SQL = text(
     SELECT
         :period_key,
         COALESCE(dp.period_date, batch.period_date),
+        cif_master.customer_id,
         keys.ma_kh,
         keys.branch_code,
         dp.ma_pgd,
@@ -470,6 +513,7 @@ BRANCH_DETAIL_SQL = text(
         ln.officer_employee_code,
         :job_id
     FROM keys
+    JOIN cif_master ON cif_master.ma_kh = keys.ma_kh
     LEFT JOIN cif ON cif.ma_kh = keys.ma_kh AND cif.branch_code = keys.branch_code
     LEFT JOIN dp ON dp.ma_kh = keys.ma_kh AND dp.branch_code = keys.branch_code
     LEFT JOIN ln ON ln.ma_kh = keys.ma_kh AND ln.branch_code = keys.branch_code
@@ -570,6 +614,7 @@ PROFILE_SQL = text(
     detail_agg AS (
         SELECT
             ma_kh,
+            MAX(customer_id) AS customer_id,
             MAX(period_date) AS period_date,
             MAX(ten_kh) AS ten_kh,
             MAX(loai_khach_hang) AS loai_khach_hang,
@@ -711,6 +756,7 @@ PROFILE_SQL = text(
     INSERT INTO customer_period_profiles (
         period_key,
         period_date,
+        customer_id,
         ma_kh,
         ten_kh,
         loai_khach_hang,
@@ -758,14 +804,19 @@ PROFILE_SQL = text(
         primary_location_score,
         primary_location_reason,
         branch_details,
+        ten_chu_doanh_nghiep, so_cccd, ma_so_thue, ngay_thanh_lap,
+        dia_chi, gioi_tinh, ngay_sinh, nghe_nghiep,
+        management_source, managing_branch_code,
+        managing_department_code, managing_department_name,
         processing_job_id
     )
     SELECT
         :period_key,
         detail_agg.period_date,
+        detail_agg.customer_id,
         detail_agg.ma_kh,
-        detail_agg.ten_kh,
-        detail_agg.loai_khach_hang,
+        COALESCE(enrichment.ten_kh, detail_agg.ten_kh),
+        COALESCE(enrichment.loai_khach_hang, detail_agg.loai_khach_hang),
         detail_agg.branch_codes,
         detail_agg.pgd_codes,
         detail_agg.branch_count,
@@ -800,18 +851,31 @@ PROFILE_SQL = text(
         detail_agg.bao_lanh,
         detail_agg.loa_bien_dong_so_du,
         detail_agg.phat_hanh_lc,
-        loan_staff.ln_ma_cb,
-        loan_staff.ln_ten_can_bo,
-        loan_staff.ln_officer_employee_code,
-        phones.telephone,
-        primary_location.primary_branch_code,
-        primary_location.primary_pgd_code,
-        primary_location.primary_pgd_name,
+        COALESCE(enrichment.ma_cb, loan_staff.ln_ma_cb),
+        COALESCE(enrichment.ten_can_bo, loan_staff.ln_ten_can_bo),
+        COALESCE(enrichment.officer_employee_code, loan_staff.ln_officer_employee_code),
+        COALESCE(enrichment.telephone, phones.telephone),
+        COALESCE(enrichment.primary_branch_code, primary_location.primary_branch_code),
+        COALESCE(enrichment.primary_pgd_code, primary_location.primary_pgd_code),
+        COALESCE(enrichment.primary_pgd_name, primary_location.primary_pgd_name),
         primary_location.primary_location_score,
         primary_location.primary_location_reason,
         detail_agg.branch_details,
+        enrichment.ten_chu_doanh_nghiep,
+        enrichment.so_cccd,
+        enrichment.ma_so_thue,
+        enrichment.ngay_thanh_lap,
+        enrichment.dia_chi,
+        enrichment.gioi_tinh,
+        enrichment.ngay_sinh,
+        enrichment.nghe_nghiep,
+        enrichment.management_source,
+        COALESCE(enrichment.managing_branch_code, primary_location.primary_branch_code),
+        enrichment.managing_department_code,
+        enrichment.managing_department_name,
         :job_id
     FROM detail_agg
+    LEFT JOIN tmp_profile_enrichment enrichment ON enrichment.customer_id=detail_agg.customer_id
     LEFT JOIN loan_staff ON loan_staff.ma_kh = detail_agg.ma_kh
     LEFT JOIN phones ON phones.ma_kh = detail_agg.ma_kh
     LEFT JOIN primary_location ON primary_location.ma_kh = detail_agg.ma_kh
@@ -912,6 +976,8 @@ def detect_optional_file_type(filename: str) -> str | None:
         return "BAO_LANH"
     if "oab" in normalized or "loa" in normalized:
         return "OAB_LOA"
+    if "list_transaction" in normalized or "billpayment" in normalized or "bill_payment" in normalized:
+        return "BILLPAYMENT"
     return None
 
 
@@ -928,6 +994,9 @@ def excel_rows_from_xlsx(path: Path):
     workbook = load_workbook(path, read_only=True, data_only=True)
     sheet = workbook.worksheets[0]
     try:
+        # Một số báo cáo xuất từ hệ thống khai báo sai vùng sử dụng A1:A1 dù
+        # thực tế có hàng chục nghìn dòng; reset để openpyxl quét đúng dữ liệu.
+        sheet.reset_dimensions()
         for row in sheet.iter_rows(values_only=True):
             yield list(row)
     finally:
@@ -1036,9 +1105,68 @@ def parse_oab_file(db: Session, item: CustomerProcessingOptionalFile) -> int:
     return inserted
 
 
+def parse_billpayment_file(db: Session, item: CustomerProcessingOptionalFile) -> int:
+    file_path = Path(item.file_path)
+    rows = excel_rows_from_xls(file_path) if file_path.suffix.lower() == ".xls" else excel_rows_from_xlsx(file_path)
+    inserted = 0
+    headers = None
+    batch: list[SupplementalBillPaymentTransaction] = []
+    required = {"Mã GD", "Ngày GD", "STK chuyển", "Số tiền", "Mã DV"}
+
+    for row in rows:
+        cells = [str(value or "").strip() for value in row]
+        if headers is None:
+            if required.issubset(set(cells)):
+                headers = cells
+            continue
+        values = {headers[index]: row[index] if index < len(row) else None for index in range(len(headers))}
+        transaction_id = clean_text(values.get("Mã GD"))
+        if not transaction_id:
+            continue
+        raw_datetime = clean_text(values.get("Ngày GD")) or ""
+        transaction_datetime = None
+        for fmt in ("%Y%m%d%H%M%S", "%d/%m/%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            try:
+                transaction_datetime = datetime.strptime(raw_datetime, fmt)
+                break
+            except ValueError:
+                continue
+        record = SupplementalBillPaymentTransaction(
+            optional_file_id=item.id,
+            period_key=item.period_key,
+            transaction_id=transaction_id,
+            transaction_status=clean_text(values.get("Tình trạng GD")),
+            transaction_datetime=transaction_datetime,
+            biller_customer_code=clean_text(values.get("Mã khách hàng")),
+            customer_name=clean_text(values.get("Tên khách hàng")),
+            debit_account=clean_text(values.get("STK chuyển")),
+            amount=parse_decimal_value(values.get("Số tiền")),
+            content=clean_text(values.get("Nội dung")),
+            branch_code=clean_text(values.get("CN thực hiện")),
+            lead_bank_code=clean_text(values.get("NH đầu mối")),
+            service_code=clean_text(values.get("Mã DV")),
+            provider_code=clean_text(values.get("Mã NCC")),
+            user_id=clean_text(values.get("USERID")),
+            raw_data={key: clean_text(value) for key, value in values.items() if key},
+        )
+        batch.append(record)
+        inserted += 1
+        if len(batch) >= 1000:
+            db.add_all(batch)
+            db.flush()
+            batch = []
+    if headers is None:
+        raise ValueError("Không tìm thấy dòng tiêu đề Bill Payment hợp lệ")
+    if batch:
+        db.add_all(batch)
+        db.flush()
+    return inserted
+
+
 def load_supported_optional_files(db: Session, period_key: str) -> int:
     db.execute(delete(SupplementalBaoLanhRecord).where(SupplementalBaoLanhRecord.period_key == period_key))
     db.execute(delete(SupplementalOABRecord).where(SupplementalOABRecord.period_key == period_key))
+    db.execute(delete(SupplementalBillPaymentTransaction).where(SupplementalBillPaymentTransaction.period_key == period_key))
     db.flush()
 
     total_rows = 0
@@ -1061,6 +1189,8 @@ def load_supported_optional_files(db: Session, period_key: str) -> int:
                 total_rows += parse_bao_lanh_file(db, item)
             elif file_type == "OAB_LOA":
                 total_rows += parse_oab_file(db, item)
+            elif file_type == "BILLPAYMENT":
+                total_rows += parse_billpayment_file(db, item)
             item.status = "ready"
             item.note = f"{item.note or ''}".strip()
         except Exception as exc:
@@ -1238,22 +1368,121 @@ def create_processing_job(db: Session, period_key: str) -> CustomerProcessingJob
 
 
 FINANCIAL_METRIC_COLUMNS = (
-    "phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd",
+    "phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt",
     "dprr_chung_tt", "dprr_chung_lk", "dprr_cuthe_tt", "dprr_cuthe_lk",
 )
 
-CIF_LINK_SQL = text("""
+
+BILLPAYMENT_BRANCH_UPDATE_SQL = text(
+    """
+    WITH active_rules AS (
+        SELECT rule_code, service_codes, amount_equals
+        FROM business_matching_rules
+        WHERE active = true AND source_type = 'BILLPAYMENT'
+          AND (effective_from IS NULL OR effective_from <= to_date(:period_key, 'YYYYMMDD'))
+          AND (effective_to IS NULL OR effective_to >= to_date(:period_key, 'YYYYMMDD'))
+    ), eligible AS (
+        SELECT tx.*, rule.rule_code
+        FROM supplemental_billpayment_transactions tx
+        JOIN active_rules rule ON EXISTS (
+            SELECT 1 FROM json_array_elements_text(rule.service_codes) code
+            WHERE code = TRIM(tx.service_code)
+        ) AND (rule.amount_equals IS NULL OR tx.amount = rule.amount_equals)
+        WHERE tx.period_key = :period_key
+    ), matched AS (
+        SELECT DISTINCT dp.ma_kh, COALESCE(dp.ma_cn, dp.branch_code) AS branch_code, tx.rule_code
+        FROM eligible tx
+        JOIN dp01_deposit_accounts dp
+          ON dp.period_key = tx.period_key
+         AND dp.so_tai_khoan = tx.debit_account
+        WHERE dp.ma_kh IS NOT NULL
+        UNION
+        SELECT DISTINCT cn.ma_kh, COALESCE(cn.ma_cn,cn.branch_code), tx.rule_code
+        FROM eligible tx
+        JOIN cn05_customer_services cn ON cn.period_key=tx.period_key
+          AND trim(cn.ma_kh)=substring(regexp_replace(coalesce(tx.debit_account,''),'[^0-9]','','g') from 5)
+        WHERE tx.rule_code='THUHO_DT' AND regexp_replace(coalesce(tx.debit_account,''),'[^0-9]','','g') LIKE '8888%%'
+          AND cn.ma_kh IS NOT NULL
+        UNION
+        SELECT DISTINCT cif.customer_core_code, COALESCE(tx.branch_code, split_part(cif.customer_core_code,'-',1)), tx.rule_code
+        FROM eligible tx
+        JOIN cif_customers cif ON regexp_replace(coalesce(cif.registration_number,''),'[^0-9]','','g') =
+          substring(coalesce(tx.content,'') from '([0-9]{9,12})')
+        WHERE tx.rule_code='THUHO_DT' AND lower(trim(coalesce(tx.debit_account,'')))='user deposit'
+    ), matched_flags AS (
+        SELECT ma_kh, branch_code,
+               MAX((rule_code='THUHO_DIEN')::int) AS thuho_dien,
+               MAX((rule_code='THUHO_NUOC')::int) AS thuho_nuoc,
+               MAX((rule_code='THUHO_DT')::int) AS thuho_dt,
+               MAX((rule_code='ABIC_BATK')::int) AS abic_batk,
+               MAX((rule_code='ABIC_BATHE')::int) AS abic_bathe
+        FROM matched GROUP BY ma_kh, branch_code
+    ), hkd AS (
+        SELECT ma_kh, COALESCE(ma_cn, branch_code) AS branch_code,
+               string_agg(DISTINCT so_tai_khoan, ', ' ORDER BY so_tai_khoan) AS accounts
+        FROM dp01_deposit_accounts
+        WHERE period_key = :period_key AND TRIM(COALESCE(cust_type, '')) = '570'
+          AND ma_kh IS NOT NULL AND so_tai_khoan IS NOT NULL
+        GROUP BY ma_kh, COALESCE(ma_cn, branch_code)
+    ), flags AS (
+        SELECT COALESCE(m.ma_kh,h.ma_kh) AS ma_kh,
+               COALESCE(m.branch_code,h.branch_code) AS branch_code,
+               COALESCE(m.thuho_dien,0) AS thuho_dien,
+               COALESCE(m.thuho_nuoc,0) AS thuho_nuoc,
+               COALESCE(m.thuho_dt,0) AS thuho_dt,
+               COALESCE(m.abic_batk,0) AS abic_batk,
+               COALESCE(m.abic_bathe,0) AS abic_bathe,
+               h.accounts
+        FROM matched_flags m FULL OUTER JOIN hkd h
+          ON h.ma_kh=m.ma_kh AND h.branch_code=m.branch_code
+    )
+    UPDATE customer_period_branch_details d SET
+        thuho_dien=f.thuho_dien, thuho_nuoc=f.thuho_nuoc, thuho_dt=f.thuho_dt,
+        abic_batk=f.abic_batk, abic_bathe=f.abic_bathe,
+        hkd_tk=CASE WHEN f.accounts IS NOT NULL THEN 1 ELSE 0 END,
+        hkd_account_numbers=f.accounts
+    FROM flags f
+    WHERE d.period_key=:period_key AND d.ma_kh=f.ma_kh AND d.branch_code=f.branch_code
+    """
+)
+
+
+PRODUCT_FLAGS_PROFILE_UPDATE_SQL = text(
+    """
+    WITH flags AS (
+        SELECT ma_kh,
+               MAX(thuho_dien) AS thuho_dien, MAX(thuho_nuoc) AS thuho_nuoc, MAX(thuho_dt) AS thuho_dt,
+               MAX(abic_batk) AS abic_batk, MAX(abic_bathe) AS abic_bathe,
+               MAX(hkd_tk) AS hkd_tk,
+               string_agg(DISTINCT hkd_account_numbers, ', ' ORDER BY hkd_account_numbers)
+                   FILTER (WHERE hkd_account_numbers IS NOT NULL) AS hkd_accounts
+        FROM customer_period_branch_details
+        WHERE period_key=:period_key
+          AND (thuho_dien=1 OR thuho_nuoc=1 OR thuho_dt=1 OR abic_batk=1 OR abic_bathe=1 OR hkd_tk=1)
+        GROUP BY ma_kh
+    )
+    UPDATE customer_period_profiles p SET
+        thuho_dien=f.thuho_dien, thuho_nuoc=f.thuho_nuoc, thuho_dt=f.thuho_dt,
+        abic_batk=f.abic_batk, abic_bathe=f.abic_bathe,
+        hkd_tk=f.hkd_tk, hkd_account_numbers=f.hkd_accounts
+    FROM flags f WHERE p.period_key=:period_key AND p.ma_kh=f.ma_kh
+    """
+)
+
+CIF_PROFILE_LINK_SQL = text("""
     UPDATE customer_period_profiles profile
     SET customer_id=customer.id
     FROM cif_customers customer
     WHERE profile.period_key=:period_key
-      AND customer.customer_core_code=profile.ma_kh;
+      AND customer.customer_core_code=profile.ma_kh
+""")
 
+CIF_BRANCH_LINK_SQL = text("""
     UPDATE customer_period_branch_details detail
     SET customer_id=customer.id
     FROM cif_customers customer
     WHERE detail.period_key=:period_key
-      AND customer.customer_core_code=detail.ma_kh;
+      AND customer.customer_core_code=detail.ma_kh
 """)
 
 PROFILE_CIF_ENRICH_SQL = text("""
@@ -1344,8 +1573,104 @@ PROFILE_CIF_ENRICH_SQL = text("""
     WHERE p.period_key=:period_key AND p.customer_id=c.id;
 """)
 
+
+PROFILE_ENRICHMENT_TEMP_SQL = text("""
+    CREATE TEMP TABLE tmp_profile_enrichment ON COMMIT PRESERVE ROWS AS
+    WITH latest_identifier AS (
+        SELECT DISTINCT ON (i.customer_id)
+            i.customer_id, i.raw_data
+        FROM cif_customer_identifiers i
+        ORDER BY i.customer_id, i.imported_at DESC, i.id DESC
+    ), user_owner AS (
+        SELECT DISTINCT ON (i.customer_id)
+            i.customer_id, u.employee_code, u.credit_officer_code, u.full_name,
+            b.branch_code, d.department_code, d.department_name
+        FROM system_users u
+        JOIN cif_customer_identifiers i ON i.full_cif_code=TRIM(u.customer_cif_code)
+        LEFT JOIN org_branches b ON b.id=u.branch_id
+        LEFT JOIN org_departments d ON d.id=u.department_id
+        WHERE u.is_active=true AND NULLIF(TRIM(u.customer_cif_code),'') IS NOT NULL
+        ORDER BY i.customer_id, u.id
+    ), bc_owner AS (
+        SELECT DISTINCT ON (c.id) c.id customer_id, b.branch_code
+        FROM cif_customers c
+        JOIN bc06_customer_classifications bc
+          ON bc.period_key=:period_key AND TRIM(bc.customer_code)=c.customer_core_code
+        JOIN org_branches b ON
+          regexp_replace(lower(b.branch_name),'^(agribank\\s*)?(chi nhánh|cn)\\s*','','i') =
+          regexp_replace(lower(TRIM(bc.managing_unit)),'^(agribank\\s*)?(chi nhánh|cn)\\s*','','i')
+        ORDER BY c.id, bc.id DESC
+    ), ln_owner AS (
+        SELECT DISTINCT ON (c.id)
+            c.id customer_id, u.employee_code, u.credit_officer_code, u.full_name,
+            b.branch_code, d.department_code, d.department_name
+        FROM cif_customers c
+        JOIN ln01_loans l ON l.period_key=:period_key AND TRIM(l.custseq)=c.customer_core_code
+        JOIN system_users u ON u.is_active=true AND TRIM(u.credit_officer_code)=TRIM(l.officer_id)
+        LEFT JOIN org_branches b ON b.id=u.branch_id
+        LEFT JOIN org_departments d ON d.id=u.department_id
+        ORDER BY c.id, COALESCE(l.du_no,0) DESC, l.id
+    ), dp_owner AS (
+        SELECT DISTINCT ON (c.id)
+            c.id customer_id, u.employee_code, u.credit_officer_code, u.full_name,
+            b.branch_code, d.department_code, d.department_name
+        FROM cif_customers c
+        JOIN dp01_deposit_accounts dp ON dp.period_key=:period_key AND TRIM(dp.ma_kh)=c.customer_core_code
+        JOIN system_users u ON u.is_active=true AND TRIM(u.employee_code)=TRIM(dp.employee_number)
+        LEFT JOIN org_branches b ON b.id=u.branch_id
+        LEFT JOIN org_departments d ON d.id=u.department_id
+        ORDER BY c.id, COALESCE(dp.current_balance,0) DESC, dp.id
+    ), dp_identity AS (
+        SELECT ma_kh, MAX(id_number) FILTER (WHERE NULLIF(TRIM(id_number),'') IS NOT NULL) id_number
+        FROM dp01_deposit_accounts WHERE period_key=:period_key GROUP BY ma_kh
+    )
+    SELECT
+        c.id AS customer_id,
+        c.customer_name AS ten_kh,
+        COALESCE(c.customer_detail_type,c.customer_type) AS loai_khach_hang,
+        NULLIF(TRIM(li.raw_data->>'gd_ten'),'') AS ten_chu_doanh_nghiep,
+        COALESCE(NULLIF(TRIM(c.registration_number),''),dpid.id_number) AS so_cccd,
+        NULLIF(TRIM(c.tax_number),'') AS ma_so_thue,
+        CASE WHEN COALESCE(li.raw_data->>'issuedt4','') ~ '^\\d{8}$'
+             THEN to_date(li.raw_data->>'issuedt4','YYYYMMDD') END AS ngay_thanh_lap,
+        c.full_address AS dia_chi,
+        CASE WHEN lower(COALESCE(c.customer_type,'')) LIKE '%cá nhân%'
+             THEN c.gender_code END AS gioi_tinh,
+        CASE WHEN lower(COALESCE(c.customer_type,'')) LIKE '%cá nhân%' THEN c.birth_date
+             WHEN COALESCE(li.raw_data->>'gd_ngaysinh','') ~ '^\\d{1,2}/\\d{1,2}/\\d{4}$'
+             THEN to_date(li.raw_data->>'gd_ngaysinh','DD/MM/YYYY') END AS ngay_sinh,
+        c.occupation AS nghe_nghiep,
+        CASE WHEN uo.customer_id IS NOT NULL THEN 'USER_CIF'
+             WHEN bo.customer_id IS NOT NULL THEN 'BC06'
+             WHEN lo.customer_id IS NOT NULL THEN 'LN01'
+             WHEN dpo.customer_id IS NOT NULL THEN 'DP01' ELSE 'CIF_BRANCH' END AS management_source,
+        COALESCE(uo.branch_code,bo.branch_code,lo.branch_code,dpo.branch_code) AS managing_branch_code,
+        COALESCE(uo.department_code,lo.department_code,dpo.department_code) AS managing_department_code,
+        COALESCE(uo.department_name,lo.department_name,dpo.department_name) AS managing_department_name,
+        COALESCE(uo.credit_officer_code,uo.employee_code,lo.credit_officer_code,lo.employee_code,dpo.employee_code) AS ma_cb,
+        COALESCE(uo.employee_code,lo.employee_code,dpo.employee_code) AS officer_employee_code,
+        COALESCE(uo.full_name,lo.full_name,dpo.full_name) AS ten_can_bo,
+        c.telephone,
+        COALESCE(uo.branch_code,bo.branch_code,lo.branch_code,dpo.branch_code) AS primary_branch_code,
+        COALESCE(uo.department_code,lo.department_code,dpo.department_code) AS primary_pgd_code,
+        COALESCE(uo.department_name,lo.department_name,dpo.department_name) AS primary_pgd_name
+    FROM cif_customers c
+    LEFT JOIN latest_identifier li ON li.customer_id=c.id
+    LEFT JOIN user_owner uo ON uo.customer_id=c.id
+    LEFT JOIN bc_owner bo ON bo.customer_id=c.id
+    LEFT JOIN ln_owner lo ON lo.customer_id=c.id
+    LEFT JOIN dp_owner dpo ON dpo.customer_id=c.id
+    LEFT JOIN dp_identity dpid ON dpid.ma_kh=c.customer_core_code
+""")
+
+
+def prepare_profile_enrichment(db: Session, period_key: str) -> None:
+    db.execute(text("DROP TABLE IF EXISTS tmp_profile_enrichment"))
+    db.execute(PROFILE_ENRICHMENT_TEMP_SQL, {"period_key": period_key})
+    db.execute(text("CREATE UNIQUE INDEX ON tmp_profile_enrichment (customer_id)"))
+    db.execute(text("ANALYZE tmp_profile_enrichment"))
+
 SOURCE_RECONCILIATION_SQL = text("""
-    DELETE FROM customer_source_reconciliations WHERE processing_job_id=:job_id;
     WITH source_rows AS (
       SELECT 'DP01' source_type, ma_cn branch_code, ma_kh customer_code, MAX(ten_kh) customer_name, COUNT(*) row_count, SUM(COALESCE(current_balance,0)) amount FROM dp01_deposit_accounts WHERE period_key=:period_key GROUP BY ma_cn,ma_kh
       UNION ALL SELECT 'LN01',brcd,custseq,MAX(custnm),COUNT(*),SUM(COALESCE(du_no,0)) FROM ln01_loans WHERE period_key=:period_key GROUP BY brcd,custseq
@@ -1377,21 +1702,13 @@ def apply_customer_financial_metrics(db: Session, period_key: str) -> None:
         text("SELECT max(period_key) FROM bc29_customer_credit_risks WHERE period_key < :period_key"),
         {"period_key": period_key},
     ).scalar()
-    db.execute(text("""
-        UPDATE customer_period_branch_details
-        SET phi_bao_lanh=NULL, phi_chuyen_tien=NULL, phi_nhdt=NULL, abic_batd=NULL,
-            dprr_chung_tt=NULL, dprr_chung_lk=NULL, dprr_cuthe_tt=NULL, dprr_cuthe_lk=NULL
-        WHERE period_key=:period_key
-    """), {"period_key": period_key})
-    canonical = "d.id IN (SELECT id FROM canonical_rows)"
-    canonical_cte = """
-        canonical_rows AS (
-            SELECT min(id) AS id
-            FROM customer_period_branch_details
-            WHERE period_key=:period_key
-            GROUP BY ma_kh,branch_code
-        ),
-    """
+    # The period rows were freshly inserted by BRANCH_DETAIL_SQL, therefore all
+    # financial metrics are already NULL. Resetting every row here rewrote the
+    # complete (very wide) period table before calculating only a small subset.
+    # BRANCH_DETAIL_SQL creates exactly one row for each period/customer/branch.
+    # Avoid rebuilding and scanning a redundant canonical-row CTE for every metric.
+    canonical = "TRUE"
+    canonical_cte = ""
 
     db.execute(text(f"""
         WITH {canonical_cte} fees AS (
@@ -1404,7 +1721,14 @@ def apply_customer_financial_metrics(db: Session, period_key: str) -> None:
                              OR trim(account_code) LIKE '711039%%'
                   THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_nhdt,
               sum(CASE WHEN trim(account_code) LIKE '714%%'
-                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) abic_batd
+                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) abic_batd,
+              sum(CASE WHEN trim(account_code) LIKE '721001%%'
+                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_kdnt,
+              sum(CASE WHEN trim(account_code) LIKE '709002%%'
+                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_lc,
+              sum(CASE WHEN (substring(trim(account_code),1,6) BETWEEN '711002' AND '711014')
+                               OR trim(account_code) LIKE '711096%%'
+                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_ttqt
             FROM kh02_customer_transactions
             WHERE period_key=:period_key AND nullif(trim(customer_code),'') IS NOT NULL
               AND nullif(trim(branch_code),'') IS NOT NULL
@@ -1412,12 +1736,13 @@ def apply_customer_financial_metrics(db: Session, period_key: str) -> None:
         )
         UPDATE customer_period_branch_details d
         SET phi_bao_lanh=f.phi_bao_lanh, phi_chuyen_tien=f.phi_chuyen_tien,
-            phi_nhdt=f.phi_nhdt, abic_batd=f.abic_batd
+            phi_nhdt=f.phi_nhdt, abic_batd=f.abic_batd,
+            phi_kdnt=f.phi_kdnt, phi_lc=f.phi_lc, phi_ttqt=f.phi_ttqt,
+            ttqt=CASE WHEN f.phi_kdnt<>0 OR f.phi_lc<>0 OR f.phi_ttqt<>0 THEN 1 ELSE 0 END
         FROM fees f
         WHERE d.period_key=:period_key AND d.ma_kh=f.ma_kh AND d.branch_code=f.branch_code
           AND {canonical}
     """), {"period_key": period_key})
-
     db.execute(text(f"""
         WITH {canonical_cte} current_value AS (
             SELECT trim(custseq) ma_kh, trim(coalesce(nullif(brcd,''),branch_code)) branch_code,
@@ -1488,10 +1813,17 @@ def apply_customer_financial_metrics(db: Session, period_key: str) -> None:
         WITH a AS (
             SELECT period_key, ma_kh, {sums}
             FROM customer_period_branch_details
-            WHERE period_key=:period_key GROUP BY period_key,ma_kh
+            WHERE period_key=:period_key
+              AND ({" OR ".join(f"{column} IS NOT NULL" for column in FINANCIAL_METRIC_COLUMNS)})
+            GROUP BY period_key,ma_kh
         )
         UPDATE customer_period_profiles p SET {assignments}
         FROM a WHERE p.period_key=a.period_key AND p.ma_kh=a.ma_kh
+    """), {"period_key": period_key})
+    db.execute(text("""
+        UPDATE customer_period_profiles
+        SET ttqt=CASE WHEN coalesce(phi_kdnt,0)<>0 OR coalesce(phi_lc,0)<>0 OR coalesce(phi_ttqt,0)<>0 THEN 1 ELSE 0 END
+        WHERE period_key=:period_key
     """), {"period_key": period_key})
 
 
@@ -1527,18 +1859,19 @@ def process_customer_period(job_id: int) -> None:
         db.execute(DEFAULT_VND_RATE_SQL, {"period_key": job.period_key})
         db.commit()
 
-        update_job(db, job, "processing", "Đối chiếu DP01 với LN01, PF10, CN05, PF14 theo từng chi nhánh/PGD", 48)
+        update_job(db, job, "processing", "Khởi tạo từ Kho CIF và ghép DP01, LN01, PF10, CN05, PF14 theo mã khách hàng lõi", 48)
         db.execute(BRANCH_DETAIL_SQL, {"period_key": job.period_key, "job_id": job.id})
         db.commit()
 
-        update_job(db, job, "processing", "Đối chiếu file bổ sung Bảo lãnh, LC và Loa theo khách hàng", 62)
+        update_job(db, job, "processing", "Đối chiếu Bảo lãnh, OAB và Bill Payment theo tài khoản DP01", 62)
         db.execute(SUPPLEMENT_BRANCH_UPDATE_SQL, {"period_key": job.period_key})
+        db.execute(BILLPAYMENT_BRANCH_UPDATE_SQL, {"period_key": job.period_key})
         db.commit()
 
         update_job(db, job, "processing", "Gom khách hàng trùng MA_KH trên nhiều chi nhánh thành một hồ sơ", 78)
+        prepare_profile_enrichment(db, job.period_key)
         db.execute(PROFILE_SQL, {"period_key": job.period_key, "job_id": job.id})
-        db.execute(CIF_LINK_SQL, {"period_key": job.period_key})
-        db.execute(PROFILE_CIF_ENRICH_SQL, {"period_key": job.period_key})
+        db.execute(PRODUCT_FLAGS_PROFILE_UPDATE_SQL, {"period_key": job.period_key})
         db.commit()
 
         update_job(db, job, "processing", "Tính phí KH02 và dự phòng rủi ro LN01/BC29", 86)
@@ -1547,9 +1880,15 @@ def process_customer_period(job_id: int) -> None:
 
         update_job(db, job, "processing", "Tính doanh số chuyển tiền về TK theo số dư DP", 88)
         apply_transfer_inflow_to_profiles(db, job.period_key)
+        apply_rr01_metrics_to_profiles(db, job.period_key)
         db.commit()
 
         update_job(db, job, "processing", "Luu danh sach ma nguon chua doi chieu duoc voi Kho CIF", 94)
+        db.execute(
+            delete(CustomerSourceReconciliation).where(
+                CustomerSourceReconciliation.processing_job_id == job.id
+            )
+        )
         db.execute(SOURCE_RECONCILIATION_SQL, {"period_key": job.period_key, "job_id": job.id})
         db.commit()
 

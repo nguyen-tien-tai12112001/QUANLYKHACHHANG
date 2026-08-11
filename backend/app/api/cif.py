@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import shutil
 import uuid
+from io import BytesIO
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
+from openpyxl import Workbook
 from sqlalchemy import desc, func, or_
 from sqlalchemy.orm import Session
 
@@ -754,6 +756,32 @@ def list_cif_conflicts(
         ],
         "total": total,
     }
+
+
+@router.get("/conflicts-export")
+def export_cif_conflicts(status: str = Query(default="pending"), db: Session = Depends(get_db)):
+    query = db.query(CifIdentityConflict)
+    if status:
+        query = query.filter(CifIdentityConflict.status == status)
+    rows = query.order_by(desc(CifIdentityConflict.created_at)).all()
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.title = "Xung dot CIF"
+    sheet.append(["STT", "Loại xung đột", "Giá trị định danh", "Mã CIF liên quan", "Trạng thái", "Chi tiết", "Ngày phát hiện"])
+    for index, item in enumerate(rows, 1):
+        sheet.append([
+            index, item.conflict_type, item.identity_value,
+            ", ".join(item.full_cif_codes or []), item.status,
+            str(item.details or {}), item.created_at.isoformat() if item.created_at else None,
+        ])
+    sheet.freeze_panes = "A2"
+    sheet.auto_filter.ref = sheet.dimensions
+    for column, width in zip("ABCDEFG", [8, 24, 24, 48, 18, 70, 24]):
+        sheet.column_dimensions[column].width = width
+    output = BytesIO()
+    workbook.save(output)
+    output.seek(0)
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="doi_chieu_xung_dot_cif.xlsx"'})
 
 
 @router.post("/conflicts/{conflict_id}/resolve")

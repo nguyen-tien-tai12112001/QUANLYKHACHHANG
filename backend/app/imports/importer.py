@@ -40,6 +40,8 @@ from app.models import (
     LN01Loan,
     PF10LoanProfitability,
     PF14AccountBalance,
+    RR01HandledRiskLoan,
+    GL02LedgerTransaction,
 )
 
 UPLOAD_DIR = Path(__file__).resolve().parents[2] / "uploads"
@@ -76,7 +78,7 @@ def chunked(items: list[dict], size: int = BULK_CHUNK_SIZE):
 
 def bulk_insert_in_chunks(db: Session, model, mappings: list[dict]) -> None:
     for chunk in chunked(mappings):
-        db.bulk_insert_mappings(model, chunk, render_nulls=True)
+        copy_insert_mappings(db, model, chunk)
 
 
 def quote_identifier(value: str) -> str:
@@ -99,7 +101,14 @@ def copy_insert_mappings(db: Session, model, mappings: list[dict]) -> None:
     with raw_connection.cursor() as cursor:
         with cursor.copy(copy_sql) as copy:
             for item in mappings:
-                copy.write_row([item.get(column) for column in columns])
+                # COPY has no SQLAlchemy type binder. Encode JSON containers as
+                # valid JSON text; psycopg handles scalar/date/decimal values.
+                copy.write_row([
+                    json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+                    if isinstance(value := item.get(column), (dict, list))
+                    else value
+                    for column in columns
+                ])
 
 
 def delete_import_file_rows(db: Session, file_id: int) -> None:
@@ -113,6 +122,8 @@ def delete_import_file_rows(db: Session, file_id: int) -> None:
         BC29CustomerCreditRisk,
         KH02CustomerTransaction,
         FTPLNDailyLoanFTP,
+        RR01HandledRiskLoan,
+        GL02LedgerTransaction,
     ):
         db.execute(delete(model).where(model.import_file_id == file_id))
 
@@ -894,6 +905,72 @@ def _import_ftpln_chunk(db: Session, rows: list[dict], import_file: ImportFile) 
     return len(mappings)
 
 
+def _import_rr01_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> int:
+    mappings = []
+    for raw in rows:
+        branch_code = clean_text(raw.get("BRCD")) or clean_text(raw.get("CN_LOAI_I")) or import_file.branch_code
+        validate_source_identity(import_file, branch_code)
+        mappings.append({
+            "import_file_id": import_file.id, "import_batch_id": import_file.import_batch_id,
+            "period_key": import_file.period_key, "period_date": import_file.period_date,
+            "branch_code": branch_code, "customer_code": clean_customer_code(raw.get("MA_KH")),
+            "customer_name": clean_text(raw.get("TEN_KH")), "lds_number": clean_text(raw.get("SO_LDS")),
+            "lav_number": clean_text(raw.get("SO_LAV")), "currency_code": clean_text(raw.get("CCY")),
+            "customer_type": clean_text(raw.get("LOAI_KH")),
+            "disbursement_date": parse_yyyymmdd(raw.get("NGAY_GIAI_NGAN")),
+            "maturity_date": parse_yyyymmdd(raw.get("NGAY_DEN_HAN")),
+            "vamc_flag": clean_text(raw.get("VAMC_FLG")), "risk_handling_date": parse_yyyymmdd(raw.get("NGAY_XLRR")),
+            "original_principal": parse_decimal(raw.get("DUNO_GOC_BAN_DAU")),
+            "original_accrued_interest": parse_decimal(raw.get("DUNO_LAI_TICHLUY_BD")),
+            "recovered_principal_before_period": parse_decimal(raw.get("DOC_DAUKY_DA_THU_HT")),
+            "current_principal": parse_decimal(raw.get("DUNO_GOC_HIENTAI")),
+            "current_interest": parse_decimal(raw.get("DUNO_LAI_HIENTAI")),
+            "short_term_principal": parse_decimal(raw.get("DUNO_NGAN_HAN")),
+            "medium_term_principal": parse_decimal(raw.get("DUNO_TRUNG_HAN")),
+            "long_term_principal": parse_decimal(raw.get("DUNO_DAI_HAN")),
+            "recovered_principal_period": parse_decimal(raw.get("THU_GOC")),
+            "recovered_interest_period": parse_decimal(raw.get("THU_LAI")),
+            "real_estate_amount": parse_decimal(raw.get("BDS")),
+            "movable_asset_amount": parse_decimal(raw.get("DS")),
+            "other_asset_amount": parse_decimal(raw.get("TSK")), "raw_data": json_safe_raw(raw),
+        })
+    bulk_insert_in_chunks(db, RR01HandledRiskLoan, mappings)
+    return len(mappings)
+
+
+def _import_gl02_chunk(db: Session, rows: list[dict], import_file: ImportFile) -> int:
+    mappings = []
+    for raw in rows:
+        transaction_date = parse_yyyymmdd(raw.get("TRDATE"))
+        if not transaction_date or not import_file.period_start or not import_file.period_end or not (import_file.period_start <= transaction_date <= import_file.period_end):
+            raise ValueError(f"TRDATE GL02 không hợp lệ hoặc ngoài khoảng tên file: {raw.get('TRDATE')}")
+        customer_raw = clean_text(raw.get("CUSTOMER")) or ""
+        customer_branch, customer_code = (customer_raw.split("-", 1) + [""])[:2] if "-" in customer_raw else (None, customer_raw)
+        created_datetime = None
+        created_text = clean_text(raw.get("CRTDTM"))
+        if created_text:
+            try: created_datetime = datetime.strptime(created_text, "%Y%m%d %H:%M:%S")
+            except ValueError: pass
+        mappings.append({
+            "import_file_id": import_file.id, "import_batch_id": import_file.import_batch_id,
+            "period_key": import_file.period_key, "transaction_date": transaction_date,
+            "transaction_branch_code": clean_text(raw.get("TRBRCD")),
+            "customer_branch_code": clean_text(customer_branch),
+            "customer_code": None if clean_customer_code(customer_code) == "000000000" else clean_customer_code(customer_code),
+            "user_id": clean_text(raw.get("USERID")),
+            "journal_sequence": clean_text(raw.get("JOURSEQ")),
+            "daily_transaction_sequence": clean_text(raw.get("DYTRSEQ")),
+            "account_code": clean_text(raw.get("LOCAC")), "currency_code": clean_text(raw.get("CCY")),
+            "business_code": clean_text(raw.get("BUSCD")), "unit_code": clean_text(raw.get("UNIT")),
+            "transaction_code": clean_text(raw.get("TRCD")), "transaction_type": clean_text(raw.get("TRTP")),
+            "reference": clean_text(raw.get("REFERENCE")), "remark": clean_text(raw.get("REMARK")),
+            "debit_amount": parse_decimal(raw.get("DRAMOUNT")), "credit_amount": parse_decimal(raw.get("CRAMOUNT")),
+            "created_datetime": created_datetime, "source_row_hash": source_row_hash(raw), "raw_data": json_safe_raw(raw),
+        })
+    bulk_insert_in_chunks(db, GL02LedgerTransaction, mappings)
+    return len(mappings)
+
+
 COPY_CHUNK_HANDLERS = {
     "DP01": _copy_dp01_chunk,
     "CN05": _copy_cn05_chunk,
@@ -904,6 +981,8 @@ COPY_CHUNK_HANDLERS = {
     "BC29": _import_bc29_chunk,
     "KH02": _import_kh02_chunk,
     "FTPLN": _import_ftpln_chunk,
+    "RR01": _import_rr01_chunk,
+    "GL02": _import_gl02_chunk,
 }
 
 

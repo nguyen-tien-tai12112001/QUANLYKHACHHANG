@@ -4,13 +4,12 @@ import { notification } from 'antd';
 import { AuthProvider } from './auth';
 import MainLayout from './components/MainLayout';
 import GlobalApiLoading from './components/GlobalApiLoading';
-import Dashboard from './pages/Dashboard';
 import ImportData from './pages/ImportData';
 import CustomerProcessing from './pages/CustomerProcessing';
-import CustomerReport from './pages/CustomerReport';
 import Login from './pages/Login';
 import SystemAdmin from './pages/SystemAdmin';
 import AuditLogs from './pages/AuditLogs';
+import SystemConfiguration from './pages/SystemConfiguration';
 import DataGovernance from './pages/DataGovernance';
 import CifDataWarehouse from './pages/CifDataWarehouse';
 import client from './api/client';
@@ -102,18 +101,22 @@ function LegacyApp() {
     'c360-dashboard': <C360App embedded initialPage="dashboard" currentUser={currentUser} onLogout={handleLogout} />,
     'c360-insights': <C360App embedded initialPage="insights" currentUser={currentUser} onLogout={handleLogout} />,
     'c360-customers': <C360App embedded initialPage="customers" currentUser={currentUser} onLogout={handleLogout} />,
-    dashboard: <Dashboard />,
+    'analysis-deposit': <C360App embedded initialPage="analysis-deposit" currentUser={currentUser} onLogout={handleLogout} />,
+    'analysis-credit': <C360App embedded initialPage="analysis-credit" currentUser={currentUser} onLogout={handleLogout} />,
+    'analysis-income': <C360App embedded initialPage="analysis-income" currentUser={currentUser} onLogout={handleLogout} />,
+    'analysis-unit': <C360App embedded initialPage="analysis-unit" currentUser={currentUser} onLogout={handleLogout} />,
     'data-warehouse': <ImportData />,
     'data-cif': <CifDataWarehouse />,
     'customer-processing': <CustomerProcessing />,
     'data-sources': <DataGovernance mode="sources" />,
+    'data-reconciliation': <DataGovernance mode="reconciliation" />,
     'data-mapping': <DataGovernance mode="mapping" />,
-    reports: <CustomerReport />,
     'admin-branches': <SystemAdmin section="branches" />,
     'admin-departments': <SystemAdmin section="departments" />,
     'admin-users': <SystemAdmin section="users" />,
     'admin-roles': <SystemAdmin section="roles" />,
     'admin-audit-logs': <AuditLogs />,
+    'admin-configuration': <SystemConfiguration />,
   };
 
   if (!currentUser) {
