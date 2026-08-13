@@ -48,7 +48,7 @@ const { RangePicker } = DatePicker;
 const { Paragraph, Text, Title } = Typography;
 
 const requiredTypes = ['DP01', 'LN01', 'CN05', 'PF10', 'PF14'];
-const supportedTypes = [...requiredTypes, 'BC06', 'BC29', 'KH02', 'FTPLN'];
+const supportedTypes = [...requiredTypes, 'BC06', 'BC29', 'KH02', 'FTPLN', 'RR01', 'GL02'];
 const typeColors = {
   DP01: 'gold',
   LN01: 'volcano',
@@ -59,6 +59,8 @@ const typeColors = {
   BC29: 'red',
   KH02: 'blue',
   FTPLN: 'geekblue',
+  RR01: 'orange',
+  GL02: 'lime',
 };
 
 const fileTypeOptions = [
@@ -104,8 +106,28 @@ function sourceDateLabel(value) {
 
 function parseFilename(name) {
   const value = name || '';
+  const gl02 = /^(\d+)_(GL02)_(\d{8})(\d{8})(_\d+)?\.(csv|xlsx)$/i.exec(value);
+  if (gl02) {
+    const periodStart = parseDateKey(gl02[3]);
+    const periodEnd = parseDateKey(gl02[4]);
+    if (!periodStart || !periodEnd || periodStart > periodEnd) return null;
+    if (periodStart.getFullYear() !== periodEnd.getFullYear() || periodStart.getMonth() !== periodEnd.getMonth()) return null;
+    return {
+      branchCode: gl02[1],
+      fileType: 'GL02',
+      periodKey: gl02[4],
+      periodStart: gl02[3],
+      periodEnd: gl02[4],
+      suffix: gl02[5] || '',
+      ext: gl02[6].toLowerCase(),
+      identity: value.toLowerCase(),
+    };
+  }
   const kh02 = /^(\d+)_(KH02)_(\d{8})(\d{8})\.(csv|xlsx)$/i.exec(value);
   if (kh02) {
+    const periodStart = parseDateKey(kh02[3]);
+    const periodEnd = parseDateKey(kh02[4]);
+    if (!periodStart || !periodEnd || periodStart > periodEnd) return null;
     return {
       branchCode: kh02[1],
       fileType: 'KH02',
@@ -142,14 +164,10 @@ function parseFilename(name) {
       identity: value.toLowerCase(),
     };
   }
-  const standard = /^(\d+)_(CN05|DP01|LN01|PF10|PF14|BC29)_(\d{8})\.(csv|xlsx)$/i.exec(value);
+  const standard = /^(\d+)_(CN05|DP01|LN01|PF10|PF14|BC29|RR01)_(\d{8})\.(csv|xlsx)$/i.exec(value);
   if (!standard) return null;
   const periodKey = standard[3];
-  const month = Number(periodKey.slice(4, 6));
-  const day = Number(periodKey.slice(6, 8));
-  if (month < 1 || month > 12 || day < 1 || day > 31) {
-    return null;
-  }
+  if (!parseDateKey(periodKey)) return null;
   return {
     branchCode: standard[1],
     fileType: standard[2].toUpperCase(),
@@ -157,6 +175,16 @@ function parseFilename(name) {
     ext: standard[4].toLowerCase(),
     identity: value.toLowerCase(),
   };
+}
+
+function parseDateKey(value) {
+  if (!/^\d{8}$/.test(value || '')) return null;
+  const year = Number(value.slice(0, 4));
+  const month = Number(value.slice(4, 6));
+  const day = Number(value.slice(6, 8));
+  const parsed = new Date(year, month - 1, day);
+  if (parsed.getFullYear() !== year || parsed.getMonth() !== month - 1 || parsed.getDate() !== day) return null;
+  return parsed;
 }
 
 function statusTag(value) {
@@ -957,7 +985,7 @@ function ImportData() {
             <CloudUploadOutlined />
           </p>
           <p className="ant-upload-text">Kéo thả nhiều file dữ liệu vào đây</p>
-          <p className="ant-upload-hint">Hỗ trợ DP01, LN01, CN05, PF10, PF14, BC06, BC29, KH02 và FTPLN theo quy tắc tên đã cấu hình</p>
+          <p className="ant-upload-hint">Hỗ trợ DP01, LN01, CN05, PF10, PF14, BC06, BC29, KH02, FTPLN, RR01 và GL02 theo quy tắc tên đã cấu hình</p>
         </Dragger>
 
         {uploadPreview.length ? (
