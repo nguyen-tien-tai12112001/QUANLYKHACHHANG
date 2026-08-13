@@ -17,6 +17,7 @@ from app.customer_processing import (
     get_period_file_summary,
     process_customer_period,
     save_optional_file,
+    validate_processed_period,
 )
 from app.database import get_db
 from app.models import (
@@ -1126,6 +1127,27 @@ def list_source_reconciliations(
         "customer_core_code", "customer_name", "source_row_count", "source_amount",
         "reason_code", "status", "details", "reviewed_by", "reviewed_at", "created_at",
     ]
+
+
+@router.get("/quality-audit")
+def get_processing_quality_audit(
+    period_key: str = Query(...),
+    db: Session = Depends(get_db),
+):
+    batch_exists = db.query(ImportBatch.id).filter(ImportBatch.period_key == period_key).first()
+    if not batch_exists:
+        raise HTTPException(status_code=404, detail="Kỳ dữ liệu không tồn tại")
+    report = validate_processed_period(db, period_key)
+    report["period_key"] = period_key
+    report["checks"] = [
+        {"code": "CIF_POPULATION", "label": "Đủ tập khách hàng CIF", "passed": report["profile_count"] == report["cif_count"], "actual": report["profile_count"], "expected": report["cif_count"]},
+        {"code": "UNIQUE_CUSTOMER", "label": "Một mã KH lõi/một hồ sơ", "passed": report["duplicate_customer_codes"] == 0, "actual": report["duplicate_customer_codes"], "expected": 0},
+        {"code": "VALID_CUSTOMER_CODE", "label": "Không có mã KH rỗng", "passed": report["blank_customer_codes"] == 0, "actual": report["blank_customer_codes"], "expected": 0},
+        {"code": "CIF_REFERENCE", "label": "Mọi hồ sơ đều tham chiếu CIF", "passed": report["customers_not_in_cif"] == 0, "actual": report["customers_not_in_cif"], "expected": 0},
+        {"code": "CUSTOMER_LINK", "label": "Liên kết đúng customer_id", "passed": report["wrong_customer_links"] == 0, "actual": report["wrong_customer_links"], "expected": 0},
+        {"code": "SOURCE_TOTALS", "label": "Tổng chỉ tiêu khớp dữ liệu nguồn", "passed": report["metric_mismatch_count"] == 0, "actual": report["metric_mismatch_count"], "expected": 0},
+    ]
+    return report
     return {
         "items": [serialize_model(row, fields) for row in rows],
         "total": total,

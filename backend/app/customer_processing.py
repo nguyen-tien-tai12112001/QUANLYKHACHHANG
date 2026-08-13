@@ -883,6 +883,123 @@ PROFILE_SQL = text(
 )
 
 
+# A CIF customer is the processing population for every period. Some valid CIF
+# records can temporarily have no usable branch identifier (for example while a
+# conflict is waiting for review). They must still be visible in C360 instead of
+# silently disappearing from the processed population.
+MISSING_CIF_PROFILE_SQL = text(
+    """
+    INSERT INTO customer_period_profiles (
+        period_key, period_date, customer_id, ma_kh, ten_kh, loai_khach_hang,
+        ten_chu_doanh_nghiep, so_cccd, ma_so_thue, ngay_thanh_lap, dia_chi,
+        gioi_tinh, ngay_sinh, nghe_nghiep, management_source,
+        managing_branch_code, managing_department_code, managing_department_name,
+        ma_cb, officer_employee_code, ten_can_bo, telephone,
+        primary_branch_code, primary_pgd_code, primary_pgd_name,
+        processing_job_id
+    )
+    SELECT
+        :period_key, batch.period_date, c.id, c.customer_core_code,
+        e.ten_kh, e.loai_khach_hang, e.ten_chu_doanh_nghiep, e.so_cccd,
+        e.ma_so_thue, e.ngay_thanh_lap, e.dia_chi, e.gioi_tinh, e.ngay_sinh,
+        e.nghe_nghiep, e.management_source, e.managing_branch_code,
+        e.managing_department_code, e.managing_department_name, e.ma_cb,
+        e.officer_employee_code, e.ten_can_bo, e.telephone,
+        e.primary_branch_code, e.primary_pgd_code, e.primary_pgd_name, :job_id
+    FROM cif_customers c
+    JOIN import_batches batch ON batch.period_key=:period_key
+    LEFT JOIN tmp_profile_enrichment e ON e.customer_id=c.id
+    LEFT JOIN customer_period_profiles p
+      ON p.period_key=:period_key AND p.ma_kh=c.customer_core_code
+    WHERE p.id IS NULL
+    ON CONFLICT (period_key, ma_kh) DO NOTHING
+    """
+)
+
+
+def validate_processed_period(db: Session, period_key: str) -> dict:
+    """Run non-negotiable customer-level integrity checks before publishing a job."""
+    row = db.execute(text("""
+        SELECT
+          (SELECT count(*) FROM cif_customers) AS cif_count,
+          count(*) AS profile_count,
+          count(DISTINCT p.ma_kh) AS unique_customer_count,
+          count(*) FILTER (WHERE NULLIF(TRIM(p.ma_kh),'') IS NULL) AS blank_customer_codes,
+          count(*) FILTER (WHERE c.id IS NULL) AS customers_not_in_cif,
+          count(*) FILTER (WHERE p.customer_id IS DISTINCT FROM c.id) AS wrong_customer_links
+        FROM customer_period_profiles p
+        LEFT JOIN cif_customers c ON c.customer_core_code=p.ma_kh
+        WHERE p.period_key=:period_key
+    """), {"period_key": period_key}).mappings().one()
+    report = {key: int(value or 0) for key, value in row.items()}
+    report["duplicate_customer_codes"] = report["profile_count"] - report["unique_customer_count"]
+    totals = db.execute(text("""
+        WITH expected AS (
+          SELECT
+            (SELECT COALESCE(sum(l.du_no),0) FROM ln01_loans l JOIN cif_customers c ON c.customer_core_code=TRIM(l.custseq) WHERE l.period_key=:period_key) AS so_du_tien_vay,
+            (SELECT COALESCE(sum(customer_amount),0) FROM (
+               SELECT CAST(sum(CASE WHEN p.monterm>0 THEN p.monthlyendbalance*COALESCE(r.exchange_rate,1) ELSE 0 END) AS numeric(20,2)) customer_amount
+               FROM pf14_account_balances p JOIN cif_customers c ON c.customer_core_code=TRIM(BOTH FROM REPLACE(COALESCE(p.custseq,''),'''',''))
+               LEFT JOIN customer_period_exchange_rates r ON r.period_key=p.period_key AND r.ccy=UPPER(TRIM(COALESCE(p.ccy,'VND')))
+               WHERE p.period_key=:period_key GROUP BY c.customer_core_code
+             ) customer_totals) AS so_du_tien_gui,
+            (SELECT COALESCE(sum(customer_amount),0) FROM (
+               SELECT CAST(sum(CASE WHEN p.monterm=0 THEN p.averagebalance*COALESCE(r.exchange_rate,1) ELSE 0 END) AS numeric(20,2)) customer_amount
+               FROM pf14_account_balances p JOIN cif_customers c ON c.customer_core_code=TRIM(BOTH FROM REPLACE(COALESCE(p.custseq,''),'''',''))
+               LEFT JOIN customer_period_exchange_rates r ON r.period_key=p.period_key AND r.ccy=UPPER(TRIM(COALESCE(p.ccy,'VND')))
+               WHERE p.period_key=:period_key GROUP BY c.customer_core_code
+             ) customer_totals) AS so_du_tgtt_binh_quan,
+            (SELECT COALESCE(sum(CASE WHEN TRIM(k.account_code) LIKE '7040%%' THEN COALESCE(k.credit_amount,0)-COALESCE(k.debit_amount,0) ELSE 0 END),0)
+               FROM kh02_customer_transactions k JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code) WHERE k.period_key=:period_key) AS phi_bao_lanh,
+            (SELECT COALESCE(sum(CASE WHEN TRIM(k.account_code) LIKE '721001%%' THEN COALESCE(k.credit_amount,0)-COALESCE(k.debit_amount,0) ELSE 0 END),0)
+               FROM kh02_customer_transactions k JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code) WHERE k.period_key=:period_key) AS phi_kdnt,
+            (SELECT COALESCE(sum(CASE WHEN TRIM(k.account_code) LIKE '709002%%' THEN COALESCE(k.credit_amount,0)-COALESCE(k.debit_amount,0) ELSE 0 END),0)
+               FROM kh02_customer_transactions k JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code) WHERE k.period_key=:period_key) AS phi_lc,
+            (SELECT COALESCE(sum(CASE WHEN substring(TRIM(k.account_code),1,6) BETWEEN '711002' AND '711014' OR TRIM(k.account_code) LIKE '711096%%' THEN COALESCE(k.credit_amount,0)-COALESCE(k.debit_amount,0) ELSE 0 END),0)
+               FROM kh02_customer_transactions k JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code) WHERE k.period_key=:period_key) AS phi_ttqt,
+            (SELECT COALESCE(sum(r.current_principal),0) FROM rr01_handled_risk_loans r JOIN cif_customers c ON c.customer_core_code=TRIM(r.customer_code) WHERE r.period_key=:period_key) AS du_no_xlrr,
+            (SELECT COALESCE(sum(COALESCE(r.recovered_principal_period,0)+COALESCE(r.recovered_interest_period,0)),0) FROM rr01_handled_risk_loans r JOIN cif_customers c ON c.customer_core_code=TRIM(r.customer_code) WHERE r.period_key=:period_key) AS ds_thu_no_xlrr,
+            (SELECT COALESCE(sum(g.credit_amount),0) FROM gl02_ledger_transactions g JOIN cif_customers c ON c.customer_core_code=TRIM(g.customer_code)
+               WHERE g.period_key=:period_key AND g.account_code='421101' AND COALESCE(g.transaction_type,'Normal')='Normal' AND g.customer_code<>'000000000') AS doanh_so_chuyen_tien_ve_tk
+        ), actual AS (
+          SELECT COALESCE(sum(so_du_tien_vay),0) so_du_tien_vay,
+                 COALESCE(sum(so_du_tien_gui),0) so_du_tien_gui,
+                 COALESCE(sum(so_du_tgtt_binh_quan),0) so_du_tgtt_binh_quan,
+                 COALESCE(sum(phi_bao_lanh),0) phi_bao_lanh,
+                 COALESCE(sum(phi_kdnt),0) phi_kdnt, COALESCE(sum(phi_lc),0) phi_lc,
+                 COALESCE(sum(phi_ttqt),0) phi_ttqt, COALESCE(sum(du_no_xlrr),0) du_no_xlrr,
+                 COALESCE(sum(ds_thu_no_xlrr),0) ds_thu_no_xlrr,
+                 COALESCE(sum(doanh_so_chuyen_tien_ve_tk),0) doanh_so_chuyen_tien_ve_tk
+          FROM customer_period_profiles WHERE period_key=:period_key
+        )
+        SELECT to_jsonb(expected) expected, to_jsonb(actual) actual FROM expected,actual
+    """), {"period_key": period_key}).mappings().one()
+    expected_totals = totals["expected"] or {}
+    actual_totals = totals["actual"] or {}
+    metric_checks = []
+    for code, expected in expected_totals.items():
+        actual = actual_totals.get(code, 0)
+        difference = Decimal(str(actual or 0)) - Decimal(str(expected or 0))
+        metric_checks.append({
+            "code": code,
+            "expected": float(expected or 0),
+            "actual": float(actual or 0),
+            "difference": float(difference),
+            "passed": abs(difference) <= Decimal("0.01"),
+        })
+    report["metric_checks"] = metric_checks
+    report["metric_mismatch_count"] = sum(1 for item in metric_checks if not item["passed"])
+    report["is_valid"] = all((
+        report["profile_count"] == report["cif_count"],
+        report["duplicate_customer_codes"] == 0,
+        report["blank_customer_codes"] == 0,
+        report["customers_not_in_cif"] == 0,
+        report["wrong_customer_links"] == 0,
+        report["metric_mismatch_count"] == 0,
+    ))
+    return report
+
+
 SUPPLEMENT_BRANCH_UPDATE_SQL = text(
     """
     UPDATE customer_period_branch_details detail
@@ -1822,8 +1939,9 @@ def apply_customer_financial_metrics(db: Session, period_key: str) -> None:
     """), {"period_key": period_key})
     db.execute(text("""
         UPDATE customer_period_profiles
-        SET ttqt=CASE WHEN coalesce(phi_kdnt,0)<>0 OR coalesce(phi_lc,0)<>0 OR coalesce(phi_ttqt,0)<>0 THEN 1 ELSE 0 END
+        SET ttqt=1
         WHERE period_key=:period_key
+          AND (coalesce(phi_kdnt,0)<>0 OR coalesce(phi_lc,0)<>0 OR coalesce(phi_ttqt,0)<>0)
     """), {"period_key": period_key})
 
 
@@ -1871,6 +1989,7 @@ def process_customer_period(job_id: int) -> None:
         update_job(db, job, "processing", "Gom khách hàng trùng MA_KH trên nhiều chi nhánh thành một hồ sơ", 78)
         prepare_profile_enrichment(db, job.period_key)
         db.execute(PROFILE_SQL, {"period_key": job.period_key, "job_id": job.id})
+        db.execute(MISSING_CIF_PROFILE_SQL, {"period_key": job.period_key, "job_id": job.id})
         db.execute(PRODUCT_FLAGS_PROFILE_UPDATE_SQL, {"period_key": job.period_key})
         db.commit()
 
@@ -1891,6 +2010,11 @@ def process_customer_period(job_id: int) -> None:
         )
         db.execute(SOURCE_RECONCILIATION_SQL, {"period_key": job.period_key, "job_id": job.id})
         db.commit()
+
+        update_job(db, job, "processing", "Kiểm định tính toàn vẹn dữ liệu theo khách hàng", 98)
+        quality_report = validate_processed_period(db, job.period_key)
+        if not quality_report["is_valid"]:
+            raise ValueError(f"Kiểm định dữ liệu C360 không đạt: {quality_report}")
 
         total_customers = (
             db.query(func.count(CustomerPeriodProfile.id))

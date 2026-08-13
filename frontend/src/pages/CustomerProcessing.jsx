@@ -144,6 +144,7 @@ function CustomerProcessing() {
   const [currentJob, setCurrentJob] = useState(null);
   const [optionalFiles, setOptionalFiles] = useState([]);
   const [exchangeRates, setExchangeRates] = useState([]);
+  const [qualityAudit, setQualityAudit] = useState(null);
   const [loading, setLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [recovering, setRecovering] = useState(false);
@@ -151,6 +152,7 @@ function CustomerProcessing() {
 
   function selectPeriod(periodKey, periodList = periods) {
     setSelectedPeriod(periodKey);
+    setQualityAudit(null);
     const period = periodList.find((item) => item.period_key === periodKey);
     setCurrentJob(period?.last_job || null);
   }
@@ -180,11 +182,19 @@ function CustomerProcessing() {
     setExchangeRates(data || []);
   }
 
+  async function loadQualityAudit(periodKey = selectedPeriod) {
+    if (!periodKey) return;
+    const { data } = await client.get('/customer-processing/quality-audit', {
+      params: { period_key: periodKey },
+    });
+    setQualityAudit(data || null);
+  }
+
   async function refreshAll(periodKey = selectedPeriod) {
     setLoading(true);
     try {
       await loadPeriods(periodKey);
-      await Promise.all([loadOptionalFiles(periodKey), loadExchangeRates(periodKey)]);
+      await Promise.all([loadOptionalFiles(periodKey), loadExchangeRates(periodKey), loadQualityAudit(periodKey)]);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -201,6 +211,7 @@ function CustomerProcessing() {
     if (!selectedPeriod) return;
     loadOptionalFiles(selectedPeriod);
     loadExchangeRates(selectedPeriod);
+    loadQualityAudit(selectedPeriod);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPeriod]);
 
@@ -541,6 +552,24 @@ function CustomerProcessing() {
                             CIF gần nhất: {selectedPeriodInfo.latest_cif_import.original_filename} · {new Date(selectedPeriodInfo.latest_cif_import.finished_at).toLocaleString('vi-VN')}
                           </Text>
                         ) : null}
+                      </Space>
+                    )}
+                  />
+                ) : null}
+                {qualityAudit ? (
+                  <Alert
+                    type={qualityAudit.is_valid ? 'success' : 'error'}
+                    showIcon
+                    message={qualityAudit.is_valid ? 'Kiểm định dữ liệu theo khách hàng đạt' : 'Kiểm định dữ liệu theo khách hàng chưa đạt'}
+                    description={(
+                      <Space size={[6, 6]} wrap>
+                        {(qualityAudit.checks || []).map((check) => (
+                          <Tooltip key={check.code} title={`Thực tế: ${money(check.actual)} · Yêu cầu: ${money(check.expected)}`}>
+                            <Tag color={check.passed ? 'success' : 'error'}>
+                              {check.passed ? '✓' : '✕'} {check.label}
+                            </Tag>
+                          </Tooltip>
+                        ))}
                       </Space>
                     )}
                   />
