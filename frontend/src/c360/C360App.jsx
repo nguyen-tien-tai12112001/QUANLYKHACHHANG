@@ -751,7 +751,16 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
       }
     : customerRecord;
   const metricCustomer = { ...viewedCustomer, ...(financialMetrics.totals || {}) };
-  const officerScope = profileBranch && selectedBranchDetail ? [selectedBranchDetail] : branchDetails;
+  const primaryBranchDetail = branchDetails.find(
+    (item) => item.branch_code === customerRecord.primary_branch_code,
+  );
+  // Ở chế độ toàn KH chỉ hiển thị cán bộ của chi nhánh chính. Cán bộ tại chi nhánh
+  // khác chỉ xuất hiện khi người dùng chọn đúng quan hệ chi nhánh đó.
+  const officerScope = profileBranch && selectedBranchDetail
+    ? [selectedBranchDetail]
+    : primaryBranchDetail
+      ? [primaryBranchDetail]
+      : [];
   const officerSummary = [...new Set(officerScope
     .filter((item) => item.ten_can_bo || item.ma_cb || item.officer_employee_code)
     .map((item) => [
