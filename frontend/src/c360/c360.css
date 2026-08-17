@@ -1650,6 +1650,79 @@
   background: #fff;
 }
 
+.c360-primary-accounts {
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #f8fbff 0%, #f4f8ff 100%);
+}
+
+.c360-primary-account-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.c360-primary-account-card {
+  min-width: 0;
+  padding: 13px 14px;
+  border: 1px solid #dbeafe;
+  border-top: 3px solid #2563eb;
+  border-radius: 13px;
+  background: #fff;
+  box-shadow: 0 5px 16px rgba(37, 99, 235, 0.06);
+}
+
+.c360-primary-account-card.rank-2 { border-top-color: #0891b2; }
+.c360-primary-account-card.rank-3 { border-top-color: #7c3aed; }
+.c360-primary-account-card.is-empty { opacity: 0.68; box-shadow: none; }
+
+.c360-primary-account-title,
+.c360-primary-account-balances {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.c360-primary-account-title > span {
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.c360-primary-account-number {
+  display: block;
+  overflow: hidden;
+  margin: 8px 0 3px;
+  color: #0f172a;
+  font-size: 16px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.c360-primary-account-card > small { color: #64748b; }
+
+.c360-primary-account-balances {
+  align-items: flex-end;
+  margin-top: 11px;
+  padding-top: 9px;
+  border-top: 1px dashed #dbeafe;
+}
+
+.c360-primary-account-balances span { min-width: 0; }
+.c360-primary-account-balances span:last-child { text-align: right; }
+.c360-primary-account-balances small { display: block; color: #64748b; }
+.c360-primary-account-balances strong { display: block; color: #0f172a; font-size: 12px; }
+
+@media (max-width: 900px) {
+  .c360-primary-account-grid { grid-template-columns: 1fr; }
+}
+
 .c360-gl02-panel {
   max-width: 980px;
   padding: 12px 14px 8px;

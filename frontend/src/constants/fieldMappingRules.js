@@ -1,9 +1,9 @@
 const implemented = {
   MCN: {
     profileField: 'primary_branch_code',
-    actualSource: 'User/CIF → BC06 → LN01 → DP01 → CIF',
-    calculation: 'Chọn chi nhánh chính có primary_location_score cao nhất từ tổng quy mô tiền gửi, dư nợ và số dịch vụ của khách hàng.',
-    reconciliation: 'Đối chiếu mã chi nhánh đã chọn với branch_details; kiểm tra chi nhánh có điểm cao nhất và tồn tại trong file nguồn.',
+    actualSource: 'User–CIF → DP01 tổng số dư → BC06 → LN01 → CIF',
+    calculation: 'Ưu tiên user được gắn trực tiếp mã CIF. Nếu không có, cộng số dư DP01 theo từng chi nhánh và chọn chi nhánh có tổng số dư lớn nhất; chỉ khi không có DP01 mới dự phòng BC06, LN01 rồi CIF.',
+    reconciliation: 'Đối chiếu chi nhánh chính với chi tiết quan hệ; khi dùng DP01 phải là chi nhánh có tổng số dư lớn nhất của đúng khách hàng trong kỳ.',
   },
   MPGD: {
     profileField: 'primary_pgd_code',
@@ -85,14 +85,14 @@ const implemented = {
   },
   MACB: {
     profileField: 'ma_cb',
-    actualSource: 'LN01 + người dùng hệ thống',
-    calculation: 'Ưu tiên user hệ thống được gắn đúng mã KH CIF; sau đó BC06, LN01.OFFICER_ID/OFFICER_NAME, DP01.EMPLOYEE_NUMBER/EMPLOYEE_NAME và cuối cùng chi nhánh CIF.',
-    reconciliation: 'Mỗi quan hệ cán bộ được đối chiếu với user hệ thống để lấy đúng chi nhánh/phòng; chi nhánh không có cán bộ khớp thì để trống.',
+    actualSource: 'User–CIF / DP01 + người dùng hệ thống; dự phòng LN01',
+    calculation: 'Ưu tiên user gắn trực tiếp mã CIF. Nếu chọn chi nhánh theo tổng số dư DP01 thì chỉ lấy EMPLOYEE_NUMBER/EMPLOYEE_NAME hợp lệ tại chính chi nhánh đó; không mượn cán bộ từ chi nhánh khác. Chỉ dự phòng LN01 khi khách hàng không có DP01.',
+    reconciliation: 'Đối chiếu mã nhân viên hoặc mã CBTD với user, chi nhánh và phòng ban; không khớp user trong chi nhánh quản lý thì để trống.',
   },
   TENCB: {
     profileField: 'ten_can_bo',
-    actualSource: 'LN01 + người dùng hệ thống',
-    calculation: 'Lấy họ tên user theo cùng quy tắc ưu tiên xác định cán bộ quản lý; lưu riêng theo từng chi nhánh quan hệ.',
+    actualSource: 'User–CIF / DP01 + người dùng hệ thống; dự phòng LN01',
+    calculation: 'Lấy họ tên user theo cùng quy tắc xác định MACB; tên tổng quan chỉ lấy từ quan hệ thuộc chi nhánh chính, từng chi nhánh không có cán bộ khớp thì để trống.',
     reconciliation: 'Đối chiếu mã nhân viên/mã CBTD với user và cặp chi nhánh + phòng ban; không nhân một cán bộ sang các chi nhánh khác.',
   },
   DS_TKTT: {
@@ -106,6 +106,24 @@ const implemented = {
     actualSource: 'GL02',
     calculation: 'MAX(CRTDTM), dự phòng MAX(TRDATE), sau khi lọc LOCAC = 421101, TRTP = Normal và CUSTOMER hợp lệ.',
     reconciliation: 'Đối chiếu thời điểm giao dịch cuối cùng và số ngày từ giao dịch đó đến ngày cuối kỳ.',
+  },
+  TKTT1: {
+    profileField: 'deposit-accounts.primary_accounts[0].account_number',
+    actualSource: 'DP01 + PF14',
+    calculation: 'Lọc tài khoản thanh toán DP01 có MONTH_TERM = 0, chưa đóng và không inactive. Ưu tiên tài khoản thuộc chi nhánh chính, sau đó số dư bình quân PF14 giảm dần, số dư cuối kỳ giảm dần và số tài khoản tăng dần; lấy hạng 1.',
+    reconciliation: 'Ghép DP01.SO_TAI_KHOAN với PF14.ACCOUNTNO theo kỳ + chi nhánh + mã KH; OSB và tài khoản số đẹp vẫn thuộc TKTT.',
+  },
+  TKTT2: {
+    profileField: 'deposit-accounts.primary_accounts[1].account_number',
+    actualSource: 'DP01 + PF14',
+    calculation: 'Cùng tập và thứ tự xếp hạng TKTT1; lấy tài khoản hợp lệ ở hạng 2.',
+    reconciliation: 'Đối chiếu danh sách xếp hạng theo kỳ; để trống nếu khách hàng chỉ có một TKTT hợp lệ.',
+  },
+  TKTT3: {
+    profileField: 'deposit-accounts.primary_accounts[2].account_number',
+    actualSource: 'DP01 + PF14',
+    calculation: 'Cùng tập và thứ tự xếp hạng TKTT1; lấy tài khoản hợp lệ ở hạng 3.',
+    reconciliation: 'Đối chiếu danh sách xếp hạng theo kỳ; để trống nếu khách hàng có ít hơn ba TKTT hợp lệ.',
   },
   SODU_TGCKH: {
     profileField: 'so_du_tien_gui',

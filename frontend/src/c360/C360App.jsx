@@ -545,7 +545,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
   const [history, setHistory] = useState([]);
   const [historyError, setHistoryError] = useState('');
   const [loanData, setLoanData] = useState({ categories: [], branches: [], items: [], total: 0 });
-  const [depositData, setDepositData] = useState({ categories: [], branches: [], items: [], total: 0 });
+  const [depositData, setDepositData] = useState({ categories: [], branches: [], items: [], primary_accounts: [], total: 0 });
   const [classificationData, setClassificationData] = useState({ branches: [], items: [] });
   const [financialMetrics, setFinancialMetrics] = useState({ totals: {}, branches: [] });
   const [rr01Data, setRr01Data] = useState({ lav_groups: [], items: [] });
@@ -677,8 +677,8 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
       },
       hideGlobalLoading: true,
     })
-      .then(({ data }) => { if (active) setDepositData(data || { categories: [], branches: [], items: [], total: 0 }); })
-      .catch(() => { if (active) setDepositData({ categories: [], branches: [], items: [], total: 0 }); })
+      .then(({ data }) => { if (active) setDepositData(data || { categories: [], branches: [], items: [], primary_accounts: [], total: 0 }); })
+      .catch(() => { if (active) setDepositData({ categories: [], branches: [], items: [], primary_accounts: [], total: 0 }); })
       .finally(() => { if (active) setDepositLoading(false); });
     return () => { active = false; };
   }, [activeTab, customer?.ma_kh, depositCategory, open, periodKey, profileBranch]);
@@ -885,6 +885,38 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
                 <div><Text>Đang hoạt động</Text><strong>{depositData.analytics?.active || 0}</strong><small>tài khoản</small></div>
                 <div><Text>Mới / tất toán</Text><strong>{depositData.analytics?.new || 0} / {depositData.analytics?.closed || 0}</strong><small>trong kỳ</small></div>
               </div>
+              <section className="c360-primary-accounts">
+                <div className="c360-pane-heading">
+                  <div>
+                    <Text strong>TKTT1 / TKTT2 / TKTT3</Text>
+                    <small>Ba tài khoản thanh toán chính được xếp hạng động theo từng kỳ</small>
+                  </div>
+                  <Tooltip title="Chỉ lấy TKTT đang hoạt động; ưu tiên chi nhánh chính, sau đó số dư bình quân, số dư cuối kỳ và số tài khoản.">
+                    <Tag color="blue">DP01 + PF14</Tag>
+                  </Tooltip>
+                </div>
+                <div className="c360-primary-account-grid">
+                  {[1, 2, 3].map((rank) => {
+                    const account = (depositData.primary_accounts || []).find((item) => Number(item.display_rank) === rank);
+                    return (
+                      <div className={`c360-primary-account-card rank-${rank}${account ? '' : ' is-empty'}`} key={rank}>
+                        <div className="c360-primary-account-title">
+                          <span>TKTT{rank}</span>
+                          {account ? <Tag color={account.account_status === 'new' ? 'cyan' : 'green'}>{account.account_status === 'new' ? 'Mở mới' : 'Hoạt động'}</Tag> : <Tag>Chưa có</Tag>}
+                        </div>
+                        <Text className="c360-primary-account-number" copyable={account ? { text: account.account_number } : false}>
+                          {account?.account_number || '—'}
+                        </Text>
+                        <small>{account ? `${account.branch_code || '—'} · ${account.deposit_type_name || account.deposit_type || 'TKTT'}` : 'Không có tài khoản đủ điều kiện trong kỳ'}</small>
+                        <div className="c360-primary-account-balances">
+                          <span><small>Bình quân</small><strong>{fullMoney(account?.average_balance)}</strong></span>
+                          <span><small>Cuối kỳ</small><strong>{fullMoney(account?.end_balance)}</strong></span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
               <section className="c360-gl02-panel">
                 <div className="c360-pane-heading">
                   <div><Text strong>Dòng tiền tài khoản thanh toán theo ngày</Text><small>GL02 · TK cân đối 421101 · Chỉ giao dịch hợp lệ</small></div>

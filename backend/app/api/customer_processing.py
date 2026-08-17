@@ -139,6 +139,30 @@ def _source_dictionary_coverage(db: Session, period_key: str) -> dict[str, tuple
             func.coalesce(PF14AccountBalance.averagebalance, 0) != 0,
         ),
     ).filter(PF14AccountBalance.period_key == period_key).one()
+    tktt_by_customer = (
+        db.query(
+            DP01DepositAccount.ma_kh.label("ma_kh"),
+            func.count(func.distinct(DP01DepositAccount.so_tai_khoan)).label("account_count"),
+        )
+        .filter(
+            DP01DepositAccount.period_key == period_key,
+            DP01DepositAccount.ma_kh.isnot(None),
+            DP01DepositAccount.so_tai_khoan.isnot(None),
+            func.coalesce(
+                func.cast(func.nullif(func.regexp_replace(DP01DepositAccount.month_term, "[^0-9]", "", "g"), ""), Integer),
+                0,
+            ) == 0,
+            or_(DP01DepositAccount.account_status.is_(None), func.lower(func.trim(DP01DepositAccount.account_status)) != "inactive"),
+            or_(DP01DepositAccount.close_date.is_(None), DP01DepositAccount.close_date > DP01DepositAccount.period_date),
+        )
+        .group_by(DP01DepositAccount.ma_kh)
+        .subquery()
+    )
+    tktt_counts = db.query(
+        func.count().filter(tktt_by_customer.c.account_count >= 1),
+        func.count().filter(tktt_by_customer.c.account_count >= 2),
+        func.count().filter(tktt_by_customer.c.account_count >= 3),
+    ).select_from(tktt_by_customer).one()
     bc06_segment = (
         db.query(func.count(func.distinct(BC06CustomerClassification.customer_code)))
         .filter(
@@ -171,6 +195,9 @@ def _source_dictionary_coverage(db: Session, period_key: str) -> dict[str, tuple
         ),
     ).filter(RR01HandledRiskLoan.period_key == period_key).one()
     return {
+        "TKTT1": ("DP01.SO_TAI_KHOAN / PF14 số dư", int(tktt_counts[0] or 0)),
+        "TKTT2": ("DP01.SO_TAI_KHOAN / PF14 số dư", int(tktt_counts[1] or 0)),
+        "TKTT3": ("DP01.SO_TAI_KHOAN / PF14 số dư", int(tktt_counts[2] or 0)),
         "SODU_TKTT": ("pf14_account_balances.monthlyendbalance", int(pf14[0] or 0)),
         "SODU_TGCKHBQ": ("pf14_account_balances.averagebalance", int(pf14[1] or 0)),
         "PHAN_LOAIKH": ("bc06_customer_classifications.segment_branch", int(bc06_segment)),
@@ -2217,6 +2244,43 @@ def get_customer_deposit_accounts(
             "high_average_end_drop": False,
         })
     dp_items.sort(key=lambda item: (status_order.get(item["account_status"], 9), item["branch_code"] or "", item["account_number"] or ""))
+    primary_accounts = []
+    for current_dp in dp_current_rows:
+        if dp_is_term(current_dp) or not current_dp.so_tai_khoan:
+            continue
+        if current_dp.close_date and current_dp.close_date <= profile.period_date:
+            continue
+        if str(current_dp.account_status or "").strip().lower() == "inactive":
+            continue
+        key = (current_dp.branch_code, current_dp.so_tai_khoan)
+        pf = pf_by_account.get(key)
+        if not pf:
+            product_matches = pf_by_product.get((current_dp.branch_code, str(current_dp.dp_type_code or "").strip()), [])
+            pf = product_matches[0] if len(product_matches) == 1 else None
+        rate = exchange_rate(period_key, current_dp.ccy)
+        end_balance = (current_dp.current_balance or 0) * rate
+        average_balance = (pf.averagebalance or 0) * rate if pf else Decimal(0)
+        primary_accounts.append({
+            "branch_code": current_dp.branch_code,
+            "account_number": current_dp.so_tai_khoan,
+            "deposit_type": current_dp.dp_type_name,
+            "currency_code": current_dp.ccy or "VND",
+            "end_balance": serialize_value(end_balance),
+            "average_balance": serialize_value(average_balance),
+            "account_status": "new" if key not in dp_previous_map else "active",
+            "opening_date": serialize_value(current_dp.opening_date),
+            "is_primary_branch": current_dp.branch_code == profile.primary_branch_code,
+        })
+    primary_accounts.sort(key=lambda item: (
+        0 if item["is_primary_branch"] else 1,
+        -float(item["average_balance"] or 0),
+        -float(item["end_balance"] or 0),
+        item["account_number"] or "",
+    ))
+    primary_accounts = [
+        {**item, "display_rank": index, "dictionary_code": f"TKTT{index}"}
+        for index, item in enumerate(primary_accounts[:3], start=1)
+    ]
     items = dp_items
     total = len(items)
     categories = []
@@ -2248,6 +2312,7 @@ def get_customer_deposit_accounts(
         "page_size": page_size,
         "previous_period": previous_period,
         "analytics": analytics,
+        "primary_accounts": primary_accounts,
     }
 
 
