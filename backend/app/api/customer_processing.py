@@ -601,8 +601,6 @@ def apply_profile_filters(
             or_(
                 CustomerPeriodProfile.ma_kh.ilike(like),
                 CustomerPeriodProfile.ten_kh.ilike(like),
-                CustomerPeriodProfile.ma_cb.ilike(like),
-                CustomerPeriodProfile.ten_can_bo.ilike(like),
                 CustomerPeriodProfile.telephone.ilike(like),
             )
         )
