@@ -565,6 +565,11 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
 
   useEffect(() => {
     if (!open || !customer?.ma_kh || !periodKey) return;
+    if (Array.isArray(customer.branch_details)) {
+      setFullCustomer(customer);
+      setProfileLoading(false);
+      return;
+    }
     let active = true;
     setFullCustomer(null);
     setProfileLoading(true);
@@ -592,6 +597,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         ma_kh: customer.ma_kh,
         branch_code: profileBranch || undefined,
       },
+      hideGlobalLoading: true,
     })
       .then(({ data }) => { if (active) setFinancialMetrics(data || { totals: {}, branches: [] }); })
       .catch(() => { if (active) setFinancialMetrics({ totals: {}, branches: [] }); })
@@ -604,7 +610,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     let active = true;
     setLoading(true);
     setHistoryError('');
-    client.get('/customer-processing/profile-history', { params: { ma_kh: customer.ma_kh, branch_code: profileBranch || undefined } })
+    client.get('/customer-processing/profile-history', { params: { ma_kh: customer.ma_kh, branch_code: profileBranch || undefined }, hideGlobalLoading: true })
       .then(({ data }) => { if (active) setHistory(Array.isArray(data) ? data : []); })
       .catch((error) => { if (active) { setHistory([]); setHistoryError(error.response?.data?.detail || error.message || 'Không tải được lịch sử các kỳ'); } })
       .finally(() => { if (active) setLoading(false); });
@@ -623,6 +629,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         branch_code: loanBranch || profileBranch || undefined,
         page_size: 500,
       },
+      hideGlobalLoading: true,
     })
       .then(({ data }) => {
         if (!active) return;
@@ -645,7 +652,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     setRr01Loading(true);
     client.get('/customer-processing/rr01-handled-risk', { params: {
       period_key: periodKey, ma_kh: customer.ma_kh, branch_code: profileBranch || undefined,
-    } })
+    }, hideGlobalLoading: true })
       .then(({ data }) => { if (active) setRr01Data(data || { lav_groups: [], items: [] }); })
       .catch(() => { if (active) setRr01Data({ lav_groups: [], items: [] }); })
       .finally(() => { if (active) setRr01Loading(false); });
@@ -664,6 +671,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         branch_code: profileBranch || undefined,
         page_size: 500,
       },
+      hideGlobalLoading: true,
     })
       .then(({ data }) => { if (active) setDepositData(data || { categories: [], branches: [], items: [], total: 0 }); })
       .catch(() => { if (active) setDepositData({ categories: [], branches: [], items: [], total: 0 }); })
@@ -676,7 +684,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     let active = true;
     setGl02Loading(true);
     client.get('/customer-processing/gl02-account-activity', {
-      params: { period_key: periodKey, ma_kh: customer.ma_kh, branch_code: profileBranch || undefined },
+      params: { period_key: periodKey, ma_kh: customer.ma_kh, branch_code: profileBranch || undefined }, hideGlobalLoading: true,
     })
       .then(({ data }) => { if (active) setGl02Activity(data || { daily: [], branches: [], history: [] }); })
       .catch(() => { if (active) setGl02Activity({ daily: [], branches: [], history: [] }); })
@@ -689,7 +697,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     let active = true;
     setClassificationLoading(true);
     client.get('/customer-processing/customer-classification-history', {
-      params: { ma_kh: customer.ma_kh, branch_code: profileBranch || undefined },
+      params: { ma_kh: customer.ma_kh, branch_code: profileBranch || undefined }, hideGlobalLoading: true,
     })
       .then(({ data }) => { if (active) setClassificationData(data || { branches: [], items: [] }); })
       .catch(() => { if (active) setClassificationData({ branches: [], items: [] }); })
@@ -1547,7 +1555,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       <Drawer width="min(1120px, 96vw)" open={kpiDrill.open} onClose={() => setKpiDrill((current) => ({ ...current, open: false }))} title={`${kpiDrill.label || 'Khách hàng tạo ra chỉ tiêu'} · Kỳ ${periodLabel(periodKey)}`}>
         <AppliedScopeBanner params={profileParams} total={kpiDrill.total} />
         <Alert type={!kpiDrill.validation ? 'info' : kpiDrill.validation.ok ? 'success' : 'error'} showIcon message={!kpiDrill.validation ? 'Đang đối soát KPI với danh sách…' : kpiDrill.validation.ok ? 'Đối soát KPI và danh sách: KHỚP' : 'Đối soát KPI và danh sách: CÓ CHÊNH LỆCH'} description={<div><span>{kpiDrill.total.toLocaleString('vi-VN')} khách hàng · Tổng giá trị {fullMoney(kpiDrill.totalValue)}</span><br /><span>Công thức: {kpiDrill.validation?.formula || 'Theo chỉ tiêu'} · Nguồn: {kpiDrill.validation?.source || 'CustomerPeriodProfile'} · Đơn vị: {kpiDrill.validation?.unit || 'VNĐ'}</span>{kpiDrill.validation && !kpiDrill.validation.ok ? <><br /><strong>{!kpiDrill.validation.scopeOk ? 'Phạm vi chi nhánh/phòng không khớp. ' : ''}{!kpiDrill.validation.countOk ? `Số KH kỳ vọng ${kpiDrill.validation.expectedCount}, thực tế ${kpiDrill.validation.actualCount}. ` : ''}{!kpiDrill.validation.valueOk ? `Giá trị kỳ vọng ${fullMoney(kpiDrill.validation.expectedValue)}, thực tế ${fullMoney(kpiDrill.validation.actualValue)}.` : ''}</strong></> : null}</div>} style={{ marginBottom: 12 }} />
-        <Table loading={{ spinning: kpiDrillLoading, tip: 'Đang truy vấn khách hàng tạo ra chỉ tiêu…' }} size="small" sticky rowKey="ma_kh" dataSource={kpiDrill.items} rowClassName="demo-clickable-row" onRow={(row) => ({ onClick: () => onOpenCustomer(row) })} scroll={{ x: 1120, y: 'calc(100vh - 260px)' }} pagination={{ current: kpiDrill.page, pageSize: 20, total: kpiDrill.total, showSizeChanger: false, onChange: (page) => loadKpiDrilldown(kpiDrill.metric, page) }} columns={[
+        <Table loading={{ spinning: kpiDrillLoading, tip: 'Đang truy vấn khách hàng tạo ra chỉ tiêu…' }} size="small" sticky rowKey="ma_kh" dataSource={kpiDrill.items} rowClassName="demo-clickable-row" onRow={(row) => ({ onClick: () => onOpenCustomer(context.sessionData?.profiles?.items?.find((item) => item.ma_kh === row.ma_kh) || row) })} scroll={{ x: 1120, y: 'calc(100vh - 260px)' }} pagination={{ current: kpiDrill.page, pageSize: 20, total: kpiDrill.total, showSizeChanger: false, onChange: (page) => loadKpiDrilldown(kpiDrill.metric, page) }} columns={[
           { title: 'Khách hàng', fixed: 'left', width: 250, render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text copyable>{row.ma_kh}</Text></div> },
           { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100 },
           { title: 'Cán bộ quản lý', dataIndex: 'officer_name', width: 190, render: (value, row) => value || row.officer_code || '—' },
@@ -1581,7 +1589,7 @@ const EMPTY_CUSTOMER_FILTERS = {
 };
 
 function RealCustomerList({ context, onOpenCustomer }) {
-  const { periodKey, branchCode, pgdCode, refreshKey, profileParams = {} } = context;
+  const { periodKey, branchCode, pgdCode, refreshKey, profileParams = {}, sessionData } = context;
   const [keyword, setKeyword] = useState('');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
@@ -1648,32 +1656,36 @@ function RealCustomerList({ context, onOpenCustomer }) {
 
   const load = useCallback(async () => {
     if (!periodKey) return;
-    setLoading(true);
+    const isDefaultView = page === 1 && pageSize === PAGE_SIZE && !query
+      && sort === 'so_du_tien_gui:desc' && filters === EMPTY_CUSTOMER_FILTERS
+      && sessionData?.periodKey === periodKey && sessionData?.profiles;
+    if (isDefaultView) {
+      setRows(sessionData.profiles?.items || []);
+      setTotal(Number(sessionData.profiles?.total || 0));
+      setSummary(sessionData.summary || {});
+    }
+    setLoading(!isDefaultView);
     setError('');
     try {
-      const [profilesRes, summaryRes, optionsRes] = await Promise.all([
+      const [profilesRes, summaryRes] = await Promise.all([
         client.get('/customer-processing/profiles', {
           params: { ...requestParams, page, page_size: pageSize, include_total: true },
         }),
         client.get('/customer-processing/profile-summary', { params: requestParams }),
-        client.get('/customer-processing/profile-filter-options', {
-          params: {
-            period_key: periodKey,
-            branch_code: branchCode || undefined,
-            pgd_code: pgdCode || undefined,
-          },
-        }),
       ]);
       setRows(profilesRes.data?.items || []);
       setTotal(Number(profilesRes.data?.total || 0));
       setSummary(summaryRes.data || {});
-      setFilterOptions(optionsRes.data || { loan_types: [], officers: [] });
+      client.get('/customer-processing/profile-filter-options', {
+        params: { period_key: periodKey, branch_code: branchCode || undefined, pgd_code: pgdCode || undefined },
+        hideGlobalLoading: true,
+      }).then(({ data }) => setFilterOptions(data || { loan_types: [], officers: [] })).catch(() => {});
     } catch (requestError) {
       setError(requestError.response?.data?.detail || requestError.message || 'Không tải được danh sách');
     } finally {
       setLoading(false);
     }
-  }, [branchCode, page, pageSize, periodKey, pgdCode, refreshKey, requestParams]);
+  }, [branchCode, filters, page, pageSize, periodKey, pgdCode, query, refreshKey, requestParams, sessionData, sort]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPage(1); }, [branchCode, filters, periodKey, pgdCode, query, sort]);
 
@@ -2165,7 +2177,7 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
     window.history.replaceState(window.history.state, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
   }, [branchCode, periodKey, pgdCode]);
 
-  const context = { periods, periodKey, branchCode, pgdCode, refreshKey, profileParams: sharedProfileParams };
+  const context = { periods, periodKey, branchCode, pgdCode, refreshKey, profileParams: sharedProfileParams, sessionData: globalScope?.sessionData };
   const content = page === 'customers'
     ? <RealCustomerList context={context} onOpenCustomer={setSelectedCustomer} />
     : page.startsWith('analysis-')

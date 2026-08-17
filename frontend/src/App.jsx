@@ -126,7 +126,7 @@ function LegacyApp() {
 
   return (
     <AuthProvider>
-      <AnalysisScopeProvider>
+      <AnalysisScopeProvider currentUser={currentUser}>
         <GlobalApiLoading />
         <MainLayout activeMenu={activeMenu} onMenuChange={handleMenuChange} currentUser={currentUser} onLogout={handleLogout}>
           {pages[activeMenu] || pages['c360-dashboard']}

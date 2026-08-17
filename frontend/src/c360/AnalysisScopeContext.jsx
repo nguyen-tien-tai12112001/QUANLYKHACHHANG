@@ -13,7 +13,7 @@ export const EMPTY_ADVANCED_SCOPE = {
   serviceStatus: null, serviceCodes: [], minServiceCount: null,
 };
 
-export function AnalysisScopeProvider({ children }) {
+export function AnalysisScopeProvider({ children, currentUser }) {
   const [periods, setPeriods] = useState([]);
   const [options, setOptions] = useState({ branches: [], pgd_options: [], officers: [], customer_types: [], loan_types: [] });
   const [draft, setDraft] = useState({ periodKey: '', branchCode: null, pgdCode: null, advanced: EMPTY_ADVANCED_SCOPE });
@@ -22,6 +22,8 @@ export function AnalysisScopeProvider({ children }) {
   const [sessionVersion, setSessionVersion] = useState(0);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionSummary, setSessionSummary] = useState(null);
+  const [sessionData, setSessionData] = useState(null);
+  const [orgCatalog, setOrgCatalog] = useState({ branches: [], departments: [] });
 
   useEffect(() => {
     const clearSession = () => clearApiCache();
@@ -33,6 +35,32 @@ export function AnalysisScopeProvider({ children }) {
   }, []);
 
   useEffect(() => {
+    Promise.all([
+      client.get('/admin/branches', { params: { status: 'active' }, cacheTtl: 600000, hideGlobalLoading: true }),
+      client.get('/admin/departments', { params: { status: 'active' }, cacheTtl: 600000, hideGlobalLoading: true }),
+    ]).then(([branchesRes, departmentsRes]) => {
+      const allBranches = Array.isArray(branchesRes.data) ? branchesRes.data : [];
+      const allowed = new Set(currentUser?.allowed_branches || []);
+      const restrictToHome = currentUser?.scope !== 'province' && currentUser?.ma_cn;
+      const branches = allBranches.filter((item) => !allowed.size
+        ? (!restrictToHome || item.branch_code === currentUser.ma_cn)
+        : allowed.has(item.branch_code));
+      const branchCodes = new Set(branches.map((item) => item.branch_code));
+      const departments = (Array.isArray(departmentsRes.data) ? departmentsRes.data : [])
+        .filter((item) => branchCodes.has(item.branch_code));
+      setOrgCatalog({ branches, departments });
+    }).catch(() => setOrgCatalog({ branches: [], departments: [] }));
+  }, [currentUser]);
+
+  useEffect(() => {
+    const branches = orgCatalog.branches.map((item) => ({ value: item.branch_code, label: `${item.branch_code} - ${item.branch_name}` }));
+    const pgdOptions = draft.branchCode
+      ? orgCatalog.departments.filter((item) => item.branch_code === draft.branchCode).map((item) => ({ value: item.department_code, label: `${item.department_code} - ${item.department_name}` }))
+      : [];
+    setOptions((current) => ({ ...current, branches, pgd_options: pgdOptions }));
+  }, [draft.branchCode, orgCatalog]);
+
+  useEffect(() => {
     client.get('/customer-processing/periods', { cacheTtl: 300000, hideGlobalLoading: true })
       .then(({ data }) => setPeriods((Array.isArray(data) ? data : []).filter((item) => Number(item.profile_count || 0) > 0)))
       .finally(() => setMetadataLoading(false));
@@ -40,14 +68,19 @@ export function AnalysisScopeProvider({ children }) {
 
   useEffect(() => {
     if (!draft.periodKey) {
-      setOptions({ branches: [], pgd_options: [], officers: [], customer_types: [], loan_types: [] });
+      setOptions((current) => ({ ...current, officers: [], customer_types: [], loan_types: [] }));
       return;
     }
     client.get('/customer-processing/profile-filter-options', {
       params: { period_key: draft.periodKey, branch_code: draft.branchCode || undefined },
       cacheTtl: 300000,
       hideGlobalLoading: true,
-    }).then(({ data }) => setOptions(data || {})).catch(() => setOptions({}));
+    }).then(({ data }) => setOptions((current) => ({
+      ...current,
+      officers: data?.officers || [],
+      customer_types: data?.customer_types || [],
+      loan_types: data?.loan_types || [],
+    }))).catch(() => {});
   }, [draft.branchCode, draft.periodKey]);
 
   useEffect(() => {
@@ -75,6 +108,7 @@ export function AnalysisScopeProvider({ children }) {
       } else {
         const summary = { customers: Number(summaryResponse?.total_customers || 0), periodKey: applied.periodKey };
         setSessionSummary(summary);
+        setSessionData({ periodKey: applied.periodKey, summary: summaryResponse, profiles: results[1]?.status === 'fulfilled' ? results[1].value?.data : null });
         notification.success({ message: 'Đã tải phạm vi dữ liệu', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng phù hợp. Phân tích chi tiết đang hoàn tất ở nền.`, placement: 'topRight' });
       }
       if (active) setSessionLoading(false);
@@ -98,7 +132,7 @@ export function AnalysisScopeProvider({ children }) {
   }, [applied, periods, sessionVersion]);
 
   const value = useMemo(() => ({
-    periods, options, draft, applied, metadataLoading, sessionVersion, sessionLoading, sessionSummary,
+    periods, options, draft, applied, metadataLoading, sessionVersion, sessionLoading, sessionSummary, sessionData,
     updateDraft: (patch) => setDraft((current) => ({ ...current, ...patch })),
     updateAdvanced: (patch) => setDraft((current) => ({ ...current, advanced: { ...current.advanced, ...patch } })),
     apply: () => {
@@ -106,6 +140,7 @@ export function AnalysisScopeProvider({ children }) {
       clearApiCache();
       const next = { ...draft, advanced: { ...draft.advanced } };
       setApplied(next);
+      setSessionData(null);
       setSessionVersion((value) => value + 1);
       return true;
     },
@@ -113,6 +148,7 @@ export function AnalysisScopeProvider({ children }) {
       setDraft({ periodKey: '', branchCode: null, pgdCode: null, advanced: EMPTY_ADVANCED_SCOPE });
       setApplied(null);
       setSessionSummary(null);
+      setSessionData(null);
       clearApiCache();
     },
     refresh: () => { clearApiCache(); setSessionVersion((value) => value + 1); },

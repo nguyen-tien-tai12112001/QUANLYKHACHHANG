@@ -12,6 +12,8 @@ const inflightGets = new Map();
 // Một phiên lọc C360 dùng lại kết quả khi chuyển tab; bộ lọc mới/Làm mới sẽ xóa cache.
 const DEFAULT_CACHE_TTL = 5 * 60_000;
 const CACHEABLE_GET_PATHS = [
+  '/admin/branches',
+  '/admin/departments',
   '/dashboard/',
   '/customer-processing/periods',
   '/customer-processing/profiles',
