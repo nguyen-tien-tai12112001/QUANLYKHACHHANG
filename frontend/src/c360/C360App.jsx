@@ -1195,46 +1195,47 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     if (!periodKey) return;
     setLoading(true);
     setError('');
-    const scopeParams = { period_key: periodKey, ...toApiBranchParams(branchCode, pgdCode) };
     const previousPeriod = context.periods[context.periods.findIndex((item) => item.period_key === periodKey) + 1]?.period_key;
+    let primaryLoaded = false;
     try {
-      const [summaryRes, filteredSummaryRes] = await Promise.all([
-        client.get('/dashboard/summary', { params: profileParams }),
-        client.get('/customer-processing/profile-summary', { params: profileParams }),
-      ]);
+      const filteredSummaryRes = await client.get('/customer-processing/profile-summary', { params: profileParams });
       const filtered = filteredSummaryRes.data || {};
       setData({
-        ...summaryRes.data,
         kpis: {
-          ...(summaryRes.data?.kpis || {}),
           total_customers: filtered.total_customers,
           total_loan: filtered.total_loan,
           total_deposit: filtered.total_deposit,
           total_casa: filtered.total_casa,
-          no_service_count: filtered.no_service_count,
+          no_service_count: filtered.no_service_customers,
         },
       });
+      primaryLoaded = true;
       setLoading(false);
       setDetailLoading(true);
-      const [profilesRes, insightsRes, comparisonRes, analyticsRes, readinessRes] = await Promise.all([
-        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', limit: 8 } }),
-        client.get('/dashboard/insights', { params: profileParams }),
+      const background = { hideGlobalLoading: true };
+      const [summaryRes, profilesRes, insightsRes, comparisonRes, analyticsRes, readinessRes] = await Promise.all([
+        client.get('/dashboard/summary', { params: profileParams, ...background }),
+        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', limit: 8 }, ...background }),
+        client.get('/dashboard/insights', { params: profileParams, ...background }),
         previousPeriod
-          ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: periodKey, previous_period: previousPeriod } })
+          ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: periodKey, previous_period: previousPeriod }, ...background })
           : Promise.resolve({ data: null }),
-        client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false } }),
-        client.get('/imports/source-readiness', { params: { period_key: periodKey } }).catch(() => ({ data: null })),
+        client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false }, ...background }),
+        client.get('/imports/source-readiness', { params: { period_key: periodKey }, ...background }).catch(() => ({ data: null })),
       ]);
+      setData(summaryRes.data);
       setInsights(insightsRes.data);
       setTopCustomers(Array.isArray(profilesRes.data) ? profilesRes.data : profilesRes.data?.items || []);
       setComparison(comparisonRes.data);
       setAnalytics(analyticsRes.data);
       setReadiness(readinessRes.data);
-      client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true } })
+      client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true }, ...background })
         .then(({ data: detail }) => setTopChanges(detail?.top_changes || {}))
         .catch(() => setTopChanges({}));
     } catch (requestError) {
-      setError(requestError.response?.data?.detail || requestError.message || 'Không thể kết nối API');
+      const detail = requestError.response?.data?.detail || requestError.message || 'Không thể kết nối API';
+      if (primaryLoaded) message.warning(`Một số phân tích nền chưa tải xong: ${detail}`);
+      else setError(detail);
     } finally {
       setLoading(false);
       setDetailLoading(false);

@@ -64,31 +64,35 @@ export function AnalysisScopeProvider({ children }) {
     const previousPeriod = periods[periods.findIndex((item) => item.period_key === applied.periodKey) + 1]?.period_key;
     setSessionLoading(true);
     Promise.allSettled([
-      client.get('/dashboard/summary', { params: profileParams }),
-      client.get('/dashboard/insights', { params: profileParams }),
-      client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true } }),
-      client.get('/dashboard/business-analytics', { params: profileParams }),
-      client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false } }),
-      client.get('/dashboard/business-trends', { params: { periods: 12, branch_code: orgParams.branch_code, pgd_code: orgParams.pgd_code } }),
       client.get('/customer-processing/profile-summary', { params: profileParams }),
-      client.get('/customer-processing/profile-groups', { params: profileParams }),
       client.get('/customer-processing/profiles', { params: { ...profileParams, page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' } }),
-      client.get('/customer-processing/profiles', { params: { ...orgParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', limit: 8 } }),
-      client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' } }),
-      client.get('/customer-processing/reconciliations', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined, latest_job_only: true, page: 1, page_size: 1 } }),
-      client.get('/imports/source-readiness', { params: { period_key: applied.periodKey } }),
-      previousPeriod ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: applied.periodKey, previous_period: previousPeriod } }) : Promise.resolve({ data: null }),
     ]).then((results) => {
       if (!active) return;
       const failed = results.filter((item) => item.status === 'rejected');
-      const summaryResponse = results[6]?.status === 'fulfilled' ? results[6].value?.data : null;
+      const summaryResponse = results[0]?.status === 'fulfilled' ? results[0].value?.data : null;
       if (failed.length) {
         notification.warning({ message: 'Phiên dữ liệu tải chưa đầy đủ', description: `${failed.length} khối dữ liệu chưa tải được. Hệ thống sẽ thử lại khi bạn bấm Làm mới.`, placement: 'topRight' });
       } else {
         const summary = { customers: Number(summaryResponse?.total_customers || 0), periodKey: applied.periodKey };
         setSessionSummary(summary);
-        notification.success({ message: 'Đã tải dữ liệu thành công', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng phù hợp. Các tab đã sẵn sàng.`, placement: 'topRight' });
+        notification.success({ message: 'Đã tải phạm vi dữ liệu', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng phù hợp. Phân tích chi tiết đang hoàn tất ở nền.`, placement: 'topRight' });
       }
+      if (active) setSessionLoading(false);
+      const background = { hideGlobalLoading: true };
+      Promise.allSettled([
+        client.get('/dashboard/summary', { params: profileParams, ...background }),
+        client.get('/dashboard/insights', { params: profileParams, ...background }),
+        client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true }, ...background }),
+        client.get('/dashboard/business-analytics', { params: profileParams, ...background }),
+        client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false }, ...background }),
+        client.get('/dashboard/business-trends', { params: { periods: 12, branch_code: orgParams.branch_code, pgd_code: orgParams.pgd_code }, ...background }),
+        client.get('/customer-processing/profile-groups', { params: profileParams, ...background }),
+        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', limit: 8 }, ...background }),
+        client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' }, ...background }),
+        client.get('/customer-processing/reconciliations', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined, latest_job_only: true, page: 1, page_size: 1 }, ...background }),
+        client.get('/imports/source-readiness', { params: { period_key: applied.periodKey }, ...background }),
+        previousPeriod ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: applied.periodKey, previous_period: previousPeriod }, ...background }) : Promise.resolve({ data: null }),
+      ]);
     }).finally(() => { if (active) setSessionLoading(false); });
     return () => { active = false; };
   }, [applied, periods, sessionVersion]);
