@@ -2505,6 +2505,19 @@ def get_profile_groups(
     officer_code: str | None = None,
     unused_service: str | None = None,
     multi_branch: bool | None = None,
+    no_service: bool = False,
+    customer_type: str | None = None,
+    has_deposit: bool | None = None,
+    has_loan: bool | None = None,
+    min_deposit: float | None = None,
+    max_deposit: float | None = None,
+    min_loan: float | None = None,
+    max_loan: float | None = None,
+    min_casa: float | None = None,
+    max_casa: float | None = None,
+    service_codes: str | None = None,
+    min_service_count: int | None = Query(default=None, ge=0, le=30),
+    missing_phone: bool | None = None,
     db: Session = Depends(get_db),
 ):
     query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
@@ -2518,6 +2531,19 @@ def get_profile_groups(
         officer_code=officer_code,
         unused_service=unused_service,
         multi_branch=multi_branch,
+        no_service=no_service,
+        customer_type=customer_type,
+        has_deposit=has_deposit,
+        has_loan=has_loan,
+        min_deposit=min_deposit,
+        max_deposit=max_deposit,
+        min_loan=min_loan,
+        max_loan=max_loan,
+        min_casa=min_casa,
+        max_casa=max_casa,
+        service_codes=service_codes,
+        min_service_count=min_service_count,
+        missing_phone=missing_phone,
     )
     scope = "branch" if branch_code else "province"
     scope_label = f"CN {branch_code.strip()}" if branch_code else "Toàn hệ thống"
@@ -2851,13 +2877,38 @@ def compare_periods(
     previous_period: str = Query(...),
     branch_code: str | None = None,
     pgd_code: str | None = None,
+    keyword: str | None = None,
+    loan_type: str | None = None,
+    officer_code: str | None = None,
+    customer_type: str | None = None,
+    multi_branch: bool | None = None,
+    no_service: bool = False,
+    has_deposit: bool | None = None,
+    has_loan: bool | None = None,
+    min_deposit: float | None = None,
+    max_deposit: float | None = None,
+    min_loan: float | None = None,
+    max_loan: float | None = None,
+    min_casa: float | None = None,
+    max_casa: float | None = None,
+    service_codes: str | None = None,
+    min_service_count: int | None = Query(default=None, ge=0, le=30),
+    missing_phone: bool | None = None,
     db: Session = Depends(get_db),
 ):
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
     current_query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == current_period)
     previous_query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == previous_period)
-    current_query = apply_profile_filters(current_query, branch_code=branch_code, pgd_code=pgd_code)
-    previous_query = apply_profile_filters(previous_query, branch_code=branch_code, pgd_code=pgd_code)
+    common_filters = dict(
+        keyword=keyword, branch_code=branch_code, pgd_code=pgd_code, loan_type=loan_type,
+        officer_code=officer_code, customer_type=customer_type, multi_branch=multi_branch,
+        no_service=no_service, has_deposit=has_deposit, has_loan=has_loan,
+        min_deposit=min_deposit, max_deposit=max_deposit, min_loan=min_loan, max_loan=max_loan,
+        min_casa=min_casa, max_casa=max_casa, service_codes=service_codes,
+        min_service_count=min_service_count, missing_phone=missing_phone,
+    )
+    current_query = apply_profile_filters(current_query, period_key=current_period, **common_filters)
+    previous_query = apply_profile_filters(previous_query, period_key=previous_period, **common_filters)
 
     service_fields = sorted(PROFILE_SERVICE_FIELDS)
     current_data = current_query.with_entities(

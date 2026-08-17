@@ -100,11 +100,32 @@ body {
 .global-scope-submit { border: 0 !important; background: linear-gradient(135deg, #991b45, #d62870) !important; box-shadow: 0 6px 13px rgb(153 27 69 / 20%); }
 .global-scope-refresh { color: #315a78; border-color: #cbdce8; background: #f3f9fd; }
 
-.global-scope-advanced { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-.global-scope-advanced label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; }
-.global-scope-advanced label .ant-select { width: 100%; }
-.global-scope-range { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-.global-scope-range > span:first-child { grid-column: 1 / -1; }
+.global-filter-drawer .ant-drawer-header { padding: 18px 24px; background: linear-gradient(120deg, #fff7fa, #f6f9ff); border-bottom-color: #eadde4; }
+.global-filter-drawer .ant-drawer-title > div { display: flex; flex-direction: column; }
+.global-filter-drawer .ant-drawer-title strong { color: #481526; font-size: 18px; }
+.global-filter-drawer .ant-drawer-title small { margin-top: 4px; color: #876e78; font-size: 12px; font-weight: 400; }
+.global-filter-drawer .ant-drawer-body { padding: 20px 24px 30px; background: #f7f8fb; }
+.global-scope-advanced { display: grid; gap: 16px; }
+.global-filter-section { overflow: hidden; padding: 0 18px 18px; background: #fff; border: 1px solid #e8e5ea; border-radius: 16px; box-shadow: 0 8px 24px rgb(38 24 31 / 5%); }
+.global-filter-section > header { display: flex; align-items: center; gap: 11px; margin: 0 -18px 17px; padding: 13px 18px; color: #fff; }
+.global-filter-section > header > .anticon { display: grid; width: 34px; height: 34px; place-items: center; font-size: 17px; background: rgb(255 255 255 / 18%); border-radius: 10px; }
+.global-filter-section > header span { display: flex; flex-direction: column; }
+.global-filter-section > header strong { font-size: 14px; }
+.global-filter-section > header small { margin-top: 2px; color: rgb(255 255 255 / 78%); font-size: 11px; }
+.global-filter-section.is-customer > header { background: linear-gradient(110deg, #7f1d4b, #c02663); }
+.global-filter-section.is-deposit > header { background: linear-gradient(110deg, #047857, #10a878); }
+.global-filter-section.is-loan > header { background: linear-gradient(110deg, #b42318, #e05243); }
+.global-filter-section.is-service > header { background: linear-gradient(110deg, #2457a7, #437dd2); }
+.global-filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 15px 16px; }
+.global-filter-grid > label { display: flex; flex-direction: column; gap: 6px; min-width: 0; color: #523c46; font-size: 12px; font-weight: 700; }
+.global-filter-grid > label.is-wide { grid-column: 1 / -1; }
+.global-filter-grid .ant-select, .global-filter-grid .ant-input-number { width: 100%; }
+.global-filter-grid .ant-select-selector, .global-filter-grid .ant-input, .global-filter-grid .ant-input-number { min-height: 36px; border-color: #ded7dc; border-radius: 9px; }
+.global-filter-money-range { grid-column: 1 / -1; padding: 13px; background: #fafbfc; border: 1px solid #ebe7e9; border-radius: 11px; }
+.global-filter-section-label { margin-bottom: 9px; color: #48333d; font-size: 12px; font-weight: 750; }
+.global-filter-money-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.global-filter-money-inputs label { display: flex; flex-direction: column; gap: 5px; color: #7a626d; font-size: 11px; font-weight: 650; }
+.global-filter-money-inputs small { min-height: 16px; color: #087153; font-size: 10px; font-style: italic; line-height: 1.35; }
 .c360-empty-scope { max-width: 720px; margin: 80px auto; text-align: center; }
 
 @media (max-width: 1280px) {
@@ -125,6 +146,9 @@ body {
   .global-scope-controls { grid-template-columns: 1fr; }
   .global-scope-actions { grid-column: auto; display: grid; grid-template-columns: 1fr 1fr auto; }
   .global-scope-actions .ant-btn { padding-inline: 10px; }
+  .global-filter-drawer .ant-drawer-body { padding: 14px; }
+  .global-filter-grid, .global-filter-money-inputs { grid-template-columns: 1fr; }
+  .global-filter-grid > label.is-wide { grid-column: auto; }
 }
 
 .processing-metric {

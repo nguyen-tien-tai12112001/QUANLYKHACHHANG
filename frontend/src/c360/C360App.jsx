@@ -1199,7 +1199,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     const previousPeriod = context.periods[context.periods.findIndex((item) => item.period_key === periodKey) + 1]?.period_key;
     try {
       const [summaryRes, filteredSummaryRes] = await Promise.all([
-        client.get('/dashboard/summary', { params: scopeParams }),
+        client.get('/dashboard/summary', { params: profileParams }),
         client.get('/customer-processing/profile-summary', { params: profileParams }),
       ]);
       const filtered = filteredSummaryRes.data || {};
@@ -1217,12 +1217,12 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       setLoading(false);
       setDetailLoading(true);
       const [profilesRes, insightsRes, comparisonRes, analyticsRes, readinessRes] = await Promise.all([
-        client.get('/customer-processing/profiles', { params: { period_key: periodKey, branch_code: branchCode || undefined, pgd_code: pgdCode || undefined, sort_by: 'so_du_tien_gui', sort_dir: 'desc', limit: 8 } }),
-        client.get('/dashboard/insights', { params: scopeParams }),
+        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', limit: 8 } }),
+        client.get('/dashboard/insights', { params: profileParams }),
         previousPeriod
-          ? client.get('/customer-processing/period-comparison', { params: { current_period: periodKey, previous_period: previousPeriod, branch_code: branchCode || undefined, pgd_code: pgdCode || undefined } })
+          ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: periodKey, previous_period: previousPeriod } })
           : Promise.resolve({ data: null }),
-        client.get('/dashboard/business-analytics', { params: { ...scopeParams, include_rankings: false } }),
+        client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false } }),
         client.get('/imports/source-readiness', { params: { period_key: periodKey } }).catch(() => ({ data: null })),
       ]);
       setInsights(insightsRes.data);
@@ -1230,7 +1230,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       setComparison(comparisonRes.data);
       setAnalytics(analyticsRes.data);
       setReadiness(readinessRes.data);
-      client.get('/dashboard/insights', { params: { ...scopeParams, include_top_changes: true } })
+      client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true } })
         .then(({ data: detail }) => setTopChanges(detail?.top_changes || {}))
         .catch(() => setTopChanges({}));
     } catch (requestError) {
@@ -1268,9 +1268,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     try {
       const { data: profileData } = await client.get('/customer-processing/profiles', {
         params: {
-          period_key: periodKey,
-          branch_code: branchCode || undefined,
-          pgd_code: pgdCode || undefined,
+          ...profileParams,
           keyword: row.ma_kh,
           page_size: 1,
         },
@@ -1287,7 +1285,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     setKpiDrill((current) => ({ ...current, open: true, metric, page }));
     try {
       const { data: response } = await client.get('/dashboard/business-drilldown', {
-        params: { period_key: periodKey, metric, page, page_size: 20, ...toApiBranchParams(branchCode, pgdCode) },
+        params: { ...profileParams, metric, page, page_size: 20 },
       });
       setKpiDrill({ open: true, metric, label: response?.label, items: response?.items || [], total: Number(response?.total || 0), totalValue: Number(response?.total_value || 0), page });
     } catch (requestError) {
@@ -1515,7 +1513,7 @@ const EMPTY_CUSTOMER_FILTERS = {
 };
 
 function RealCustomerList({ context, onOpenCustomer }) {
-  const { periodKey, branchCode, pgdCode, refreshKey } = context;
+  const { periodKey, branchCode, pgdCode, refreshKey, profileParams = {} } = context;
   const [keyword, setKeyword] = useState('');
   const [query, setQuery] = useState('');
   const [page, setPage] = useState(1);
@@ -1822,7 +1820,7 @@ function AnalysisKpi({ label, value, note, tone = 'blue', onClick }) {
 }
 
 function BusinessAnalysisPage({ context, mode, onOpenCustomer }) {
-  const { periods, periodKey, branchCode, pgdCode, refreshKey } = context;
+  const { periods, periodKey, branchCode, pgdCode, refreshKey, profileParams = {} } = context;
   const [data, setData] = useState(null);
   const [insights, setInsights] = useState(null);
   const [reconciliationTotal, setReconciliationTotal] = useState(0);
@@ -1842,7 +1840,7 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer }) {
   const load = useCallback(async () => {
     if (!periodKey) return;
     setLoading(true); setError('');
-    const params = { period_key: periodKey, ...toApiBranchParams(branchCode, pgdCode) };
+    const params = profileParams;
     try {
       const [analyticsRes, insightsRes, trendRes, reconciliationRes] = await Promise.all([
         client.get('/dashboard/business-analytics', { params }),
@@ -1855,7 +1853,7 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer }) {
     } catch (requestError) {
       setError(requestError.response?.data?.detail || requestError.message || 'Không tải được dữ liệu phân tích');
     } finally { setLoading(false); }
-  }, [branchCode, periodKey, pgdCode, refreshKey]);
+  }, [branchCode, periodKey, pgdCode, profileParams, refreshKey]);
   useEffect(() => { load(); }, [load]);
   useEffect(() => {
     const available = trends.filter((item) => item.period_key !== periodKey);
@@ -1900,11 +1898,11 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer }) {
   const loadDrilldown = useCallback(async (metric, nextPage = 1, keyword = drillKeyword) => {
     setDrillLoading(true);
     try {
-      const { data: response } = await client.get('/dashboard/business-drilldown', { params: { period_key: periodKey, metric, keyword: keyword || undefined, page: nextPage, page_size: 20, ...toApiBranchParams(branchCode, pgdCode) } });
+      const { data: response } = await client.get('/dashboard/business-drilldown', { params: { ...profileParams, metric, detail_keyword: keyword || undefined, page: nextPage, page_size: 20 } });
       setDrilldown({ open: true, metric, label: response?.label, items: response?.items || [], total: Number(response?.total || 0), totalValue: Number(response?.total_value || 0), page: nextPage });
     } catch (requestError) { message.error(requestError.response?.data?.detail || requestError.message); }
     finally { setDrillLoading(false); }
-  }, [branchCode, drillKeyword, periodKey, pgdCode]);
+  }, [drillKeyword, profileParams]);
   const loadReconciliations = useCallback(async (nextPage = 1, keyword = reconciliationKeyword, source = reconciliationSource) => {
     setReconciliationLoading(true);
     try {
@@ -1917,7 +1915,7 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer }) {
   if (error) return <ErrorState error={error} onRetry={load} />;
   const exportMetric = async () => {
     try {
-      const response = await client.get('/dashboard/business-export', { params: { period_key: periodKey, metric: drilldown.metric || metricForMode, ...toApiBranchParams(branchCode, pgdCode) }, responseType: 'blob' });
+      const response = await client.get('/dashboard/business-export', { params: { ...profileParams, metric: drilldown.metric || metricForMode }, responseType: 'blob' });
       const url = URL.createObjectURL(response.data); const link = document.createElement('a');
       link.href = url; link.download = `phan_tich_${drilldown.metric || metricForMode}_${periodKey}.xlsx`; link.click(); URL.revokeObjectURL(url);
     } catch (requestError) { message.error(requestError.response?.data?.detail || 'Không xuất được Excel'); }
@@ -1988,7 +1986,7 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer }) {
 }
 
 function RealInsightsPage({ context, onOpenCustomer }) {
-  const { periodKey, branchCode, pgdCode, refreshKey } = context;
+  const { periodKey, branchCode, pgdCode, refreshKey, profileParams = {} } = context;
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState('large_deposit');
   const [rows, setRows] = useState([]);
@@ -2002,7 +2000,7 @@ function RealInsightsPage({ context, onOpenCustomer }) {
     setLoading(true);
     setError('');
     try {
-      const params = { period_key: periodKey, branch_code: branchCode || undefined, pgd_code: pgdCode || undefined };
+      const params = profileParams;
       const [groupRes, profileRes] = await Promise.all([
         client.get('/customer-processing/profile-groups', { params }),
         client.get('/customer-processing/profiles', {
@@ -2025,7 +2023,7 @@ function RealInsightsPage({ context, onOpenCustomer }) {
     } finally {
       setLoading(false);
     }
-  }, [branchCode, page, periodKey, pgdCode, refreshKey, selectedGroup]);
+  }, [branchCode, page, periodKey, pgdCode, profileParams, refreshKey, selectedGroup]);
 
   useEffect(() => { load(); }, [load]);
   useEffect(() => { setPage(1); }, [branchCode, periodKey, pgdCode, selectedGroup]);

@@ -48,6 +48,42 @@ ACTIVE_SERVICE_KEYS = [
 ]
 FEE_FIELDS = ("phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt")
 
+
+def _advanced_filters(
+    keyword: str | None = Query(default=None), customer_type: str | None = Query(default=None),
+    loan_type: str | None = Query(default=None), officer_code: str | None = Query(default=None),
+    multi_branch: bool | None = Query(default=None), no_service: bool = Query(default=False),
+    has_deposit: bool | None = Query(default=None), has_loan: bool | None = Query(default=None),
+    min_deposit: float | None = Query(default=None, ge=0), max_deposit: float | None = Query(default=None, ge=0),
+    min_loan: float | None = Query(default=None, ge=0), max_loan: float | None = Query(default=None, ge=0),
+    min_casa: float | None = Query(default=None, ge=0), max_casa: float | None = Query(default=None, ge=0),
+    service_codes: str | None = Query(default=None), min_service_count: int | None = Query(default=None, ge=0, le=30),
+    missing_phone: bool | None = Query(default=None),
+):
+    values = {key: value for key, value in locals().items() if value is not None and value != ""}
+    if not no_service:
+        values.pop("no_service", None)
+    return values
+
+
+def _matching_customer_ids(db: Session, period_key: str, scope: BranchScope, filters: dict):
+    """Một tập mã KH duy nhất dùng chung cho KPI, bảng tổng hợp, cảnh báo và drill-down."""
+    from app.api.customer_processing import apply_profile_filters
+
+    query = db.query(CustomerPeriodProfile.ma_kh).filter(CustomerPeriodProfile.period_key == period_key)
+    query = apply_profile_filters(
+        query,
+        period_key=period_key,
+        branch_code=scope.ma_cn,
+        pgd_code=scope.ma_pgd,
+        **filters,
+    )
+    return query.distinct().subquery()
+
+
+def _restrict_to_matching_customers(query, model, customer_ids):
+    return query.filter(model.ma_kh.in_(customer_ids))
+
 # Đồng bộ với quy tắc cơ hội bán chéo / loại KH thực tế từ DP01.
 RETAIL_CUSTOMER_TYPES = ("Cá nhân", "KHCN")
 
@@ -144,6 +180,7 @@ def _count_kh_with_payment_account(
     period_key: str,
     ma_cn: str | None,
     ma_pgd: str | None,
+    customer_ids=None,
 ) -> int:
     """KH có TK thanh toán theo CN05.TKTT_SO_TK > 0, trong tập KH của phạm vi dashboard."""
     q = db.query(func.count(func.distinct(CN05CustomerService.ma_kh))).filter(
@@ -151,6 +188,8 @@ def _count_kh_with_payment_account(
         CN05CustomerService.ma_kh.isnot(None),
         func.coalesce(CN05CustomerService.tktt_so_tk, 0) > 0,
     )
+    if customer_ids is not None:
+        q = q.filter(CN05CustomerService.ma_kh.in_(db.query(customer_ids.c.ma_kh)))
     if ma_cn:
         scoped_kh = (
             _branch_detail_query(db, period_key, ma_cn, ma_pgd)
@@ -180,9 +219,10 @@ def _with_payment_account_penetration(
     ma_cn: str | None,
     ma_pgd: str | None,
     total_customers: int,
+    customer_ids=None,
 ) -> list[dict]:
     """Thêm chỉ tiêu độ phủ TK thanh toán / tổng KH (không ghi vào ACTIVE_SERVICE_KEYS)."""
-    count = _count_kh_with_payment_account(db, period_key, ma_cn, ma_pgd)
+    count = _count_kh_with_payment_account(db, period_key, ma_cn, ma_pgd, customer_ids)
     rows = [
         *rows,
         {
@@ -464,9 +504,11 @@ def _branch_row_to_campaign(period_key: str, branch_code: str, row) -> dict:
     return {field: serialize_value(value) if field not in {"unused"} else value for field, value in data.items()}
 
 
-def _summary_from_profiles(db: Session, period_key: str, ma_pgd: str | None) -> dict:
+def _summary_from_profiles(db: Session, period_key: str, ma_pgd: str | None, customer_ids=None) -> dict:
     """Toàn tỉnh: 1 mã KH = 1 hồ sơ, không cộng trùng theo chi nhánh."""
     query = _base_query(db, period_key, None, ma_pgd)
+    if customer_ids is not None:
+        query = query.filter(CustomerPeriodProfile.ma_kh.in_(customer_ids))
     retail_filter = CustomerPeriodProfile.loai_khach_hang.in_(RETAIL_CUSTOMER_TYPES)
     aggregate_columns = [
         func.count(CustomerPeriodProfile.id),
@@ -511,6 +553,7 @@ def _summary_from_profiles(db: Session, period_key: str, ma_pgd: str | None) -> 
         ma_cn=None,
         ma_pgd=ma_pgd,
         total_customers=total_customers,
+        customer_ids=customer_ids,
     )
 
     cn_count = int(aggregate[6] or 0)
@@ -560,9 +603,11 @@ def _summary_from_profiles(db: Session, period_key: str, ma_pgd: str | None) -> 
     }
 
 
-def _summary_from_branch(db: Session, period_key: str, ma_cn: str, ma_pgd: str | None) -> dict:
+def _summary_from_branch(db: Session, period_key: str, ma_cn: str, ma_pgd: str | None, customer_ids=None) -> dict:
     """Theo chi nhánh: số liệu lấy từ branch_details, không lấy tổng hồ sơ đa CN."""
     agg = _customer_branch_agg_subquery(db, period_key, ma_cn, ma_pgd)
+    if customer_ids is not None:
+        agg = db.query(agg).filter(agg.c.ma_kh.in_(customer_ids)).subquery()
 
     total_customers = db.query(func.count()).select_from(agg).scalar() or 0
     totals = db.query(
@@ -599,6 +644,7 @@ def _summary_from_branch(db: Session, period_key: str, ma_cn: str, ma_pgd: str |
         ma_cn=ma_cn,
         ma_pgd=ma_pgd,
         total_customers=total_customers,
+        customer_ids=customer_ids,
     )
 
     cn_count = (
@@ -665,19 +711,22 @@ def _summary_from_branch(db: Session, period_key: str, ma_cn: str, ma_pgd: str |
 @router.get("/summary")
 def dashboard_summary(
     period_key: str = Query(...),
+    filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
-    cache_key = (period_key, scope.ma_cn, scope.ma_pgd)
+    filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
+    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:{filter_key}")
     cached = _SUMMARY_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
 
+    customer_ids = _matching_customer_ids(db, period_key, scope, filters)
     if scope.ma_cn:
-        payload = _summary_from_branch(db, period_key, scope.ma_cn, scope.ma_pgd)
+        payload = _summary_from_branch(db, period_key, scope.ma_cn, scope.ma_pgd, customer_ids)
     else:
-        payload = _summary_from_profiles(db, period_key, scope.ma_pgd)
+        payload = _summary_from_profiles(db, period_key, scope.ma_pgd, customer_ids)
 
     loan_type_breakdown = _build_loan_type_breakdown(db, period_key, scope.ma_cn, scope.ma_pgd)
     officer_leaderboard = _build_officer_leaderboard(db, period_key, scope.ma_cn, scope.ma_pgd)
@@ -766,16 +815,20 @@ def _analytics_source(db: Session, period_key: str, ma_cn: str | None, ma_pgd: s
 def dashboard_business_analytics(
     period_key: str = Query(...),
     include_rankings: bool = Query(default=True),
+    filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
     """Compact aggregate shared by the executive dashboard and four domain pages."""
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
-    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:{int(include_rankings)}")
+    filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
+    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:{int(include_rankings)}:{filter_key}")
     cached = _BUSINESS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
     query, model = _analytics_source(db, period_key, scope.ma_cn, scope.ma_pgd)
+    customer_ids = _matching_customer_ids(db, period_key, scope, filters)
+    query = _restrict_to_matching_customers(query, model, customer_ids)
     fee_expr = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
     service_expr = sum(func.coalesce(getattr(model, field), 0) for field in ACTIVE_SERVICE_KEYS)
     service_count_exprs = []
@@ -855,10 +908,12 @@ def dashboard_business_analytics(
         branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.branch_code == scope.ma_cn)
     if scope.ma_pgd:
         branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.ma_pgd == scope.ma_pgd)
+    branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.ma_kh.in_(customer_ids))
     branch_rows = branch_rows_query.group_by(CustomerPeriodBranchDetail.branch_code).all()
 
     loan_group_rows = (
         _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd)
+        .filter(LN01Loan.custseq.in_(customer_ids))
         .with_entities(
             LN01Loan.debt_group,
             func.count(func.distinct(LN01Loan.custseq)),
@@ -1047,16 +1102,19 @@ def _business_drilldown_condition(model, metric: str):
 def dashboard_business_drilldown(
     period_key: str = Query(...),
     metric: str = Query(default="deposit"),
-    keyword: str | None = Query(default=None),
+    detail_keyword: str | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=500),
+    filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
     query, model = _analytics_source(db, period_key, scope.ma_cn, scope.ma_pgd)
+    customer_ids = _matching_customer_ids(db, period_key, scope, filters)
+    query = _restrict_to_matching_customers(query, model, customer_ids)
     query = query.filter(_business_drilldown_condition(model, metric))
-    if keyword:
-        pattern = f"%{keyword.strip()}%"
+    if detail_keyword:
+        pattern = f"%{detail_keyword.strip()}%"
         query = query.filter(or_(model.ma_kh.ilike(pattern), model.ten_kh.ilike(pattern)))
     total = query.with_entities(func.count(func.distinct(model.ma_kh))).scalar() or 0
     fee_expr = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
@@ -1109,12 +1167,13 @@ def dashboard_business_drilldown(
 def dashboard_business_export(
     period_key: str = Query(...),
     metric: str = Query(default="deposit"),
+    filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
     payload = dashboard_business_drilldown(
-        period_key=period_key, metric=metric, keyword=None, page=1, page_size=50_000,
-        scope=scope, db=db,
+        period_key=period_key, metric=metric, detail_keyword=None, page=1, page_size=50_000,
+        filters=filters, scope=scope, db=db,
     )
     workbook = Workbook()
     info = workbook.active
@@ -1146,11 +1205,13 @@ def dashboard_business_export(
 def dashboard_insights(
     period_key: str = Query(...),
     include_top_changes: bool = Query(default=False),
+    filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
-    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:top={int(include_top_changes)}")
+    filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
+    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:top={int(include_top_changes)}:{filter_key}")
     cached = _INSIGHTS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
@@ -1173,6 +1234,8 @@ def dashboard_insights(
         )
         .filter(current.period_key == period_key)
     )
+    customer_ids = _matching_customer_ids(db, period_key, scope, filters)
+    joined = joined.filter(current.ma_kh.in_(customer_ids))
     if scope.ma_cn:
         joined = joined.filter(current.branch_codes.ilike(f"%{scope.ma_cn}%"))
     if scope.ma_pgd:
@@ -1295,6 +1358,8 @@ def dashboard_insights(
         if scope.ma_cn:
             current_accounts_query = current_accounts_query.filter(PF14AccountBalance.trbrcd == scope.ma_cn)
             previous_accounts_query = previous_accounts_query.filter(PF14AccountBalance.trbrcd == scope.ma_cn)
+        current_accounts_query = current_accounts_query.filter(PF14AccountBalance.custseq.in_(customer_ids))
+        previous_accounts_query = previous_accounts_query.filter(PF14AccountBalance.custseq.in_(customer_ids))
         current_accounts = current_accounts_query.subquery()
         previous_accounts = previous_accounts_query.subquery()
         account_changes = (
@@ -1317,7 +1382,7 @@ def dashboard_insights(
         new_accounts = int(account_changes[0] or 0)
         closed_accounts = int(account_changes[1] or 0)
 
-    ln_query = _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd)
+    ln_query = _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd).filter(LN01Loan.custseq.in_(customer_ids))
     period_date = datetime.strptime(period_key, "%Y%m%d").date()
     next_month_start = date(period_date.year + (period_date.month == 12), 1 if period_date.month == 12 else period_date.month + 1, 1)
     next_month_end = date(next_month_start.year + (next_month_start.month == 12), 1 if next_month_start.month == 12 else next_month_start.month + 1, 1)
