@@ -66,6 +66,19 @@ const compactMoney = (value) => {
   return `${number.toLocaleString('vi-VN')} đ`;
 };
 const fullMoney = (value) => `${Number(value || 0).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} đ`;
+const scopeChips = (params = {}) => [
+  params.period_key ? `Kỳ ${periodLabel(params.period_key)}` : null,
+  params.branch_code ? `CN ${params.branch_code}` : 'Toàn hệ thống',
+  params.pgd_code ? `Phòng ${params.pgd_code}` : null,
+  params.keyword ? `Tìm: “${params.keyword}”` : null,
+  params.customer_type ? `Loại KH: ${params.customer_type}` : null,
+  params.loan_type ? `Loại vay: ${params.loan_type}` : null,
+  params.officer_code ? `Cán bộ: ${params.officer_code}` : null,
+  params.service_codes ? `SP: ${params.service_codes.split(',').length} đã chọn` : null,
+].filter(Boolean);
+function AppliedScopeBanner({ params, total }) {
+  return <div className="c360-applied-scope"><span><FilterOutlined /><strong>Phạm vi đang áp dụng</strong></span><div>{scopeChips(params).map((item) => <Tag key={item}>{item}</Tag>)}{total != null ? <Tag color="blue">{Number(total).toLocaleString('vi-VN')} KH</Tag> : null}</div></div>;
+}
 const originalMoney = (value, ccy) => `${Number(value || 0).toLocaleString('vi-VN', { maximumFractionDigits: 2 })} ${ccy || 'VND'}`;
 const convertedMoneyCell = (vndValue, originalValue, row) => (
   <div>
@@ -517,12 +530,13 @@ function RealMetric({ title, value, icon, tone, current, previous, note, onClick
       <strong>{value}</strong>
       <Change current={current} previous={previous} />
       <small>{note}</small>
+      {explanation ? <small className="c360-metric-source">ⓘ {explanation.source}</small> : null}
     </Card>
   );
   return explanation ? <Tooltip title={<div><strong>{explanation.formula}</strong><br />Nguồn: {explanation.source}<br />Đơn vị: {explanation.unit || 'VNĐ'}<br />Cập nhật theo kỳ đang chọn.</div>}>{content}</Tooltip> : content;
 }
 
-function CustomerModal({ customer, periodKey, initialBranchCode, open, onClose }) {
+function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams, open, onClose }) {
   const modalAnchorRef = useRef(null);
   const [history, setHistory] = useState([]);
   const [historyError, setHistoryError] = useState('');
@@ -794,19 +808,23 @@ function CustomerModal({ customer, periodKey, initialBranchCode, open, onClose }
               setLoanBranch(null);
             }}
             options={[
-              { value: 'all', label: 'Toàn khách hàng' },
+              { value: 'all', label: 'Toàn bộ quan hệ · Tất cả chi nhánh' },
               ...[...new Set(branchDetails.map((item) => item.branch_code).filter(Boolean))]
-                .map((value) => ({ value, label: `Chi nhánh ${value}` })),
+                .map((value) => ({ value, label: `Chỉ quan hệ tại CN ${value}` })),
             ]}
           />
         </Space>
       </div>
+      <div className="c360-profile-scope-banner">
+        <div><BankOutlined /><span><strong>{profileBranch ? `Đang xem riêng quan hệ tại Chi nhánh ${profileBranch}` : 'Đang xem toàn bộ quan hệ của khách hàng'}</strong><small>{profileBranch ? 'Tất cả số tiền, tài khoản, LDS, cán bộ và lịch sử bên dưới chỉ thuộc chi nhánh này.' : 'Số liệu được cộng từ tất cả chi nhánh khách hàng có quan hệ.'}</small></span></div>
+        <AppliedScopeBanner params={{ ...(analysisParams || {}), branch_code: profileBranch || analysisParams?.branch_code }} />
+      </div>
       <Row gutter={[14, 14]} className="demo-quick-metrics c360-profile-metrics">
-        <Col xs={12} lg={8} xl><div role="button" tabIndex={0} className="is-deposit" onClick={() => changeProfileTab('deposit')}><WalletOutlined /><Text>Tổng tiền gửi</Text><strong>{compactMoney(totalDeposit)}</strong><small>CKH + TGTT bình quân</small></div></Col>
-        <Col xs={12} lg={8} xl><div role="button" tabIndex={0} className="is-loan" onClick={() => changeProfileTab('credit')}><BankOutlined /><Text>Tổng tiền vay</Text><strong>{compactMoney(totalLoan)}</strong><small>{viewedCustomer.pf10_lds_count || 0} LDS đang ghi nhận</small></div></Col>
-        <Col xs={12} lg={8} xl><div role="button" tabIndex={0} className="is-casa" onClick={() => changeProfileTab('fees')}><DatabaseOutlined /><Text>Doanh thu/phí trong kỳ</Text><strong>{compactMoney(periodRevenue)}</strong><small>Số liệu hiện đã tổng hợp</small></div></Col>
-        <Col xs={12} lg={8} xl><div role="button" tabIndex={0} className="is-product" onClick={() => changeProfileTab('products')}><CreditCardOutlined /><Text>Sản phẩm đang sử dụng</Text><strong>{activeProducts.length}</strong><small>Trên {trackedProducts.length} sản phẩm theo dõi</small></div></Col>
-        <Col xs={12} lg={8} xl><div role="button" tabIndex={0} className="is-branch" onClick={() => changeProfileTab('relationships')}><BankOutlined /><Text>Chi nhánh có quan hệ</Text><strong>{viewedCustomer.branch_count || 0}</strong><small>{profileBranch ? `Đang xem ${profileBranch}` : 'Toàn khách hàng'}</small></div></Col>
+        <Col xs={12} lg={8} xl><Tooltip title="Nguồn PF14/DP01 · Tổng tiền gửi CKH cuối kỳ + TGTT bình quân, quy đổi VNĐ"><div role="button" tabIndex={0} className="is-deposit" onClick={() => changeProfileTab('deposit')}><WalletOutlined /><Text>Tổng tiền gửi</Text><strong>{compactMoney(totalDeposit)}</strong><small>PF14/DP01 · CKH + TGTT BQ</small></div></Tooltip></Col>
+        <Col xs={12} lg={8} xl><Tooltip title="Nguồn PF10/LN01 · Tổng dư nợ ngắn hạn, trung dài hạn và thấu chi"><div role="button" tabIndex={0} className="is-loan" onClick={() => changeProfileTab('credit')}><BankOutlined /><Text>Tổng tiền vay</Text><strong>{compactMoney(totalLoan)}</strong><small>PF10/LN01 · {viewedCustomer.pf10_lds_count || 0} LDS</small></div></Tooltip></Col>
+        <Col xs={12} lg={8} xl><Tooltip title="Nguồn KH02 và PF10 · Tổng phí nghiệp vụ trong kỳ cộng thu nhập lãi PF10"><div role="button" tabIndex={0} className="is-casa" onClick={() => changeProfileTab('fees')}><DatabaseOutlined /><Text>Doanh thu/phí trong kỳ</Text><strong>{compactMoney(periodRevenue)}</strong><small>KH02/PF10 · Theo kỳ</small></div></Tooltip></Col>
+        <Col xs={12} lg={8} xl><Tooltip title="Nguồn CN05, DP01, Bill Payment và các cờ sản phẩm đã xử lý"><div role="button" tabIndex={0} className="is-product" onClick={() => changeProfileTab('products')}><CreditCardOutlined /><Text>Sản phẩm đang sử dụng</Text><strong>{activeProducts.length}</strong><small>CN05/DP01/Bill Payment · {trackedProducts.length} SP</small></div></Tooltip></Col>
+        <Col xs={12} lg={8} xl><Tooltip title="Đếm quan hệ khách hàng–chi nhánh từ CustomerPeriodBranchDetail"><div role="button" tabIndex={0} className="is-branch" onClick={() => changeProfileTab('relationships')}><BankOutlined /><Text>Chi nhánh có quan hệ</Text><strong>{viewedCustomer.branch_count || 0}</strong><small>BranchDetail · {profileBranch ? `CN ${profileBranch}` : 'Toàn KH'}</small></div></Tooltip></Col>
       </Row>
       <Tabs activeKey={activeTab} onChange={changeProfileTab} animated={false} className="c360-profile-tabs" items={[
         {
@@ -1218,7 +1236,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
   const [dashboardView, setDashboardView] = useState('results');
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [kpiDrill, setKpiDrill] = useState({ open: false, metric: '', label: '', items: [], total: 0, totalValue: 0, page: 1 });
+  const [kpiDrill, setKpiDrill] = useState({ open: false, metric: '', label: '', items: [], total: 0, totalValue: 0, page: 1, validation: null });
   const [kpiDrillLoading, setKpiDrillLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -1314,12 +1332,28 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
 
   const loadKpiDrilldown = async (metric, page = 1) => {
     setKpiDrillLoading(true);
-    setKpiDrill((current) => ({ ...current, open: true, metric, page }));
+    setKpiDrill((current) => ({ ...current, open: true, metric, page, validation: null }));
     try {
       const { data: response } = await client.get('/dashboard/business-drilldown', {
         params: { ...profileParams, metric, page, page_size: 20 },
       });
-      setKpiDrill({ open: true, metric, label: response?.label, items: response?.items || [], total: Number(response?.total || 0), totalValue: Number(response?.total_value || 0), page });
+      const currentKpis = data?.kpis || {};
+      const rules = {
+        all: { expectedCount: Number(currentKpis.total_customers || 0), formula: 'COUNT(DISTINCT mã KH lõi)', source: 'CustomerPeriodProfile / Kho CIF', unit: 'Khách hàng' },
+        term_deposit: { expectedValue: Number(currentKpis.total_deposit || 0), formula: 'SUM(số dư tiền gửi CKH cuối kỳ)', source: 'PF14; tỷ giá DP01', unit: 'VNĐ' },
+        loan: { expectedValue: Number(currentKpis.total_loan || 0), formula: 'SUM(dư nợ ngắn hạn + trung dài hạn + thấu chi)', source: 'PF10/LN01', unit: 'VNĐ' },
+        casa: { expectedValue: Number(currentKpis.total_casa || 0), formula: 'SUM(TGTT bình quân trong kỳ)', source: 'PF14/DP01', unit: 'VNĐ' },
+      };
+      const rule = rules[metric] || {};
+      const actualCount = Number(response?.total || 0);
+      const actualValue = Number(response?.total_value || 0);
+      const countOk = rule.expectedCount == null || actualCount === rule.expectedCount;
+      const tolerance = Math.max(1, Math.abs(rule.expectedValue || 0) * 0.000001);
+      const valueOk = rule.expectedValue == null || Math.abs(actualValue - rule.expectedValue) <= tolerance;
+      const scopeOk = (!profileParams.branch_code || response?.scope?.branch_code === profileParams.branch_code)
+        && (!profileParams.pgd_code || response?.scope?.pgd_code === profileParams.pgd_code);
+      const validation = { ok: countOk && valueOk && scopeOk, countOk, valueOk, scopeOk, ...rule, actualCount, actualValue };
+      setKpiDrill({ open: true, metric, label: response?.label, items: response?.items || [], total: actualCount, totalValue: actualValue, page, validation });
     } catch (requestError) {
       message.error(requestError.response?.data?.detail || 'Không tải được danh sách khách hàng của chỉ tiêu');
     } finally {
@@ -1337,6 +1371,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
   return (
     <div className="demo-page c360-customer-page c360-executive-dashboard">
       <div className="c360-dashboard-context"><Space><span className="is-live" /><Text strong>Kỳ {periodLabel(periodKey)}</Text><Text type="secondary">Dữ liệu trực tiếp từ database</Text>{detailLoading ? <Tag color="processing">Đang tải biểu đồ và phân tích bổ sung…</Tag> : <Tag color="success">Đã cập nhật đầy đủ</Tag>}</Space><Text type="secondary">Bấm KPI để xem đúng danh sách tạo ra chỉ tiêu</Text></div>
+      <AppliedScopeBanner params={profileParams} total={kpis.total_customers} />
       <Row gutter={[16, 16]}>
         <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng khách hàng" value={Number(kpis.total_customers || 0).toLocaleString('vi-VN')} current={compare.customers?.current ?? kpis.total_customers} previous={compare.customers?.previous} icon={<TeamOutlined />} tone="blue" note={`${comparison?.new_customers || 0} mới · ${comparison?.lost_customers || 0} rời kỳ`} onClick={() => loadKpiDrilldown('all')} explanation={{ formula: 'Đếm duy nhất mã KH lõi trong tập CIF đã xử lý', source: 'CustomerPeriodProfile / Kho CIF', unit: 'Khách hàng' }} /></Col>
         <Col xs={24} sm={12} xl={6}><RealMetric title="Tiền gửi CKH" value={compactMoney(kpis.total_deposit)} current={compare.deposit?.current ?? kpis.total_deposit} previous={compare.deposit?.previous} icon={<WalletOutlined />} tone="green" note="Tổng số dư cuối kỳ" onClick={() => loadKpiDrilldown('term_deposit')} explanation={{ formula: 'Tổng số dư tiền gửi có kỳ hạn cuối kỳ, quy đổi VNĐ', source: 'PF14; tỷ giá tham chiếu DP01' }} /></Col>
@@ -1510,7 +1545,8 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       </Card>
       </>}
       <Drawer width="min(1120px, 96vw)" open={kpiDrill.open} onClose={() => setKpiDrill((current) => ({ ...current, open: false }))} title={`${kpiDrill.label || 'Khách hàng tạo ra chỉ tiêu'} · Kỳ ${periodLabel(periodKey)}`}>
-        <Alert type="info" showIcon message={`${kpiDrill.total.toLocaleString('vi-VN')} khách hàng · Tổng giá trị ${fullMoney(kpiDrill.totalValue)}`} description="Bấm một khách hàng để mở hồ sơ C360 đầy đủ. Danh sách này được lọc đúng theo KPI đã chọn." style={{ marginBottom: 12 }} />
+        <AppliedScopeBanner params={profileParams} total={kpiDrill.total} />
+        <Alert type={!kpiDrill.validation ? 'info' : kpiDrill.validation.ok ? 'success' : 'error'} showIcon message={!kpiDrill.validation ? 'Đang đối soát KPI với danh sách…' : kpiDrill.validation.ok ? 'Đối soát KPI và danh sách: KHỚP' : 'Đối soát KPI và danh sách: CÓ CHÊNH LỆCH'} description={<div><span>{kpiDrill.total.toLocaleString('vi-VN')} khách hàng · Tổng giá trị {fullMoney(kpiDrill.totalValue)}</span><br /><span>Công thức: {kpiDrill.validation?.formula || 'Theo chỉ tiêu'} · Nguồn: {kpiDrill.validation?.source || 'CustomerPeriodProfile'} · Đơn vị: {kpiDrill.validation?.unit || 'VNĐ'}</span>{kpiDrill.validation && !kpiDrill.validation.ok ? <><br /><strong>{!kpiDrill.validation.scopeOk ? 'Phạm vi chi nhánh/phòng không khớp. ' : ''}{!kpiDrill.validation.countOk ? `Số KH kỳ vọng ${kpiDrill.validation.expectedCount}, thực tế ${kpiDrill.validation.actualCount}. ` : ''}{!kpiDrill.validation.valueOk ? `Giá trị kỳ vọng ${fullMoney(kpiDrill.validation.expectedValue)}, thực tế ${fullMoney(kpiDrill.validation.actualValue)}.` : ''}</strong></> : null}</div>} style={{ marginBottom: 12 }} />
         <Table loading={{ spinning: kpiDrillLoading, tip: 'Đang truy vấn khách hàng tạo ra chỉ tiêu…' }} size="small" sticky rowKey="ma_kh" dataSource={kpiDrill.items} rowClassName="demo-clickable-row" onRow={(row) => ({ onClick: () => onOpenCustomer(row) })} scroll={{ x: 1120, y: 'calc(100vh - 260px)' }} pagination={{ current: kpiDrill.page, pageSize: 20, total: kpiDrill.total, showSizeChanger: false, onChange: (page) => loadKpiDrilldown(kpiDrill.metric, page) }} columns={[
           { title: 'Khách hàng', fixed: 'left', width: 250, render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text copyable>{row.ma_kh}</Text></div> },
           { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100 },
@@ -2000,6 +2036,7 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer }) {
     <Alert className="demo-section" showIcon type="info" message="Cách đọc số liệu" description="Số liệu được tổng hợp theo kỳ và phạm vi chi nhánh/PGD đang chọn. Toàn tỉnh không đếm trùng mã khách hàng lõi; khi lọc chi nhánh, số liệu lấy đúng phần quan hệ tại chi nhánh đó." />
     <Card className="demo-panel demo-section" title="Nguồn dữ liệu & công thức"><Descriptions column={{ xs: 1, md: 1 }} bordered size="small" items={sourceNotes.map(([label, children]) => ({ key: label, label, children }))} /></Card>
     <Drawer width="min(1380px, 98vw)" open={reconciliation.open} onClose={() => setReconciliation((current) => ({ ...current, open: false }))} title={`Khách hàng chưa đối chiếu Kho CIF · Kỳ ${periodLabel(periodKey)}`}>
+      <AppliedScopeBanner params={profileParams} total={reconciliation.total} />
       <Alert showIcon type="info" message="Nguyên tắc hiển thị" description="Chỉ lấy kết quả của job xử lý gần nhất để không đếm lặp lịch sử. Một mã có thể xuất hiện ở nhiều nguồn hoặc chi nhánh; từng dòng ghi rõ nơi phát hiện và nguyên nhân chưa ghép được với CIF." />
       <div className="c360-reconciliation-toolbar"><Input.Search allowClear value={reconciliationKeyword} onChange={(event) => setReconciliationKeyword(event.target.value)} onSearch={(value) => loadReconciliations(1, value)} placeholder="Tìm mã hoặc tên khách hàng" /><Select allowClear value={reconciliationSource} placeholder="Tất cả nguồn" onChange={(value) => { setReconciliationSource(value); loadReconciliations(1, reconciliationKeyword, value); }} options={['DP01', 'LN01', 'PF10', 'PF14', 'BC06', 'BC29', 'CN05', 'KH02', 'RR01', 'GL02'].map((value) => ({ value, label: value }))} /><Tag color="warning">{reconciliation.total.toLocaleString('vi-VN')} bản ghi cần rà soát</Tag></div>
       <Table loading={reconciliationLoading} size="small" sticky rowKey="id" dataSource={reconciliation.items} scroll={{ x: 1400, y: 'calc(100vh - 270px)' }} pagination={{ current: reconciliation.page, pageSize: 50, total: reconciliation.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} bản ghi`, onChange: (page) => loadReconciliations(page) }} columns={[
@@ -2011,6 +2048,7 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer }) {
       ]} />
     </Drawer>
     <Drawer width="min(1180px, 96vw)" open={drilldown.open} onClose={() => setDrilldown((current) => ({ ...current, open: false }))} title={`${drilldown.label || 'Chi tiết khách hàng'} · Kỳ ${periodLabel(periodKey)}`} extra={<Button icon={<DownloadOutlined />} onClick={exportMetric}>Xuất Excel</Button>}>
+      <AppliedScopeBanner params={profileParams} total={drilldown.total} />
       <div className="c360-drill-toolbar"><Input.Search allowClear value={drillKeyword} onChange={(event) => setDrillKeyword(event.target.value)} onSearch={(value) => loadDrilldown(drilldown.metric, 1, value)} placeholder="Tìm mã hoặc tên khách hàng" /><Space direction="vertical" size={0} align="end"><Text type="secondary">{drilldown.total.toLocaleString('vi-VN')} khách hàng</Text>{Number(drilldown.totalValue || 0) !== 0 && <Text strong>Tổng giá trị: {fullMoney(drilldown.totalValue)}</Text>}</Space></div>
       <Table loading={drillLoading} size="small" sticky rowKey="ma_kh" dataSource={drilldown.items} onRow={(row) => ({ onClick: () => onOpenCustomer?.({ ...row, id: row.ma_kh, ma_kh: row.ma_kh, ten_kh: row.ten_kh }) })} rowClassName="demo-clickable-row" scroll={{ x: 1320, y: 'calc(100vh - 280px)' }} pagination={{ current: drilldown.page, pageSize: 20, total: drilldown.total, showSizeChanger: false, onChange: (nextPage) => loadDrilldown(drilldown.metric, nextPage) }} columns={[{ title: 'Khách hàng', fixed: 'left', width: 250, render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text copyable>{row.ma_kh}</Text></div> }, { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100 }, { title: 'Cán bộ', dataIndex: 'officer_name', width: 180, render: (value, row) => value || row.officer_code || '—' }, { title: 'Tiền gửi CKH', dataIndex: 'deposit', align: 'right', width: 150, render: fullMoney }, { title: 'TGTT bình quân', dataIndex: 'casa', align: 'right', width: 150, render: fullMoney }, { title: 'Dư nợ', dataIndex: 'loan', align: 'right', width: 150, render: fullMoney }, { title: 'Thu phí', dataIndex: 'fee', align: 'right', width: 140, render: fullMoney }, { title: 'Dự phòng', dataIndex: 'provision', align: 'right', width: 140, render: fullMoney }, { title: 'SP', dataIndex: 'service_count', align: 'right', width: 70 }, { title: 'Dư nợ XLRR', dataIndex: 'written_off', align: 'right', width: 150, render: fullMoney }]} />
     </Drawer>
@@ -2141,7 +2179,7 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
       <div className={embedded ? 'c360-embedded-content' : 'demo-content'}>
         {!periodKey ? <Card className="c360-empty-scope"><Empty description="Chọn điều kiện trên bộ lọc chung và bấm Xem dữ liệu" /><Text type="secondary">Hệ thống chưa truy vấn dữ liệu nghiệp vụ để tránh tải thừa.</Text></Card> : content}
       </div>
-      <CustomerModal customer={selectedCustomer} periodKey={periodKey} initialBranchCode={branchCode} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
+      <CustomerModal customer={selectedCustomer} periodKey={periodKey} initialBranchCode={branchCode} analysisParams={sharedProfileParams} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
     </>
   );
 

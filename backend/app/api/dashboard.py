@@ -1160,7 +1160,12 @@ def dashboard_business_drilldown(
     else:
         label = BUSINESS_DRILLDOWN_LABELS.get(metric, metric)
     total_value = query.with_entities(func.coalesce(func.sum(order_expr), 0)).scalar() or 0
-    return {"metric": metric, "label": label, "total": int(total), "total_value": float(total_value), "page": page, "page_size": page_size, "items": items}
+    return {
+        "metric": metric, "label": label, "total": int(total),
+        "total_value": float(total_value), "page": page, "page_size": page_size,
+        "scope": {"branch_code": scope.ma_cn, "pgd_code": scope.ma_pgd},
+        "items": items,
+    }
 
 
 @router.get("/business-export")
