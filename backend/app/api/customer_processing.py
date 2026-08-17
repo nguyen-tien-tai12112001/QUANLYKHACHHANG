@@ -257,6 +257,14 @@ def enrich_profile_org_names(db: Session, payloads: list[dict]) -> list[dict]:
         return staff_info
 
     for payload in payloads:
+        # Hồ sơ cũ có thể chưa được backfill primary_branch_code nhưng vẫn có
+        # quan hệ chi nhánh hợp lệ. Không để giao diện mất chi nhánh trong trường hợp đó.
+        if not str(payload.get("primary_branch_code") or "").strip():
+            details = payload.get("branch_details")
+            detail_branch = next((str(item.get("branch_code") or "").strip() for item in (details or []) if str(item.get("branch_code") or "").strip()), "") if isinstance(details, list) else ""
+            branch_code = detail_branch or next((item.strip() for item in str(payload.get("branch_codes") or "").replace(";", ",").split(",") if item.strip()), "")
+            if branch_code:
+                payload["primary_branch_code"] = branch_code
         enrich_officer(payload)
         labels = []
         for raw_item in str(payload.get("pgd_codes") or "").split(","):

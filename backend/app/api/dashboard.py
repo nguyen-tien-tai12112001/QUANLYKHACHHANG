@@ -1210,13 +1210,17 @@ def dashboard_business_export(
 def dashboard_insights(
     period_key: str = Query(...),
     include_top_changes: bool = Query(default=False),
+    anomalies_only: bool = Query(default=False),
+    anomaly_page: int = Query(default=1, ge=1),
+    anomaly_page_size: int = Query(default=12, ge=5, le=100),
+    anomaly_include_total: bool = Query(default=True),
     filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
     filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
-    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:top={int(include_top_changes)}:{filter_key}")
+    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:top={int(include_top_changes)}:alerts_only={int(anomalies_only)}:{anomaly_page}:{anomaly_page_size}:total={int(anomaly_include_total)}:{filter_key}")
     cached = _INSIGHTS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
@@ -1281,10 +1285,13 @@ def dashboard_insights(
         ),
         and_(previous.id.isnot(None), current_services < previous_services),
     )
+    anomaly_query = joined.filter(anomaly_condition)
+    anomaly_total = anomaly_query.count() if anomaly_include_total else None
     anomaly_rows = (
-        joined.filter(anomaly_condition)
+        anomaly_query
         .order_by(desc(func.abs(current_deposit - previous_deposit)))
-        .limit(12)
+        .offset((anomaly_page - 1) * anomaly_page_size)
+        .limit(anomaly_page_size)
         .all()
     )
     anomalies = []
@@ -1312,6 +1319,20 @@ def dashboard_insights(
             "previous_loan": float(old.so_du_tien_vay or 0) if old else 0,
             "flags": flags,
         })
+
+    if anomalies_only:
+        result = {
+            "period_key": period_key,
+            "previous_period": previous_period,
+            "abnormal": {
+                **({"total": int(anomaly_total or 0)} if anomaly_total is not None else {}),
+                "page": anomaly_page,
+                "page_size": anomaly_page_size,
+                "items": anomalies,
+            },
+        }
+        _INSIGHTS_CACHE[cache_key] = (monotonic(), result)
+        return result
 
     def serialize_change_rows(rows, value_kind: str):
         items = []
@@ -1428,6 +1449,9 @@ def dashboard_insights(
             "obligation_source_available": bool(obligations[4]),
         },
         "abnormal": {
+            "total": int(anomaly_total or 0),
+            "page": anomaly_page,
+            "page_size": anomaly_page_size,
             "deposit_drop_count": int(overview[9] or 0),
             "loan_increase_count": int(overview[10] or 0),
             "service_drop_count": int(overview[11] or 0),

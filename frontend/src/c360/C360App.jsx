@@ -95,6 +95,10 @@ const loanTypeLabel = (value) => {
   return text.split('/').map((part) => labels[part.trim()] || part.trim()).join(' / ');
 };
 const periodLabel = (value) => value?.length >= 6 ? `${value.slice(4, 6)}/${value.slice(0, 4)}` : value || '—';
+const primaryBranchLabel = (row = {}) => row.primary_branch_code
+  || row.managing_branch_code
+  || String(row.branch_codes || '').replaceAll(';', ',').split(',').map((item) => item.trim()).find(Boolean)
+  || 'Chưa xác định';
 const changePercent = (current, previous) => Number(previous) ? ((Number(current) - Number(previous)) / Number(previous)) * 100 : 0;
 const dateLabel = (value) => value ? new Date(`${value}T00:00:00`).toLocaleDateString('vi-VN') : '—';
 const dateTimeLabel = (value) => value ? new Date(value).toLocaleString('vi-VN') : 'Chưa phát sinh';
@@ -1242,6 +1246,8 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
   const [readiness, setReadiness] = useState(null);
   const [topCustomers, setTopCustomers] = useState([]);
   const [dashboardView, setDashboardView] = useState('results');
+  const [alertPage, setAlertPage] = useState(1);
+  const [alertLoading, setAlertLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [kpiDrill, setKpiDrill] = useState({ open: false, metric: '', label: '', items: [], total: 0, totalValue: 0, page: 1, validation: null });
@@ -1369,6 +1375,22 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     }
   };
 
+  const loadAlertPage = async (page) => {
+    setAlertLoading(true);
+    try {
+      const { data: response } = await client.get('/dashboard/insights', {
+        params: { ...profileParams, anomalies_only: true, anomaly_include_total: false, anomaly_page: page, anomaly_page_size: 12 },
+        hideGlobalLoading: true,
+      });
+      setInsights((current) => ({ ...current, abnormal: { ...(current?.abnormal || {}), ...(response?.abnormal || {}) } }));
+      setAlertPage(page);
+    } catch (requestError) {
+      message.error(requestError.response?.data?.detail || 'Không tải được trang cảnh báo');
+    } finally {
+      setAlertLoading(false);
+    }
+  };
+
   const insightMetric = (label, value, note, tone = '') => (
     <div className={`c360-dashboard-stat ${tone}`}>
       <Text type="secondary">{label}</Text>
@@ -1386,19 +1408,18 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
         <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng dư nợ" value={compactMoney(kpis.total_loan)} current={compare.loan?.current ?? kpis.total_loan} previous={compare.loan?.previous} icon={<BankOutlined />} tone="red" note="Tổng dư nợ khách hàng" onClick={() => loadKpiDrilldown('loan')} explanation={{ formula: 'Tổng dư nợ ngắn hạn + trung dài hạn + thấu chi', source: 'PF10/LN01; tỷ giá tham chiếu DP01' }} /></Col>
         <Col xs={24} sm={12} xl={6}><RealMetric title="TGTT bình quân" value={compactMoney(kpis.total_casa)} current={compare.casa?.current ?? kpis.total_casa} previous={compare.casa?.previous} icon={<BarChartOutlined />} tone="gold" note={`${kpis.no_service_count || 0} KH chưa dùng dịch vụ`} onClick={() => loadKpiDrilldown('casa')} explanation={{ formula: 'Tổng số dư bình quân tài khoản thanh toán trong tháng', source: 'PF14/DP01; quy đổi VNĐ' }} /></Col>
       </Row>
-      <Tabs className="c360-dashboard-view-tabs" activeKey={dashboardView} onChange={setDashboardView} items={[{ key: 'results', label: 'Kết quả kỳ' }, { key: 'alerts', label: <span>Cần xử lý <Tag color="error">{Number(abnormal.deposit_drop_count || 0) + Number(abnormal.loan_increase_count || 0) + Number(abnormal.service_drop_count || 0)}</Tag></span> }]} />
+      <Tabs className="c360-dashboard-view-tabs" activeKey={dashboardView} onChange={setDashboardView} items={[{ key: 'results', label: 'Kết quả kỳ' }, { key: 'alerts', label: <span>Cần xử lý <Tag color="error">{Number(abnormal.total || 0).toLocaleString('vi-VN')}</Tag></span> }]} />
       {dashboardView === 'results' && <>
       <Card
         title="Tổng quan khách hàng"
         className="demo-panel demo-section c360-dashboard-overview"
         extra={<Button type="link" onClick={onGoCustomers}>Mở danh sách C360</Button>}
       >
-        <div className="c360-dashboard-stat-grid is-five">
-          {insightMetric('Có tiền gửi', Number(customerOverview.with_deposit || 0).toLocaleString('vi-VN'), 'Khách hàng có số dư', 'is-green')}
-          {insightMetric('Có tiền vay', Number(customerOverview.with_loan || 0).toLocaleString('vi-VN'), 'Khách hàng còn dư nợ', 'is-red')}
-          {insightMetric('Có sản phẩm dịch vụ', Number(customerOverview.with_digital_service || 0).toLocaleString('vi-VN'), 'Ít nhất một sản phẩm', 'is-blue')}
+        <div className="c360-dashboard-stat-grid is-four">
+          {insightMetric('Có tiền gửi', Number(customerOverview.with_deposit || 0).toLocaleString('vi-VN'), 'TG CKH + TGTT bình quân > 0', 'is-green')}
+          {insightMetric('Có tiền vay', Number(customerOverview.with_loan || 0).toLocaleString('vi-VN'), 'Tổng dư nợ cuối kỳ > 0', 'is-red')}
+          {insightMetric('Có sản phẩm dịch vụ', Number(customerOverview.with_digital_service || 0).toLocaleString('vi-VN'), 'Có ít nhất 1 SP/DV đang dùng', 'is-blue')}
           {insightMetric('Quan hệ đa chi nhánh', Number(customerOverview.multi_branch || 0).toLocaleString('vi-VN'), 'Từ hai chi nhánh trở lên', 'is-purple')}
-          {insightMetric('Biến động khách hàng', `${Number(comparison?.new_customers || 0).toLocaleString('vi-VN')} / ${Number(comparison?.lost_customers || 0).toLocaleString('vi-VN')}`, 'Mới / rời kỳ', 'is-gold')}
         </div>
       </Card>
       <Row gutter={[16, 16]} className="demo-section">
@@ -1406,7 +1427,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           <Card title="Tiền gửi và dòng tiền" className="demo-panel c360-dashboard-domain">
             <div className="c360-dashboard-stat-grid">
               {insightMetric('Tổng tiền gửi', compactMoney(deposit.total), `${depositChangeRate >= 0 ? '+' : ''}${depositChangeRate.toFixed(1)}% so kỳ trước`, depositChangeRate >= 0 ? 'is-green' : 'is-red')}
-              {insightMetric('Biến động tuyệt đối', compactMoney(deposit.change), `Kỳ trước ${compactMoney(deposit.previous_total)}`, Number(deposit.change || 0) >= 0 ? 'is-green' : 'is-red')}
+              {insightMetric('Biến động số dư', compactMoney(deposit.change), `Kỳ trước ${compactMoney(deposit.previous_total)}`, Number(deposit.change || 0) >= 0 ? 'is-green' : 'is-red')}
               {insightMetric('Tài khoản mở mới trong kỳ', Number(deposit.new_accounts || 0).toLocaleString('vi-VN'), 'So với kỳ PF14 trước', 'is-blue')}
               {insightMetric('Tài khoản đã đóng trong kỳ', Number(deposit.closed_accounts || 0).toLocaleString('vi-VN'), 'So với kỳ PF14 trước', 'is-gold')}
             </div>
@@ -1456,7 +1477,8 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
         <Table
           size="small"
           rowKey="ma_kh"
-          pagination={false}
+          loading={alertLoading}
+          pagination={{ current: alertPage, pageSize: 12, total: Number(abnormal.total || 0), showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: loadAlertPage }}
           dataSource={abnormal?.items || []}
           scroll={{ x: 920 }}
           onRow={(row) => ({ onClick: () => openInsightCustomer(row) })}
@@ -1464,6 +1486,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           locale={{ emptyText: 'Không phát hiện khách hàng có biến động vượt ngưỡng trong kỳ' }}
           columns={[
             { title: 'Khách hàng', fixed: 'left', width: 240, render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text type="secondary">{row.ma_kh}</Text></div> },
+            { title: 'Chi nhánh chính', width: 125, render: (_, row) => primaryBranchLabel(row) },
             { title: 'Cảnh báo', dataIndex: 'flags', width: 270, render: (flags = []) => <Space size={[4, 4]} wrap>{flags.map((flag) => <Tag key={flag} color={flag.includes('Tiền gửi') ? 'error' : flag.includes('Dư nợ') ? 'warning' : 'processing'}>{flag}</Tag>)}</Space> },
             { title: 'Tiền gửi kỳ này', dataIndex: 'deposit', align: 'right', width: 145, render: compactMoney },
             { title: 'Tiền gửi kỳ trước', dataIndex: 'previous_deposit', align: 'right', width: 145, render: compactMoney },
@@ -1477,7 +1500,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           ['deposit_increase', 'Tăng tiền gửi'], ['deposit_decrease', 'Giảm tiền gửi'], ['loan_increase', 'Tăng dư nợ'], ['fee', 'Thu phí lớn'],
         ].map(([key, label]) => ({ key, label, children: <Table size="small" rowKey="ma_kh" pagination={false} dataSource={topChanges[key] || []} onRow={(row) => ({ onClick: () => openInsightCustomer(row) })} rowClassName="demo-clickable-row" scroll={{ x: 820 }} columns={[
           { title: 'Khách hàng', fixed: 'left', width: 260, render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text copyable>{row.ma_kh}</Text></div> },
-          { title: 'Chi nhánh', dataIndex: 'primary_branch_code', width: 110 },
+          { title: 'Chi nhánh', width: 110, render: (_, row) => primaryBranchLabel(row) },
           { title: 'Kỳ trước', dataIndex: 'previous', align: 'right', width: 160, render: fullMoney },
           { title: 'Kỳ này', dataIndex: 'current', align: 'right', width: 160, render: fullMoney },
           { title: 'Chênh lệch', dataIndex: 'change', align: 'right', width: 170, render: (value) => <Text strong className={Number(value || 0) >= 0 ? 'is-up' : 'is-down'}>{Number(value || 0) >= 0 ? '+' : ''}{fullMoney(value)}</Text> },
@@ -1492,7 +1515,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           <Card title="Khách hàng tiền gửi lớn" className="demo-panel" extra={<Button type="link" onClick={onGoCustomers}>Xem tất cả</Button>}>
             <Table size="small" rowKey="id" pagination={false} dataSource={topCustomers} onRow={(row) => ({ onClick: () => onOpenCustomer(row) })} rowClassName="demo-clickable-row" columns={[
               { title: 'Khách hàng', dataIndex: 'ten_kh', render: (value, row) => <div><Text strong>{value || 'Chưa có tên'}</Text><br /><Text type="secondary">{row.ma_kh}</Text></div> },
-              { title: 'CN chính', dataIndex: 'primary_branch_code', width: 100 },
+              { title: 'CN chính', width: 100, render: (_, row) => primaryBranchLabel(row) },
               { title: 'Tiền gửi', dataIndex: 'so_du_tien_gui', align: 'right', render: compactMoney },
               { title: 'Dư nợ', dataIndex: 'so_du_tien_vay', align: 'right', render: compactMoney },
             ]} />
@@ -1751,7 +1774,7 @@ function RealCustomerList({ context, onOpenCustomer }) {
         </div>
       ),
     },
-    { key: 'location', title: 'Chi nhánh/PGD chính', width: 190, render: (_, row) => <div><Text>{row.primary_branch_code || '—'}</Text><br /><Text type="secondary">{row.primary_pgd_name || row.primary_pgd_code || '—'}</Text></div> },
+    { key: 'location', title: 'Chi nhánh/PGD chính', width: 190, render: (_, row) => <div><Text>{primaryBranchLabel(row)}</Text><br /><Text type="secondary">{row.primary_pgd_name || row.primary_pgd_code || 'Chưa xác định'}</Text></div> },
     { key: 'officer', title: 'Cán bộ quản lý', dataIndex: 'ten_can_bo', width: 180, render: (value, row) => <div><Text>{value || row.ma_cb || '—'}</Text>{value && row.ma_cb ? <><br /><Text type="secondary">{row.ma_cb}</Text></> : null}</div> },
     { key: 'deposit', title: 'Tiền gửi CKH', dataIndex: 'so_du_tien_gui', align: 'right', width: 145, render: compactMoney },
     { key: 'casa', title: 'TGTT bình quân', dataIndex: 'so_du_tgtt_binh_quan', align: 'right', width: 145, render: compactMoney },
@@ -2137,7 +2160,7 @@ function RealInsightsPage({ context, onOpenCustomer }) {
           scroll={{ x: 1050 }}
           columns={[
             { title: 'Khách hàng', dataIndex: 'ten_kh', width: 260, render: (value, row) => <div><Text strong>{value || 'Chưa có tên'}</Text><br /><Text type="secondary">{row.ma_kh} · {row.loai_khach_hang || 'Chưa phân loại'}</Text></div> },
-            { title: 'Chi nhánh chính', dataIndex: 'primary_branch_code', width: 130, render: (value) => value || '—' },
+            { title: 'Chi nhánh chính', width: 130, render: (_, row) => primaryBranchLabel(row) },
             { title: 'Cán bộ', dataIndex: 'ten_can_bo', width: 180, render: (value, row) => value || row.ma_cb || '—' },
             { title: 'Tiền gửi CKH', dataIndex: 'so_du_tien_gui', align: 'right', width: 150, render: compactMoney },
             { title: 'TGTT bình quân', dataIndex: 'so_du_tgtt_binh_quan', align: 'right', width: 150, render: compactMoney },
