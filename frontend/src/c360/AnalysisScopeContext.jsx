@@ -108,7 +108,12 @@ export function AnalysisScopeProvider({ children, currentUser }) {
       } else {
         const summary = { customers: Number(summaryResponse?.total_customers || 0), periodKey: applied.periodKey };
         setSessionSummary(summary);
-        setSessionData({ periodKey: applied.periodKey, summary: summaryResponse, profiles: results[1]?.status === 'fulfilled' ? results[1].value?.data : null });
+        setSessionData({
+          periodKey: applied.periodKey,
+          scopeKey: JSON.stringify(profileParams),
+          summary: summaryResponse,
+          profiles: results[1]?.status === 'fulfilled' ? results[1].value?.data : null,
+        });
         notification.success({ message: 'Đã tải phạm vi dữ liệu', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng phù hợp. Phân tích chi tiết đang hoàn tất ở nền.`, placement: 'topRight' });
       }
       if (active) setSessionLoading(false);

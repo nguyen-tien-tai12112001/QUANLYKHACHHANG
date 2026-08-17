@@ -1679,15 +1679,24 @@ function RealCustomerList({ context, onOpenCustomer }) {
 
   const load = useCallback(async () => {
     if (!periodKey) return;
+    const currentScopeKey = JSON.stringify(profileParams);
     const isDefaultView = page === 1 && pageSize === PAGE_SIZE && !query
       && sort === 'so_du_tien_gui:desc' && filters === EMPTY_CUSTOMER_FILTERS
-      && sessionData?.periodKey === periodKey && sessionData?.profiles;
+      && sessionData?.periodKey === periodKey && sessionData?.scopeKey === currentScopeKey
+      && sessionData?.profiles;
     if (isDefaultView) {
       setRows(sessionData.profiles?.items || []);
       setTotal(Number(sessionData.profiles?.total || 0));
       setSummary(sessionData.summary || {});
+      setLoading(false);
+      setError('');
+      client.get('/customer-processing/profile-filter-options', {
+        params: { period_key: periodKey, branch_code: branchCode || undefined, pgd_code: pgdCode || undefined },
+        hideGlobalLoading: true,
+      }).then(({ data }) => setFilterOptions(data || { loan_types: [], officers: [] })).catch(() => {});
+      return;
     }
-    setLoading(!isDefaultView);
+    setLoading(true);
     setError('');
     try {
       const [profilesRes, summaryRes] = await Promise.all([
