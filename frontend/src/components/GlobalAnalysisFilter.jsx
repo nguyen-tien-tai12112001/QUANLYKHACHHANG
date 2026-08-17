@@ -1,5 +1,5 @@
 import { FilterOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
-import { Button, Drawer, InputNumber, Select, Space, Tag, Typography, message } from 'antd';
+import { Button, Drawer, Input, InputNumber, Select, Space, Tag, Typography, message } from 'antd';
 import { useState } from 'react';
 import { useAnalysisScope } from '../c360/AnalysisScopeContext';
 
@@ -22,16 +22,17 @@ export default function GlobalAnalysisFilter({ activeMenu }) {
   };
   return <>
     <div className="global-scope-bar">
-      <Select loading={metadataLoading} value={draft.periodKey || undefined} placeholder="Chọn kỳ dữ liệu" style={{ width: 150 }} onChange={(periodKey) => scope.updateDraft({ periodKey, branchCode: null, pgdCode: null })} options={periods.map((item) => ({ value: item.period_key, label: `${item.period_key.slice(4, 6)}/${item.period_key.slice(0, 4)}` }))} />
-      <Select allowClear value={draft.branchCode || undefined} placeholder="Tất cả chi nhánh" style={{ width: 155 }} onChange={(branchCode) => scope.updateDraft({ branchCode: branchCode || null, pgdCode: null })} options={(options.branches || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} />
-      <Select allowClear value={draft.pgdCode || undefined} placeholder="Tất cả phòng ban" style={{ width: 165 }} onChange={(pgdCode) => scope.updateDraft({ pgdCode: pgdCode || null })} options={(options.pgd_options || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} />
+      <span className="global-scope-field"><Text strong>Kỳ:</Text><Select loading={metadataLoading} value={draft.periodKey || undefined} placeholder="Chọn kỳ dữ liệu" style={{ width: 145 }} onChange={(periodKey) => scope.updateDraft({ periodKey, branchCode: null, pgdCode: null })} options={periods.map((item) => ({ value: item.period_key, label: `${item.period_key.slice(4, 6)}/${item.period_key.slice(0, 4)}` }))} /></span>
+      <span className="global-scope-field"><Text strong>Chi nhánh:</Text><Select disabled={!draft.periodKey} allowClear value={draft.branchCode || undefined} placeholder="Tất cả chi nhánh" style={{ width: 155 }} onChange={(branchCode) => scope.updateDraft({ branchCode: branchCode || null, pgdCode: null })} options={(options.branches || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></span>
+      <span className="global-scope-field"><Text strong>Phòng ban:</Text><Select disabled={!draft.periodKey || !draft.branchCode} allowClear value={draft.pgdCode || undefined} placeholder={draft.branchCode ? 'Tất cả phòng ban' : 'Chọn chi nhánh trước'} style={{ width: 175 }} onChange={(pgdCode) => scope.updateDraft({ pgdCode: pgdCode || null })} options={(options.pgd_options || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></span>
       <Button icon={<FilterOutlined />} onClick={() => setOpen(true)}>Nâng cao {advancedCount ? <Tag color="blue">{advancedCount}</Tag> : null}</Button>
-      <Button type="primary" icon={<SearchOutlined />} onClick={apply}>Xem dữ liệu</Button>
+      <Button disabled={!draft.periodKey} type="primary" icon={<SearchOutlined />} onClick={apply}>Xem dữ liệu</Button>
       {applied ? <Button icon={<ReloadOutlined />} onClick={scope.refresh}>Làm mới</Button> : null}
       {applied ? <Tag color="success">Đang áp dụng: {applied.periodKey}{applied.branchCode ? ` · CN ${applied.branchCode}` : ' · Toàn hệ thống'}</Tag> : <Text type="secondary">Chưa tải dữ liệu</Text>}
     </div>
     <Drawer title="Bộ lọc C360 dùng chung" width={560} open={open} onClose={() => setOpen(false)} extra={<Space><Button onClick={scope.reset}>Đặt lại</Button><Button type="primary" onClick={apply}>Xem dữ liệu</Button></Space>}>
       <div className="global-scope-advanced">
+        <label>Tìm khách hàng<Input allowClear placeholder="Mã KH, tên, CCCD, mã số thuế..." value={draft.advanced.keyword} onChange={(event) => scope.updateAdvanced({ keyword: event.target.value })} /></label>
         <label>Loại khách hàng<Select mode="multiple" allowClear value={draft.advanced.customerTypes} onChange={(customerTypes) => scope.updateAdvanced({ customerTypes })} options={(options.customer_types || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></label>
         <label>Loại hình vay<Select mode="multiple" allowClear value={draft.advanced.loanTypes} onChange={(loanTypes) => scope.updateAdvanced({ loanTypes })} options={(options.loan_types || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></label>
         <label>Cán bộ quản lý<Select allowClear showSearch optionFilterProp="label" value={draft.advanced.officerCode} onChange={(officerCode) => scope.updateAdvanced({ officerCode: officerCode || null })} options={(options.officers || []).map((item) => ({ value: item.code || item.value, label: item.name ? `${item.name} (${item.code})` : optionLabel(item) }))} /></label>
@@ -40,6 +41,10 @@ export default function GlobalAnalysisFilter({ activeMenu }) {
         <label>Trạng thái tiền vay<Select allowClear value={draft.advanced.loanStatus} onChange={(loanStatus) => scope.updateAdvanced({ loanStatus: loanStatus || null })} options={[{ value: 'yes', label: 'Có tiền vay' }, { value: 'no', label: 'Không có tiền vay' }]} /></label>
         <div className="global-scope-range"><Text strong>Tiền gửi (triệu đồng)</Text><InputNumber min={0} placeholder="Từ" value={draft.advanced.minDeposit} onChange={(minDeposit) => scope.updateAdvanced({ minDeposit })} /><InputNumber min={0} placeholder="Đến" value={draft.advanced.maxDeposit} onChange={(maxDeposit) => scope.updateAdvanced({ maxDeposit })} /></div>
         <div className="global-scope-range"><Text strong>Tiền vay (triệu đồng)</Text><InputNumber min={0} placeholder="Từ" value={draft.advanced.minLoan} onChange={(minLoan) => scope.updateAdvanced({ minLoan })} /><InputNumber min={0} placeholder="Đến" value={draft.advanced.maxLoan} onChange={(maxLoan) => scope.updateAdvanced({ maxLoan })} /></div>
+        <div className="global-scope-range"><Text strong>CASA (triệu đồng)</Text><InputNumber min={0} placeholder="Từ" value={draft.advanced.minCasa} onChange={(minCasa) => scope.updateAdvanced({ minCasa })} /><InputNumber min={0} placeholder="Đến" value={draft.advanced.maxCasa} onChange={(maxCasa) => scope.updateAdvanced({ maxCasa })} /></div>
+        <label>Thông tin liên hệ<Select allowClear value={draft.advanced.contactStatus} onChange={(contactStatus) => scope.updateAdvanced({ contactStatus: contactStatus || null })} options={[{ value: 'available', label: 'Có số điện thoại' }, { value: 'missing', label: 'Thiếu số điện thoại' }]} /></label>
+        <label>Sản phẩm dịch vụ<Select allowClear value={draft.advanced.serviceStatus} onChange={(serviceStatus) => scope.updateAdvanced({ serviceStatus: serviceStatus || null })} options={[{ value: 'none', label: 'Chưa sử dụng sản phẩm' }]} /></label>
+        <label>Số sản phẩm tối thiểu<InputNumber min={0} precision={0} value={draft.advanced.minServiceCount} onChange={(minServiceCount) => scope.updateAdvanced({ minServiceCount })} style={{ width: '100%' }} /></label>
       </div>
     </Drawer>
   </>;

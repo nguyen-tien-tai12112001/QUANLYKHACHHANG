@@ -49,7 +49,7 @@ import {
 
 import logoUrl from '../../favicon.jpg';
 import client from '../api/client';
-import { resolveBranchScope, toApiBranchParams } from '../auth';
+import { toApiBranchParams } from '../auth';
 import { scopeToProfileParams, useAnalysisScope } from './AnalysisScopeContext';
 import '../demo/demo.css';
 import './c360.css';
@@ -2076,20 +2076,9 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
   const [collapsed, setCollapsed] = useState(false);
   const periods = globalScope?.periods || [];
   const periodKey = globalScope?.applied?.periodKey || '';
-  const setPeriods = () => {};
-  const setPeriodKey = (value) => globalScope?.updateDraft({ periodKey: value });
-  const initialScope = useMemo(() => {
-    const params = new URLSearchParams(window.location.search);
-    let stored = {};
-    try { stored = JSON.parse(localStorage.getItem('c360_analysis_scope') || '{}'); } catch { stored = {}; }
-    return resolveBranchScope(currentUser, params.get('branch') || stored.branchCode || null, params.get('pgd') || stored.pgdCode || null);
-  }, [currentUser]);
   const branchCode = globalScope?.applied?.branchCode || null;
   const pgdCode = globalScope?.applied?.pgdCode || null;
-  const [filterOptions, setFilterOptions] = useState({ branches: [], pgd_options: [] });
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-  const [bootError, setBootError] = useState('');
-  const [bootLoading, setBootLoading] = useState(true);
   const refreshKey = globalScope?.sessionVersion || 0;
   const sharedProfileParams = useMemo(() => scopeToProfileParams(globalScope?.applied), [globalScope?.applied]);
 
@@ -2097,34 +2086,9 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
     setPage(initialPage);
   }, [initialPage]);
 
-  const loadBootstrap = useCallback(async () => {
-    setBootLoading(true);
-    setBootError('');
-    try {
-      await client.get('/health');
-      const { data } = await client.get('/customer-processing/periods');
-      const available = (Array.isArray(data) ? data : []).filter((item) => Number(item.profile_count || 0) > 0);
-      setPeriods(available);
-      const requestedPeriod = new URLSearchParams(window.location.search).get('period');
-      let storedPeriod = '';
-      try { storedPeriod = JSON.parse(localStorage.getItem('c360_analysis_scope') || '{}').periodKey || ''; } catch { storedPeriod = ''; }
-      const nextPeriod = periodKey || (available.some((item) => item.period_key === requestedPeriod) ? requestedPeriod : '') || (available.some((item) => item.period_key === storedPeriod) ? storedPeriod : '') || available[0]?.period_key || '';
-      setPeriodKey(nextPeriod);
-      if (nextPeriod) {
-        const { data: options } = await client.get('/customer-processing/profile-filter-options', { params: { period_key: nextPeriod, branch_code: branchCode || undefined } });
-        setFilterOptions(options || { branches: [], pgd_options: [] });
-      }
-    } catch (error) {
-      setBootError(error.response?.data?.detail || error.message || 'Không thể kết nối backend/database');
-    } finally {
-      setBootLoading(false);
-    }
-  }, [branchCode, periodKey]);
-
   // Dữ liệu nghiệp vụ chỉ được tải sau khi người dùng áp dụng bộ lọc chung trên header.
   useEffect(() => {
     if (!periodKey) return;
-    localStorage.setItem('c360_analysis_scope', JSON.stringify({ periodKey, branchCode, pgdCode }));
     const params = new URLSearchParams(window.location.search);
     params.set('period', periodKey);
     if (branchCode) params.set('branch', branchCode); else params.delete('branch');
@@ -2133,8 +2097,6 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
     window.history.replaceState(window.history.state, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
   }, [branchCode, periodKey, pgdCode]);
 
-  const allowedBranches = new Set(initialScope.allowedBranches || []);
-  const branchOptions = (filterOptions.branches || []).filter((value) => initialScope.canViewProvince || !allowedBranches.size || allowedBranches.has(value));
   const context = { periods, periodKey, branchCode, pgdCode, refreshKey, profileParams: sharedProfileParams };
   const content = page === 'customers'
     ? <RealCustomerList context={context} onOpenCustomer={setSelectedCustomer} />

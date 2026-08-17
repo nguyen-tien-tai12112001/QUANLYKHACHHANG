@@ -75,6 +75,8 @@ body {
   box-shadow: 0 5px 14px rgb(55 23 35 / 5%);
 }
 
+.global-scope-field { display: inline-flex; align-items: center; gap: 7px; white-space: nowrap; }
+
 .global-scope-advanced { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
 .global-scope-advanced label { display: flex; flex-direction: column; gap: 6px; font-weight: 600; }
 .global-scope-advanced label .ant-select { width: 100%; }
