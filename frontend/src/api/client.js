@@ -33,6 +33,10 @@ const CACHEABLE_GET_PATHS = [
   '/cif/customers',
 ];
 
+// Kho dữ liệu đã có progress upload, timeline job và loading cục bộ tại bảng.
+// Không dùng overlay toàn màn hình vì polling trạng thái nền sẽ làm giao diện bị che lặp lại.
+const LOCAL_LOADING_PATHS = ['/imports/', '/cif/'];
+
 function stableParams(params = {}) {
   return Object.entries(params)
     .filter(([, value]) => value !== undefined && value !== null && value !== '')
@@ -57,7 +61,9 @@ function emitLoading(delta) {
 }
 
 client.interceptors.request.use((config) => {
-  if (!config.hideGlobalLoading) {
+  const requestPath = String(config.url || '');
+  const usesLocalLoading = LOCAL_LOADING_PATHS.some((path) => requestPath.startsWith(path));
+  if (!config.hideGlobalLoading && !usesLocalLoading) {
     config.__tracksGlobalLoading = true;
     emitLoading(1);
   }
