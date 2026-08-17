@@ -273,6 +273,24 @@ BRANCH_DETAIL_SQL = text(
         WHERE period_key = :period_key AND ma_kh IS NOT NULL
         GROUP BY period_key, ma_kh, ma_cn
     ),
+    dp_staff AS (
+        SELECT DISTINCT ON (deposit.ma_kh, deposit.ma_cn)
+            deposit.ma_kh,
+            deposit.ma_cn AS branch_code,
+            COALESCE(users.credit_officer_code, users.employee_code) AS ma_cb,
+            users.full_name AS ten_can_bo,
+            users.employee_code AS officer_employee_code
+        FROM dp01_deposit_accounts deposit
+        JOIN system_users users
+          ON users.is_active=true AND TRIM(users.employee_code)=TRIM(deposit.employee_number)
+        JOIN org_branches branch
+          ON branch.id=users.branch_id AND branch.branch_code=TRIM(deposit.ma_cn)
+        WHERE deposit.period_key=:period_key
+          AND deposit.ma_kh IS NOT NULL
+          AND NULLIF(TRIM(deposit.employee_number), '') IS NOT NULL
+        ORDER BY deposit.ma_kh, deposit.ma_cn,
+                 COALESCE(deposit.current_balance, 0) DESC, deposit.id
+    ),
     valid_users AS (
         SELECT DISTINCT ON (TRIM(credit_officer_code))
             TRIM(credit_officer_code) AS credit_officer_code,
@@ -508,14 +526,15 @@ BRANCH_DETAIL_SQL = text(
         COALESCE(cn.the_td_noi_dia, 0),
         COALESCE(cn.the_td_quoc_te, 0),
         COALESCE(cn.the_td_loc_viet, 0),
-        ln.ma_cb,
-        ln.ten_can_bo,
-        ln.officer_employee_code,
+        COALESCE(ln.ma_cb, dp_staff.ma_cb),
+        COALESCE(ln.ten_can_bo, dp_staff.ten_can_bo),
+        COALESCE(ln.officer_employee_code, dp_staff.officer_employee_code),
         :job_id
     FROM keys
     JOIN cif_master ON cif_master.ma_kh = keys.ma_kh
     LEFT JOIN cif ON cif.ma_kh = keys.ma_kh AND cif.branch_code = keys.branch_code
     LEFT JOIN dp ON dp.ma_kh = keys.ma_kh AND dp.branch_code = keys.branch_code
+    LEFT JOIN dp_staff ON dp_staff.ma_kh = keys.ma_kh AND dp_staff.branch_code = keys.branch_code
     LEFT JOIN ln ON ln.ma_kh = keys.ma_kh AND ln.branch_code = keys.branch_code
     LEFT JOIN pf10 ON pf10.ma_kh = keys.ma_kh AND pf10.branch_code = keys.branch_code
     LEFT JOIN pf ON pf.ma_kh = keys.ma_kh AND pf.branch_code = keys.branch_code
@@ -1638,14 +1657,26 @@ PROFILE_CIF_ENRICH_SQL = text("""
         LEFT JOIN org_branches b ON b.id=u.branch_id
         LEFT JOIN org_departments d ON d.id=u.department_id
         ORDER BY c.id, COALESCE(l.du_no,0) DESC, l.id
+    ), dp_primary_branch AS (
+        SELECT DISTINCT ON (c.id)
+            c.id customer_id, dp.ma_cn AS branch_code,
+            SUM(COALESCE(dp.current_balance, 0)) AS total_balance
+        FROM cif_customers c
+        JOIN dp01_deposit_accounts dp
+          ON dp.period_key=:period_key AND TRIM(dp.ma_kh)=c.customer_core_code
+        WHERE NULLIF(TRIM(dp.ma_cn), '') IS NOT NULL
+        GROUP BY c.id, dp.ma_cn
+        ORDER BY c.id, SUM(COALESCE(dp.current_balance, 0)) DESC, dp.ma_cn
     ), dp_owner AS (
         SELECT DISTINCT ON (c.id)
             c.id customer_id, u.employee_code, u.credit_officer_code, u.full_name,
             b.branch_code, d.department_code, d.department_name
         FROM cif_customers c
-        JOIN dp01_deposit_accounts dp ON dp.period_key=:period_key AND TRIM(dp.ma_kh)=c.customer_core_code
+        JOIN dp_primary_branch dpb ON dpb.customer_id=c.id
+        JOIN dp01_deposit_accounts dp ON dp.period_key=:period_key
+          AND TRIM(dp.ma_kh)=c.customer_core_code AND TRIM(dp.ma_cn)=dpb.branch_code
         JOIN system_users u ON u.is_active=true AND TRIM(u.employee_code)=TRIM(dp.employee_number)
-        LEFT JOIN org_branches b ON b.id=u.branch_id
+        JOIN org_branches b ON b.id=u.branch_id AND b.branch_code=dpb.branch_code
         LEFT JOIN org_departments d ON d.id=u.department_id
         ORDER BY c.id, COALESCE(dp.current_balance,0) DESC, dp.id
     ), dp_identity AS (
@@ -1667,24 +1698,25 @@ PROFILE_CIF_ENRICH_SQL = text("""
         END,
         nghe_nghiep=c.occupation,
         management_source=CASE WHEN uo.customer_id IS NOT NULL THEN 'USER_CIF'
+          WHEN dpb.customer_id IS NOT NULL THEN 'DP01_BALANCE'
           WHEN bo.customer_id IS NOT NULL THEN 'BC06'
-          WHEN lo.customer_id IS NOT NULL THEN 'LN01'
-          WHEN dpo.customer_id IS NOT NULL THEN 'DP01' ELSE 'CIF_BRANCH' END,
-        managing_branch_code=COALESCE(uo.branch_code,bo.branch_code,lo.branch_code,dpo.branch_code,p.primary_branch_code),
-        managing_department_code=COALESCE(uo.department_code,lo.department_code,dpo.department_code),
-        managing_department_name=COALESCE(uo.department_name,lo.department_name,dpo.department_name),
-        ma_cb=COALESCE(uo.credit_officer_code,uo.employee_code,lo.credit_officer_code,lo.employee_code,dpo.employee_code,p.ma_cb),
-        officer_employee_code=COALESCE(uo.employee_code,lo.employee_code,dpo.employee_code,p.officer_employee_code),
-        ten_can_bo=COALESCE(uo.full_name,lo.full_name,dpo.full_name,p.ten_can_bo),
+          WHEN lo.customer_id IS NOT NULL THEN 'LN01' ELSE 'CIF_BRANCH' END,
+        managing_branch_code=COALESCE(uo.branch_code,dpb.branch_code,bo.branch_code,lo.branch_code,p.primary_branch_code),
+        managing_department_code=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpb.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END,
+        managing_department_name=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpb.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END,
+        ma_cb=CASE WHEN uo.customer_id IS NOT NULL THEN COALESCE(uo.credit_officer_code,uo.employee_code) WHEN dpb.customer_id IS NOT NULL THEN COALESCE(dpo.credit_officer_code,dpo.employee_code) ELSE COALESCE(lo.credit_officer_code,lo.employee_code,p.ma_cb) END,
+        officer_employee_code=CASE WHEN uo.customer_id IS NOT NULL THEN uo.employee_code WHEN dpb.customer_id IS NOT NULL THEN dpo.employee_code ELSE COALESCE(lo.employee_code,p.officer_employee_code) END,
+        ten_can_bo=CASE WHEN uo.customer_id IS NOT NULL THEN uo.full_name WHEN dpb.customer_id IS NOT NULL THEN dpo.full_name ELSE COALESCE(lo.full_name,p.ten_can_bo) END,
         telephone=COALESCE(c.telephone,p.telephone),
-        primary_branch_code=COALESCE(uo.branch_code,bo.branch_code,lo.branch_code,dpo.branch_code,p.primary_branch_code),
-        primary_pgd_code=COALESCE(uo.department_code,lo.department_code,dpo.department_code,p.primary_pgd_code),
-        primary_pgd_name=COALESCE(uo.department_name,lo.department_name,dpo.department_name,p.primary_pgd_name)
+        primary_branch_code=COALESCE(uo.branch_code,dpb.branch_code,bo.branch_code,lo.branch_code,p.primary_branch_code),
+        primary_pgd_code=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpb.customer_id IS NOT NULL THEN dpo.department_code ELSE COALESCE(lo.department_code,p.primary_pgd_code) END,
+        primary_pgd_name=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpb.customer_id IS NOT NULL THEN dpo.department_name ELSE COALESCE(lo.department_name,p.primary_pgd_name) END
     FROM cif_customers c
     LEFT JOIN latest_identifier li ON li.customer_id=c.id
     LEFT JOIN user_owner uo ON uo.customer_id=c.id
     LEFT JOIN bc_owner bo ON bo.customer_id=c.id
     LEFT JOIN ln_owner lo ON lo.customer_id=c.id
+    LEFT JOIN dp_primary_branch dpb ON dpb.customer_id=c.id
     LEFT JOIN dp_owner dpo ON dpo.customer_id=c.id
     LEFT JOIN dp_identity dpid ON dpid.ma_kh=c.customer_core_code
     WHERE p.period_key=:period_key AND p.customer_id=c.id;
@@ -1727,14 +1759,26 @@ PROFILE_ENRICHMENT_TEMP_SQL = text("""
         LEFT JOIN org_branches b ON b.id=u.branch_id
         LEFT JOIN org_departments d ON d.id=u.department_id
         ORDER BY c.id, COALESCE(l.du_no,0) DESC, l.id
+    ), dp_primary_branch AS (
+        SELECT DISTINCT ON (c.id)
+            c.id customer_id, dp.ma_cn AS branch_code,
+            SUM(COALESCE(dp.current_balance, 0)) AS total_balance
+        FROM cif_customers c
+        JOIN dp01_deposit_accounts dp
+          ON dp.period_key=:period_key AND TRIM(dp.ma_kh)=c.customer_core_code
+        WHERE NULLIF(TRIM(dp.ma_cn), '') IS NOT NULL
+        GROUP BY c.id, dp.ma_cn
+        ORDER BY c.id, SUM(COALESCE(dp.current_balance, 0)) DESC, dp.ma_cn
     ), dp_owner AS (
         SELECT DISTINCT ON (c.id)
             c.id customer_id, u.employee_code, u.credit_officer_code, u.full_name,
             b.branch_code, d.department_code, d.department_name
         FROM cif_customers c
-        JOIN dp01_deposit_accounts dp ON dp.period_key=:period_key AND TRIM(dp.ma_kh)=c.customer_core_code
+        JOIN dp_primary_branch dpb ON dpb.customer_id=c.id
+        JOIN dp01_deposit_accounts dp ON dp.period_key=:period_key
+          AND TRIM(dp.ma_kh)=c.customer_core_code AND TRIM(dp.ma_cn)=dpb.branch_code
         JOIN system_users u ON u.is_active=true AND TRIM(u.employee_code)=TRIM(dp.employee_number)
-        LEFT JOIN org_branches b ON b.id=u.branch_id
+        JOIN org_branches b ON b.id=u.branch_id AND b.branch_code=dpb.branch_code
         LEFT JOIN org_departments d ON d.id=u.department_id
         ORDER BY c.id, COALESCE(dp.current_balance,0) DESC, dp.id
     ), dp_identity AS (
@@ -1758,24 +1802,25 @@ PROFILE_ENRICHMENT_TEMP_SQL = text("""
              THEN to_date(li.raw_data->>'gd_ngaysinh','DD/MM/YYYY') END AS ngay_sinh,
         c.occupation AS nghe_nghiep,
         CASE WHEN uo.customer_id IS NOT NULL THEN 'USER_CIF'
+             WHEN dpb.customer_id IS NOT NULL THEN 'DP01_BALANCE'
              WHEN bo.customer_id IS NOT NULL THEN 'BC06'
-             WHEN lo.customer_id IS NOT NULL THEN 'LN01'
-             WHEN dpo.customer_id IS NOT NULL THEN 'DP01' ELSE 'CIF_BRANCH' END AS management_source,
-        COALESCE(uo.branch_code,bo.branch_code,lo.branch_code,dpo.branch_code) AS managing_branch_code,
-        COALESCE(uo.department_code,lo.department_code,dpo.department_code) AS managing_department_code,
-        COALESCE(uo.department_name,lo.department_name,dpo.department_name) AS managing_department_name,
-        COALESCE(uo.credit_officer_code,uo.employee_code,lo.credit_officer_code,lo.employee_code,dpo.employee_code) AS ma_cb,
-        COALESCE(uo.employee_code,lo.employee_code,dpo.employee_code) AS officer_employee_code,
-        COALESCE(uo.full_name,lo.full_name,dpo.full_name) AS ten_can_bo,
+             WHEN lo.customer_id IS NOT NULL THEN 'LN01' ELSE 'CIF_BRANCH' END AS management_source,
+        COALESCE(uo.branch_code,dpb.branch_code,bo.branch_code,lo.branch_code) AS managing_branch_code,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpb.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END AS managing_department_code,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpb.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END AS managing_department_name,
+        CASE WHEN uo.customer_id IS NOT NULL THEN COALESCE(uo.credit_officer_code,uo.employee_code) WHEN dpb.customer_id IS NOT NULL THEN COALESCE(dpo.credit_officer_code,dpo.employee_code) ELSE COALESCE(lo.credit_officer_code,lo.employee_code) END AS ma_cb,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.employee_code WHEN dpb.customer_id IS NOT NULL THEN dpo.employee_code ELSE lo.employee_code END AS officer_employee_code,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.full_name WHEN dpb.customer_id IS NOT NULL THEN dpo.full_name ELSE lo.full_name END AS ten_can_bo,
         c.telephone,
-        COALESCE(uo.branch_code,bo.branch_code,lo.branch_code,dpo.branch_code) AS primary_branch_code,
-        COALESCE(uo.department_code,lo.department_code,dpo.department_code) AS primary_pgd_code,
-        COALESCE(uo.department_name,lo.department_name,dpo.department_name) AS primary_pgd_name
+        COALESCE(uo.branch_code,dpb.branch_code,bo.branch_code,lo.branch_code) AS primary_branch_code,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpb.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END AS primary_pgd_code,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpb.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END AS primary_pgd_name
     FROM cif_customers c
     LEFT JOIN latest_identifier li ON li.customer_id=c.id
     LEFT JOIN user_owner uo ON uo.customer_id=c.id
     LEFT JOIN bc_owner bo ON bo.customer_id=c.id
     LEFT JOIN ln_owner lo ON lo.customer_id=c.id
+    LEFT JOIN dp_primary_branch dpb ON dpb.customer_id=c.id
     LEFT JOIN dp_owner dpo ON dpo.customer_id=c.id
     LEFT JOIN dp_identity dpid ON dpid.ma_kh=c.customer_core_code
 """)
