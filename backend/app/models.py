@@ -920,12 +920,16 @@ class GL02LedgerTransaction(Base):
     unit_code: Mapped[str | None] = mapped_column(String(20))
     transaction_code: Mapped[str | None] = mapped_column(String(30))
     transaction_type: Mapped[str | None] = mapped_column(String(30), index=True)
-    reference: Mapped[str | None] = mapped_column(String(100), index=True)
+    # Chỉ lưu để truy vết giao dịch; không lập chỉ mục riêng vì C360 không lọc
+    # theo trường này và chỉ mục trên hơn chục triệu dòng chiếm hàng trăm MB.
+    reference: Mapped[str | None] = mapped_column(String(100))
     remark: Mapped[str | None] = mapped_column(Text)
     debit_amount: Mapped[object | None] = mapped_column(Numeric(24, 6))
     credit_amount: Mapped[object | None] = mapped_column(Numeric(24, 6))
     created_datetime: Mapped[object | None] = mapped_column(DateTime)
-    source_row_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    # Hash được giữ nguyên trong dữ liệu nguồn để kiểm tra khi cần. Quy trình
+    # import hiện không tra cứu trực tiếp theo hash nên không tạo index 1,6 GB.
+    source_row_hash: Mapped[str | None] = mapped_column(String(64))
     raw_data: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
