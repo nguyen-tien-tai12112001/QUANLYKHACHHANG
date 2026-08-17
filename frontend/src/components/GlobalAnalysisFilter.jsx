@@ -1,5 +1,5 @@
-import { FilterOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
-import { Button, Drawer, Input, InputNumber, Select, Space, Tag, Typography, message } from 'antd';
+import { ApartmentOutlined, BankOutlined, CalendarOutlined, FilterOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import { Button, Drawer, Input, InputNumber, Select, Space, Typography, message } from 'antd';
 import { useState } from 'react';
 import { useAnalysisScope } from '../c360/AnalysisScopeContext';
 
@@ -22,13 +22,22 @@ export default function GlobalAnalysisFilter({ activeMenu }) {
   };
   return <>
     <div className="global-scope-bar">
-      <span className="global-scope-field"><Text strong>Kỳ:</Text><Select loading={metadataLoading} value={draft.periodKey || undefined} placeholder="Chọn kỳ dữ liệu" style={{ width: 145 }} onChange={(periodKey) => scope.updateDraft({ periodKey, branchCode: null, pgdCode: null })} options={periods.map((item) => ({ value: item.period_key, label: `${item.period_key.slice(4, 6)}/${item.period_key.slice(0, 4)}` }))} /></span>
-      <span className="global-scope-field"><Text strong>Chi nhánh:</Text><Select disabled={!draft.periodKey} allowClear value={draft.branchCode || undefined} placeholder="Tất cả chi nhánh" style={{ width: 155 }} onChange={(branchCode) => scope.updateDraft({ branchCode: branchCode || null, pgdCode: null })} options={(options.branches || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></span>
-      <span className="global-scope-field"><Text strong>Phòng ban:</Text><Select disabled={!draft.periodKey || !draft.branchCode} allowClear value={draft.pgdCode || undefined} placeholder={draft.branchCode ? 'Tất cả phòng ban' : 'Chọn chi nhánh trước'} style={{ width: 175 }} onChange={(pgdCode) => scope.updateDraft({ pgdCode: pgdCode || null })} options={(options.pgd_options || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></span>
-      <Button icon={<FilterOutlined />} onClick={() => setOpen(true)}>Nâng cao {advancedCount ? <Tag color="blue">{advancedCount}</Tag> : null}</Button>
-      <Button disabled={!draft.periodKey} type="primary" icon={<SearchOutlined />} onClick={apply}>Xem dữ liệu</Button>
-      {applied ? <Button icon={<ReloadOutlined />} onClick={scope.refresh}>Làm mới</Button> : null}
-      {applied ? <Tag color="success">Đang áp dụng: {applied.periodKey}{applied.branchCode ? ` · CN ${applied.branchCode}` : ' · Toàn hệ thống'}</Tag> : <Text type="secondary">Chưa tải dữ liệu</Text>}
+      <div className="global-scope-heading">
+        <div><span className="global-scope-heading__icon"><FilterOutlined /></span><span><strong>Phạm vi phân tích</strong><small>Áp dụng đồng bộ cho toàn bộ C360</small></span></div>
+        {applied
+          ? <span className="global-scope-status is-ready"><i />Kỳ {applied.periodKey}{applied.branchCode ? ` · CN ${applied.branchCode}` : ' · Toàn hệ thống'}</span>
+          : <span className="global-scope-status"><i />Chưa tải dữ liệu</span>}
+      </div>
+      <div className="global-scope-controls">
+        <label className="global-scope-field is-period"><span><CalendarOutlined /> Kỳ dữ liệu <em>*</em></span><Select loading={metadataLoading} value={draft.periodKey || undefined} placeholder="Chọn kỳ" onChange={(periodKey) => scope.updateDraft({ periodKey, branchCode: null, pgdCode: null })} options={periods.map((item) => ({ value: item.period_key, label: `${item.period_key.slice(4, 6)}/${item.period_key.slice(0, 4)}` }))} /></label>
+        <label className="global-scope-field"><span><BankOutlined /> Chi nhánh</span><Select disabled={!draft.periodKey} allowClear value={draft.branchCode || undefined} placeholder="Tất cả chi nhánh" onChange={(branchCode) => scope.updateDraft({ branchCode: branchCode || null, pgdCode: null })} options={(options.branches || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></label>
+        <label className="global-scope-field"><span><ApartmentOutlined /> Phòng ban</span><Select disabled={!draft.periodKey || !draft.branchCode} allowClear value={draft.pgdCode || undefined} placeholder={draft.branchCode ? 'Tất cả phòng ban' : 'Chọn chi nhánh trước'} onChange={(pgdCode) => scope.updateDraft({ pgdCode: pgdCode || null })} options={(options.pgd_options || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></label>
+        <div className="global-scope-actions">
+          <Button className="global-scope-advanced-btn" icon={<FilterOutlined />} onClick={() => setOpen(true)}>Nâng cao{advancedCount ? <b>{advancedCount}</b> : null}</Button>
+          <Button className="global-scope-submit" disabled={!draft.periodKey} type="primary" icon={<SearchOutlined />} onClick={apply}>Xem dữ liệu</Button>
+          {applied ? <Button className="global-scope-refresh" icon={<ReloadOutlined />} onClick={scope.refresh} aria-label="Làm mới dữ liệu" /> : null}
+        </div>
+      </div>
     </div>
     <Drawer title="Bộ lọc C360 dùng chung" width={560} open={open} onClose={() => setOpen(false)} extra={<Space><Button onClick={scope.reset}>Đặt lại</Button><Button type="primary" onClick={apply}>Xem dữ liệu</Button></Space>}>
       <div className="global-scope-advanced">
