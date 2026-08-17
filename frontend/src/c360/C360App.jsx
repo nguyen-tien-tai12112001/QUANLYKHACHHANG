@@ -522,7 +522,7 @@ function RealMetric({ title, value, icon, tone, current, previous, note, onClick
   return explanation ? <Tooltip title={<div><strong>{explanation.formula}</strong><br />Nguồn: {explanation.source}<br />Đơn vị: {explanation.unit || 'VNĐ'}<br />Cập nhật theo kỳ đang chọn.</div>}>{content}</Tooltip> : content;
 }
 
-function CustomerModal({ customer, periodKey, open, onClose }) {
+function CustomerModal({ customer, periodKey, initialBranchCode, open, onClose }) {
   const modalAnchorRef = useRef(null);
   const [history, setHistory] = useState([]);
   const [historyError, setHistoryError] = useState('');
@@ -546,6 +546,27 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
   const [depositLoading, setDepositLoading] = useState(false);
   const [classificationLoading, setClassificationLoading] = useState(false);
   const [financialLoading, setFinancialLoading] = useState(false);
+  const [fullCustomer, setFullCustomer] = useState(null);
+  const [profileLoading, setProfileLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !customer?.ma_kh || !periodKey) return;
+    let active = true;
+    setFullCustomer(null);
+    setProfileLoading(true);
+    client.get('/customer-processing/profiles', {
+      params: { period_key: periodKey, keyword: customer.ma_kh, page: 1, page_size: 10 },
+      hideGlobalLoading: true,
+    })
+      .then(({ data }) => {
+        if (!active) return;
+        const items = Array.isArray(data) ? data : data?.items || [];
+        setFullCustomer(items.find((item) => item.ma_kh === customer.ma_kh) || customer);
+      })
+      .catch(() => { if (active) setFullCustomer(customer); })
+      .finally(() => { if (active) setProfileLoading(false); });
+    return () => { active = false; };
+  }, [customer, open, periodKey]);
 
   useEffect(() => {
     if (!open || !customer?.ma_kh || !['credit', 'fees', 'products'].includes(activeTab)) return;
@@ -589,7 +610,16 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
         page_size: 500,
       },
     })
-      .then(({ data }) => { if (active) setLoanData(data || { categories: [], branches: [], items: [], total: 0 }); })
+      .then(({ data }) => {
+        if (!active) return;
+        const payload = data || { categories: [], branches: [], items: [], total: 0 };
+        setLoanData(payload);
+        const selected = (payload.categories || []).find((item) => item.key === loanCategory);
+        const firstAvailable = (payload.categories || []).find((item) => Number(item.account_count || 0) > 0);
+        if (Number(selected?.account_count || 0) === 0 && firstAvailable && firstAvailable.key !== loanCategory) {
+          setLoanCategory(firstAvailable.key);
+        }
+      })
       .catch(() => { if (active) setLoanData({ categories: [], branches: [], items: [], total: 0 }); })
       .finally(() => { if (active) setLoanLoading(false); });
     return () => { active = false; };
@@ -658,14 +688,14 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
       setLoanCategory('short_term');
       setLoanBranch(null);
       setDepositCategory('demand');
-      setProfileBranch(null);
+      setProfileBranch(initialBranchCode || null);
       setActiveTab('summary');
       setHistory([]);
       setHistoryError('');
       setRr01Open(false);
       setGl02Open(false);
     }
-  }, [customer?.ma_kh, open]);
+  }, [customer?.ma_kh, initialBranchCode, open]);
 
   const changeProfileTab = (nextTab) => {
     setActiveTab(nextTab);
@@ -678,21 +708,22 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
   };
 
   if (!customer) return null;
+  const customerRecord = fullCustomer || customer;
   const trackedProducts = productGroups.flatMap((group) => group.items);
-  const branchDetails = Array.isArray(customer.branch_details) ? customer.branch_details : [];
+  const branchDetails = Array.isArray(customerRecord.branch_details) ? customerRecord.branch_details : [];
   const selectedBranchDetail = profileBranch
     ? branchDetails.find((item) => item.branch_code === profileBranch)
     : null;
   const viewedCustomer = selectedBranchDetail
     ? {
-        ...customer,
+        ...customerRecord,
         ...selectedBranchDetail,
         branch_codes: selectedBranchDetail.branch_code,
         pgd_codes: selectedBranchDetail.ma_pgd,
         branch_count: 1,
         pgd_count: selectedBranchDetail.ma_pgd ? 1 : 0,
       }
-    : customer;
+    : customerRecord;
   const metricCustomer = { ...viewedCustomer, ...(financialMetrics.totals || {}) };
   const officerScope = profileBranch && selectedBranchDetail ? [selectedBranchDetail] : branchDetails;
   const officerSummary = [...new Set(officerScope
@@ -746,11 +777,11 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
     >
       <div className="c360-profile-scroll">
       <div ref={modalAnchorRef} className="demo-quick-header c360-profile-hero">
-        <Avatar size={48} className="demo-profile-avatar">{customer.ten_kh?.charAt(0) || 'K'}</Avatar>
+        <Avatar size={48} className="demo-profile-avatar">{viewedCustomer.ten_kh?.charAt(0) || 'K'}</Avatar>
         <div>
           <Text className="c360-profile-kicker">HỒ SƠ KHÁCH HÀNG 360° · KỲ {periodLabel(periodKey)}</Text>
-          <Space wrap><Title level={2}>{customer.ten_kh || 'Chưa có tên khách hàng'}</Title><Tag color="blue">{customer.loai_khach_hang || 'Chưa phân loại'}</Tag><Tag color="success">ĐANG HOẠT ĐỘNG</Tag></Space>
-          <div className="demo-profile-meta"><span>Mã KH lõi: {customer.ma_kh}</span><span>{customer.telephone || 'Chưa có điện thoại'}</span><span>CBQL: {customer.ten_can_bo || customer.ma_cb || '—'}</span></div>
+          <Space wrap><Title level={2}>{viewedCustomer.ten_kh || 'Chưa có tên khách hàng'}</Title><Tag color="blue">{viewedCustomer.loai_khach_hang || 'Chưa phân loại'}</Tag><Tag color="success">ĐANG HOẠT ĐỘNG</Tag>{profileLoading ? <Tag color="processing">Đang đồng bộ hồ sơ…</Tag> : null}</Space>
+          <div className="demo-profile-meta"><span>Mã KH lõi: {viewedCustomer.ma_kh}</span><span>{viewedCustomer.telephone || 'Chưa có điện thoại'}</span><span>CBQL: {viewedCustomer.ten_can_bo || viewedCustomer.ma_cb || '—'}</span></div>
         </div>
         <Space className="c360-profile-actions" wrap>
           <Button icon={<BarChartOutlined />} onClick={() => changeProfileTab('history')}>Lịch sử các kỳ</Button>
@@ -782,22 +813,22 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
           key: 'summary',
           label: 'Thông tin khách hàng',
           children: <Descriptions bordered column={2} size="small" items={[
-            { key: 'code', label: 'Mã khách hàng', children: <Text strong copyable={{ text: customer.ma_kh }}>{customer.ma_kh}</Text> },
-            { key: 'type', label: 'Loại khách hàng', children: customer.loai_khach_hang || 'Chưa có dữ liệu' },
+            { key: 'code', label: 'Mã khách hàng', children: <Text strong copyable={{ text: viewedCustomer.ma_kh }}>{viewedCustomer.ma_kh}</Text> },
+            { key: 'type', label: 'Loại khách hàng', children: viewedCustomer.loai_khach_hang || 'Chưa có dữ liệu' },
             { key: 'branches', label: 'Các chi nhánh', children: viewedCustomer.branch_codes || 'Chưa có dữ liệu' },
             { key: 'pgds', label: 'Các phòng/PGD', children: profileBranch
               ? (selectedBranchDetail?.ten_pgd || 'Chưa xác định phòng/PGD')
-              : (customer.pgd_names || customer.primary_pgd_name || 'Chưa có dữ liệu') },
+              : (viewedCustomer.pgd_names || viewedCustomer.primary_pgd_name || 'Chưa có dữ liệu') },
             { key: 'loanType', label: 'Loại vay', children: loanTypeLabel(viewedCustomer.loai_vay) },
             { key: 'hkdAccounts', label: 'Tài khoản hộ kinh doanh', children: viewedCustomer.hkd_tk
               ? <Text copyable={{ text: viewedCustomer.hkd_account_numbers || '' }}>{viewedCustomer.hkd_account_numbers || 'Đã xác định CUST_TYPE 570'}</Text>
               : 'Không ghi nhận trong kỳ' },
-            { key: 'phone', label: 'Điện thoại', children: customer.telephone || 'Chưa có dữ liệu' },
+            { key: 'phone', label: 'Điện thoại', children: viewedCustomer.telephone || 'Chưa có dữ liệu' },
             { key: 'officer', label: 'Cán bộ quản lý', span: 2, children: officerSummary ? (
               <Tooltip title={officerSummary}>
-                <Text>{officerShortSummary || customer.ten_can_bo}</Text>
+                <Text>{officerShortSummary || viewedCustomer.ten_can_bo}</Text>
               </Tooltip>
-            ) : (customer.ten_can_bo || customer.ma_cb || 'Chưa có dữ liệu') },
+            ) : (viewedCustomer.ten_can_bo || viewedCustomer.ma_cb || 'Chưa có dữ liệu') },
             { key: 'period', label: 'Kỳ đang xem', children: periodLabel(periodKey) },
           ]} />,
         },
@@ -1067,7 +1098,7 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
         },
         {
           key: 'relationships',
-          label: `Quan hệ chi nhánh (${branchDetails.length || customer.branch_count || 0})`,
+          label: `Quan hệ chi nhánh (${branchDetails.length || viewedCustomer.branch_count || 0})`,
           children: branchDetails.length ? (
             <Table
               size="small"
@@ -2110,7 +2141,7 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
       <div className={embedded ? 'c360-embedded-content' : 'demo-content'}>
         {!periodKey ? <Card className="c360-empty-scope"><Empty description="Chọn điều kiện trên bộ lọc chung và bấm Xem dữ liệu" /><Text type="secondary">Hệ thống chưa truy vấn dữ liệu nghiệp vụ để tránh tải thừa.</Text></Card> : content}
       </div>
-      <CustomerModal customer={selectedCustomer} periodKey={periodKey} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
+      <CustomerModal customer={selectedCustomer} periodKey={periodKey} initialBranchCode={branchCode} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
     </>
   );
 

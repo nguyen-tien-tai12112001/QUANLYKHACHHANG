@@ -13,6 +13,10 @@ async def get_branch_scope(
     request: Request,
     ma_cn: str | None = Query(default=None),
     ma_pgd: str | None = Query(default=None),
+    branch_code: str | None = Query(default=None),
+    pgd_code: str | None = Query(default=None),
     user: CurrentUser = Depends(get_current_user),
 ) -> BranchScope:
-    return resolve_branch_scope(user, ma_cn, ma_pgd)
+    # API cũ dùng ma_cn/ma_pgd, API C360 dùng branch_code/pgd_code. Chuẩn hóa tại
+    # một điểm để không endpoint nào vô tình bỏ qua phạm vi người dùng đã chọn.
+    return resolve_branch_scope(user, ma_cn or branch_code, ma_pgd or pgd_code)
