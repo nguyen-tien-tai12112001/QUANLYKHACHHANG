@@ -9,7 +9,8 @@ const client = axios.create({
 
 const responseCache = new Map();
 const inflightGets = new Map();
-const DEFAULT_CACHE_TTL = 20_000;
+// Một phiên lọc C360 dùng lại kết quả khi chuyển tab; bộ lọc mới/Làm mới sẽ xóa cache.
+const DEFAULT_CACHE_TTL = 5 * 60_000;
 const CACHEABLE_GET_PATHS = [
   '/dashboard/',
   '/customer-processing/periods',

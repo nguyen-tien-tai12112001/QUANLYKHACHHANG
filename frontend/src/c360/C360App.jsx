@@ -50,6 +50,7 @@ import {
 import logoUrl from '../../favicon.jpg';
 import client from '../api/client';
 import { resolveBranchScope, toApiBranchParams } from '../auth';
+import { scopeToProfileParams, useAnalysisScope } from './AnalysisScopeContext';
 import '../demo/demo.css';
 import './c360.css';
 
@@ -1175,7 +1176,7 @@ function CustomerModal({ customer, periodKey, open, onClose }) {
 }
 
 function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
-  const { periodKey, branchCode, pgdCode, refreshKey } = context;
+  const { periodKey, branchCode, pgdCode, refreshKey, profileParams = {} } = context;
   const [data, setData] = useState(null);
   const [insights, setInsights] = useState(null);
   const [topChanges, setTopChanges] = useState({});
@@ -1197,8 +1198,22 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     const scopeParams = { period_key: periodKey, ...toApiBranchParams(branchCode, pgdCode) };
     const previousPeriod = context.periods[context.periods.findIndex((item) => item.period_key === periodKey) + 1]?.period_key;
     try {
-      const summaryRes = await client.get('/dashboard/summary', { params: scopeParams });
-      setData(summaryRes.data);
+      const [summaryRes, filteredSummaryRes] = await Promise.all([
+        client.get('/dashboard/summary', { params: scopeParams }),
+        client.get('/customer-processing/profile-summary', { params: profileParams }),
+      ]);
+      const filtered = filteredSummaryRes.data || {};
+      setData({
+        ...summaryRes.data,
+        kpis: {
+          ...(summaryRes.data?.kpis || {}),
+          total_customers: filtered.total_customers,
+          total_loan: filtered.total_loan,
+          total_deposit: filtered.total_deposit,
+          total_casa: filtered.total_casa,
+          no_service_count: filtered.no_service_count,
+        },
+      });
       setLoading(false);
       setDetailLoading(true);
       const [profilesRes, insightsRes, comparisonRes, analyticsRes, readinessRes] = await Promise.all([
@@ -1224,7 +1239,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       setLoading(false);
       setDetailLoading(false);
     }
-  }, [branchCode, context.periods, periodKey, pgdCode, refreshKey]);
+  }, [branchCode, context.periods, periodKey, pgdCode, profileParams, refreshKey]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -1298,7 +1313,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
         <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng dư nợ" value={compactMoney(kpis.total_loan)} current={compare.loan?.current ?? kpis.total_loan} previous={compare.loan?.previous} icon={<BankOutlined />} tone="red" note="Tổng dư nợ khách hàng" onClick={() => loadKpiDrilldown('loan')} explanation={{ formula: 'Tổng dư nợ ngắn hạn + trung dài hạn + thấu chi', source: 'PF10/LN01; tỷ giá tham chiếu DP01' }} /></Col>
         <Col xs={24} sm={12} xl={6}><RealMetric title="TGTT bình quân" value={compactMoney(kpis.total_casa)} current={compare.casa?.current ?? kpis.total_casa} previous={compare.casa?.previous} icon={<BarChartOutlined />} tone="gold" note={`${kpis.no_service_count || 0} KH chưa dùng dịch vụ`} onClick={() => loadKpiDrilldown('casa')} explanation={{ formula: 'Tổng số dư bình quân tài khoản thanh toán trong tháng', source: 'PF14/DP01; quy đổi VNĐ' }} /></Col>
       </Row>
-      <Tabs className="c360-dashboard-view-tabs" activeKey={dashboardView} onChange={setDashboardView} items={[{ key: 'results', label: 'Kết quả kỳ' }, { key: 'alerts', label: <span>Cần xử lý <Tag color="error">{Number(abnormal.deposit_drop_count || 0) + Number(abnormal.loan_increase_count || 0) + Number(abnormal.service_drop_count || 0)}</Tag></span> }, { key: 'analysis', label: 'Phân tích bổ sung' }]} />
+      <Tabs className="c360-dashboard-view-tabs" activeKey={dashboardView} onChange={setDashboardView} items={[{ key: 'results', label: 'Kết quả kỳ' }, { key: 'alerts', label: <span>Cần xử lý <Tag color="error">{Number(abnormal.deposit_drop_count || 0) + Number(abnormal.loan_increase_count || 0) + Number(abnormal.service_drop_count || 0)}</Tag></span> }]} />
       {dashboardView === 'results' && <>
       <Card
         title="Tổng quan khách hàng"
@@ -1319,23 +1334,9 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
             <div className="c360-dashboard-stat-grid">
               {insightMetric('Tổng tiền gửi', compactMoney(deposit.total), `${depositChangeRate >= 0 ? '+' : ''}${depositChangeRate.toFixed(1)}% so kỳ trước`, depositChangeRate >= 0 ? 'is-green' : 'is-red')}
               {insightMetric('Biến động tuyệt đối', compactMoney(deposit.change), `Kỳ trước ${compactMoney(deposit.previous_total)}`, Number(deposit.change || 0) >= 0 ? 'is-green' : 'is-red')}
-              {insightMetric('Tài khoản mới', Number(deposit.new_accounts || 0).toLocaleString('vi-VN'), 'Theo dữ liệu PF14', 'is-blue')}
-              {insightMetric('Tài khoản không còn', Number(deposit.closed_accounts || 0).toLocaleString('vi-VN'), 'So với kỳ PF14 trước', 'is-gold')}
-              {insightMetric('KH giảm tiền gửi mạnh', Number(deposit.large_drop_customers || 0).toLocaleString('vi-VN'), 'Giảm từ 30% trở lên', 'is-red')}
+              {insightMetric('Tài khoản mở mới trong kỳ', Number(deposit.new_accounts || 0).toLocaleString('vi-VN'), 'So với kỳ PF14 trước', 'is-blue')}
+              {insightMetric('Tài khoản đã đóng trong kỳ', Number(deposit.closed_accounts || 0).toLocaleString('vi-VN'), 'So với kỳ PF14 trước', 'is-gold')}
             </div>
-          </Card>
-        </Col>
-        <Col xs={24} xl={12}>
-          <Card title="Tín dụng và nghĩa vụ sắp tới" className="demo-panel c360-dashboard-domain">
-            <div className="c360-dashboard-stat-grid">
-              {insightMetric('Tổng dư nợ', compactMoney(credit.total), `${creditChangeRate >= 0 ? '+' : ''}${creditChangeRate.toFixed(1)}% so kỳ trước`, creditChangeRate <= 0 ? 'is-green' : 'is-red')}
-              {insightMetric('Gốc phải trả tháng tới', credit.obligation_source_available ? compactMoney(credit.principal_due_next_month) : '—', 'Ngày trả nợ kế tiếp từ LN01', 'is-blue')}
-              {insightMetric('Lãi phải trả tháng tới', credit.obligation_source_available ? compactMoney(credit.interest_due_next_month) : '—', 'Lịch trả lãi từ LN01', 'is-gold')}
-              {insightMetric('Lãi quá hạn', credit.obligation_source_available ? compactMoney(credit.overdue_interest) : '—', `${Number(credit.overdue_customers || 0).toLocaleString('vi-VN')} khách hàng`, 'is-red')}
-            </div>
-            {!credit.obligation_source_available ? (
-              <Alert className="c360-dashboard-source-note" type="info" showIcon message="Kỳ LN01 hiện tại chưa có các cột lịch trả nợ mới; cần import lại LN01 để tính nghĩa vụ." />
-            ) : null}
           </Card>
         </Col>
       </Row>
@@ -1359,7 +1360,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           </Card>
         </Col>
       </Row>
-      <Card title="Kết quả theo chi nhánh" className="demo-panel demo-section" extra={<Text type="secondary">Bấm menu Đơn vị & cán bộ để phân tích chuyên sâu</Text>}>
+      <Card title="Kết quả theo chi nhánh" className="demo-panel demo-section" extra={<Tooltip title="Mỗi dòng tổng hợp số khách hàng và các chỉ tiêu phát sinh tại chi nhánh trong kỳ, theo đúng phạm vi bộ lọc chung."><Text type="secondary">Cách tính: tổng hợp theo quan hệ KH–chi nhánh</Text></Tooltip>}>
         <Table size="small" rowKey="branch_code" pagination={false} dataSource={analytics?.branches || []} scroll={{ x: 880 }} columns={[
           { title: 'Chi nhánh', dataIndex: 'branch_code', fixed: 'left', width: 110, render: (value) => <Text strong>{value}</Text> },
           { title: 'Khách hàng', dataIndex: 'customers', align: 'right', render: (value) => Number(value || 0).toLocaleString('vi-VN') },
@@ -1573,6 +1574,7 @@ function RealCustomerList({ context, onOpenCustomer }) {
       max_casa: filters.max_casa_million != null ? filters.max_casa_million * 1_000_000 : undefined,
       service_codes: filters.service_codes?.join(',') || undefined,
       min_service_count: filters.min_service_count ?? undefined,
+      ...context.profileParams,
       sort_by: sortBy,
       sort_dir: sortDir,
     };
@@ -2069,23 +2071,27 @@ function RealInsightsPage({ context, onOpenCustomer }) {
 }
 
 export default function C360App({ currentUser, onLogout, embedded = false, initialPage = 'dashboard' }) {
+  const globalScope = useAnalysisScope();
   const [page, setPage] = useState(initialPage);
   const [collapsed, setCollapsed] = useState(false);
-  const [periods, setPeriods] = useState([]);
-  const [periodKey, setPeriodKey] = useState('');
+  const periods = globalScope?.periods || [];
+  const periodKey = globalScope?.applied?.periodKey || '';
+  const setPeriods = () => {};
+  const setPeriodKey = (value) => globalScope?.updateDraft({ periodKey: value });
   const initialScope = useMemo(() => {
     const params = new URLSearchParams(window.location.search);
     let stored = {};
     try { stored = JSON.parse(localStorage.getItem('c360_analysis_scope') || '{}'); } catch { stored = {}; }
     return resolveBranchScope(currentUser, params.get('branch') || stored.branchCode || null, params.get('pgd') || stored.pgdCode || null);
   }, [currentUser]);
-  const [branchCode, setBranchCode] = useState(initialScope.filterCn || null);
-  const [pgdCode, setPgdCode] = useState(initialScope.filterPgd || null);
+  const branchCode = globalScope?.applied?.branchCode || null;
+  const pgdCode = globalScope?.applied?.pgdCode || null;
   const [filterOptions, setFilterOptions] = useState({ branches: [], pgd_options: [] });
   const [selectedCustomer, setSelectedCustomer] = useState(null);
   const [bootError, setBootError] = useState('');
   const [bootLoading, setBootLoading] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const refreshKey = globalScope?.sessionVersion || 0;
+  const sharedProfileParams = useMemo(() => scopeToProfileParams(globalScope?.applied), [globalScope?.applied]);
 
   useEffect(() => {
     setPage(initialPage);
@@ -2115,14 +2121,7 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
     }
   }, [branchCode, periodKey]);
 
-  useEffect(() => { loadBootstrap(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => {
-    if (!periodKey) return;
-    client.get('/customer-processing/profile-filter-options', { params: { period_key: periodKey, branch_code: branchCode || undefined } })
-      .then(({ data }) => setFilterOptions(data || { branches: [], pgd_options: [] }))
-      .catch(() => {});
-  }, [branchCode, periodKey]);
-
+  // Dữ liệu nghiệp vụ chỉ được tải sau khi người dùng áp dụng bộ lọc chung trên header.
   useEffect(() => {
     if (!periodKey) return;
     localStorage.setItem('c360_analysis_scope', JSON.stringify({ periodKey, branchCode, pgdCode }));
@@ -2136,7 +2135,7 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
 
   const allowedBranches = new Set(initialScope.allowedBranches || []);
   const branchOptions = (filterOptions.branches || []).filter((value) => initialScope.canViewProvince || !allowedBranches.size || allowedBranches.has(value));
-  const context = { periods, periodKey, branchCode, pgdCode, refreshKey };
+  const context = { periods, periodKey, branchCode, pgdCode, refreshKey, profileParams: sharedProfileParams };
   const content = page === 'customers'
     ? <RealCustomerList context={context} onOpenCustomer={setSelectedCustomer} />
     : page.startsWith('analysis-')
@@ -2145,25 +2144,10 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
       ? <RealInsightsPage context={context} onOpenCustomer={setSelectedCustomer} />
       : <RealDashboard context={context} onOpenCustomer={setSelectedCustomer} onGoCustomers={() => setPage('customers')} />;
 
-  function changeBranch(value) {
-    const requested = value === 'all' ? null : value;
-    const resolved = resolveBranchScope(currentUser, requested, null);
-    if (resolved.denied) return message.warning('Bạn không có quyền xem chi nhánh này');
-    setBranchCode(resolved.filterCn);
-    setPgdCode(resolved.filterPgd);
-  }
-
   const workspace = (
     <>
-      <div className="c360-global-filter demo-no-print">
-        <Select loading={bootLoading} value={periodKey || undefined} placeholder="Chọn kỳ" onChange={setPeriodKey} options={periods.map((item) => ({ value: item.period_key, label: `Kỳ ${periodLabel(item.period_key)}` }))} />
-        <Select value={branchCode || 'all'} onChange={changeBranch} disabled={!initialScope.canChangeBranch && !initialScope.canViewProvince} options={[...(initialScope.canViewProvince ? [{ value: 'all', label: 'Toàn tỉnh' }] : []), ...branchOptions.map((value) => ({ value, label: `Chi nhánh ${value}` }))]} />
-        <Select allowClear value={pgdCode || undefined} placeholder="Tất cả PGD" onChange={(value) => setPgdCode(value || null)} disabled={!initialScope.canChangePgd && !initialScope.canViewProvince} options={(filterOptions.pgd_options || []).map((item) => ({ value: typeof item === 'string' ? item : item.value, label: typeof item === 'string' ? item : item.label }))} />
-        <Button icon={<ReloadOutlined />} onClick={() => setRefreshKey((value) => value + 1)}>Làm mới</Button>
-        <span><CheckCircleFilled /> API dữ liệu thật</span>
-      </div>
       <div className={embedded ? 'c360-embedded-content' : 'demo-content'}>
-        {bootError ? <ErrorState error={bootError} onRetry={loadBootstrap} /> : bootLoading || !periodKey ? <DataLoadingState message="Đang khởi tạo không gian C360…" detail="Đang kiểm tra kết nối, quyền truy cập, kỳ dữ liệu và danh mục tổ chức." /> : content}
+        {!periodKey ? <Card className="c360-empty-scope"><Empty description="Chọn điều kiện trên bộ lọc chung và bấm Xem dữ liệu" /><Text type="secondary">Hệ thống chưa truy vấn dữ liệu nghiệp vụ để tránh tải thừa.</Text></Card> : content}
       </div>
       <CustomerModal customer={selectedCustomer} periodKey={periodKey} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
     </>

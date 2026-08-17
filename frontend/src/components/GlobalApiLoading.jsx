@@ -34,8 +34,11 @@ export default function GlobalApiLoading() {
 
   return (
     <div className={`global-api-loading${visible ? ' global-api-loading--visible' : ''}`} aria-live="polite">
-      <span className="global-api-loading__bar" />
-      <span className="global-api-loading__label"><LoadingOutlined spin /> Đang tải dữ liệu...</span>
+      <div className="global-api-loading__backdrop">
+        <LoadingOutlined spin className="global-api-loading__spinner" />
+        <strong>Đang tải dữ liệu</strong>
+        <span>Hệ thống đang truy vấn và tổng hợp dữ liệu, vui lòng chờ…</span>
+      </div>
     </div>
   );
 }

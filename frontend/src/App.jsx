@@ -15,6 +15,7 @@ import CifDataWarehouse from './pages/CifDataWarehouse';
 import client from './api/client';
 import C360App from './c360/C360App';
 import { menuKeyFromPath, pathFromMenuKey } from './constants/navigation';
+import { AnalysisScopeProvider } from './c360/AnalysisScopeContext';
 
 function LegacyApp() {
   const [activeMenu, setActiveMenu] = useState(() => menuKeyFromPath(window.location.pathname));
@@ -125,10 +126,12 @@ function LegacyApp() {
 
   return (
     <AuthProvider>
-      <GlobalApiLoading />
-      <MainLayout activeMenu={activeMenu} onMenuChange={handleMenuChange} currentUser={currentUser} onLogout={handleLogout}>
-        {pages[activeMenu] || pages['c360-dashboard']}
-      </MainLayout>
+      <AnalysisScopeProvider>
+        <GlobalApiLoading />
+        <MainLayout activeMenu={activeMenu} onMenuChange={handleMenuChange} currentUser={currentUser} onLogout={handleLogout}>
+          {pages[activeMenu] || pages['c360-dashboard']}
+        </MainLayout>
+      </AnalysisScopeProvider>
     </AuthProvider>
   );
 }

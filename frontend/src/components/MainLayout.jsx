@@ -20,6 +20,8 @@ import { Avatar, Badge, Breadcrumb, Button, Layout, Menu, Space, Tooltip, Typogr
 import logoUrl from '../../favicon.jpg';
 import client from '../api/client';
 import { PAGE_NAVIGATION } from '../constants/navigation';
+import GlobalAnalysisFilter from './GlobalAnalysisFilter';
+import { useAnalysisScope } from '../c360/AnalysisScopeContext';
 
 const { Header, Sider, Content } = Layout;
 
@@ -81,6 +83,7 @@ const baseMenuItems = [
 ];
 
 function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout }) {
+  const analysisScope = useAnalysisScope();
   const [collapsed, setCollapsed] = useState(false);
   const [sourceIssueCount, setSourceIssueCount] = useState(0);
   const pageMeta = PAGE_NAVIGATION[activeMenu] || PAGE_NAVIGATION['c360-dashboard'];
@@ -122,12 +125,15 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
   useEffect(() => {
     let active = true;
     async function loadSourceIssues() {
+      const selectedPeriod = analysisScope?.applied?.periodKey;
+      if (!selectedPeriod) {
+        setSourceIssueCount(0);
+        return;
+      }
       try {
-        const { data: periods } = await client.get('/imports/periods');
-        const latestPeriod = periods?.[0]?.period_key;
-        if (!latestPeriod) return;
         const { data } = await client.get('/imports/source-readiness', {
-          params: { period_key: latestPeriod },
+          params: { period_key: selectedPeriod },
+          hideGlobalLoading: true,
         });
         if (active) setSourceIssueCount((data?.sources || []).filter((item) => !item.is_ready).length);
       } catch {
@@ -140,7 +146,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
       active = false;
       window.clearInterval(timer);
     };
-  }, []);
+  }, [analysisScope?.applied?.periodKey]);
 
   return (
     <Layout className="app-shell">
@@ -214,6 +220,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
             </Button>
           </Space>
         </Header>
+        <GlobalAnalysisFilter activeMenu={activeMenu} />
         <Content className="app-content">
           <Breadcrumb
             className="app-breadcrumb"
