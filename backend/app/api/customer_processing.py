@@ -10,6 +10,9 @@ from openpyxl import Workbook
 from sqlalchemy import DateTime as SQLDateTime, Float, Integer, Numeric, and_, asc, case, desc, distinct, func, or_, text
 from sqlalchemy.orm import Session
 
+from app.auth.dependencies import get_current_user
+from app.auth.schemas import CurrentUser
+
 from app.customer_processing import (
     REQUIRED_FILE_TYPES,
     build_period_file_summary,
@@ -36,6 +39,7 @@ from app.models import (
     GL02LedgerTransaction,
     ImportFile,
     ImportBatch,
+    KH02CustomerTransaction,
     LN01Loan,
     OrgBranch,
     OrgDepartment,
@@ -844,6 +848,160 @@ def _apply_branch_finance_to_payloads(
         item["ma_cb"] = fin.ma_cb
         item["ten_can_bo"] = fin.ten_can_bo
     return payloads
+
+
+def _profile_quality_query(db: Session, period_key: str, issue: str, branch_code: str | None = None):
+    query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
+    has_business_activity = or_(
+        CustomerPeriodProfile.dp_record_count > 0,
+        func.coalesce(CustomerPeriodProfile.so_du_tien_gui, 0) != 0,
+        func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) != 0,
+        func.coalesce(CustomerPeriodProfile.so_du_tien_vay, 0) != 0,
+        CustomerPeriodProfile.pf10_lds_count > 0,
+    )
+    query = query.filter(has_business_activity)
+    if branch_code:
+        query = query.filter(CustomerPeriodProfile.branch_codes.ilike(f"%{branch_code.strip()}%"))
+    if issue == "missing_officer":
+        return query.filter(
+            or_(CustomerPeriodProfile.ma_cb.is_(None), func.trim(CustomerPeriodProfile.ma_cb) == ""),
+            or_(CustomerPeriodProfile.ten_can_bo.is_(None), func.trim(CustomerPeriodProfile.ten_can_bo) == ""),
+        )
+    if issue == "unclear_primary_branch":
+        return query.filter(
+            CustomerPeriodProfile.branch_count > 1,
+            or_(
+                CustomerPeriodProfile.primary_branch_code.is_(None),
+                func.trim(CustomerPeriodProfile.primary_branch_code) == "",
+                func.strpos(
+                    func.coalesce(CustomerPeriodProfile.branch_codes, ""),
+                    func.coalesce(CustomerPeriodProfile.primary_branch_code, ""),
+                ) == 0,
+            ),
+        )
+    raise HTTPException(status_code=400, detail="Loại vấn đề chất lượng hồ sơ không hợp lệ")
+
+
+@router.get("/profile-quality")
+def get_profile_quality(
+    period_key: str = Query(...),
+    issue: str | None = None,
+    keyword: str | None = None,
+    branch_code: str | None = None,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=1, le=100),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    issue_keys = ("missing_officer", "unclear_primary_branch")
+    effective_branch = branch_code if user.can_view_all_branches() else user.ma_cn
+    summary = {key: int(_profile_quality_query(db, period_key, key, effective_branch).count()) for key in issue_keys}
+    if not issue:
+        return {"period_key": period_key, "summary": summary}
+    query = _profile_quality_query(db, period_key, issue, effective_branch)
+    if keyword:
+        pattern = f"%{keyword.strip()}%"
+        query = query.filter(or_(CustomerPeriodProfile.ma_kh.ilike(pattern), CustomerPeriodProfile.ten_kh.ilike(pattern)))
+    total = int(query.count())
+    rows = query.order_by(desc(CustomerPeriodProfile.branch_count), CustomerPeriodProfile.ma_kh).offset((page - 1) * page_size).limit(page_size).all()
+    fields = [
+        "ma_kh", "ten_kh", "loai_khach_hang", "branch_codes", "branch_count",
+        "primary_branch_code", "primary_pgd_name", "ma_cb", "ten_can_bo",
+        "so_du_tien_gui", "so_du_tgtt_binh_quan", "so_du_tien_vay", "branch_details",
+    ]
+    items = [serialize_model(row, fields) for row in rows]
+    for item in items:
+        item["primary_branch_configured"] = bool(str(item.get("primary_branch_code") or "").strip())
+        if not item["primary_branch_configured"] and isinstance(item.get("branch_details"), list):
+            item["suggested_primary_branch"] = next((
+                detail.get("branch_code") for detail in item["branch_details"] if detail.get("branch_code")
+            ), None)
+    return {"period_key": period_key, "issue": issue, "summary": summary, "total": total, "page": page, "page_size": page_size, "items": items}
+
+
+def _require_admin(user: CurrentUser) -> None:
+    if "admin" not in user.permissions:
+        raise HTTPException(status_code=403, detail="Chỉ quản trị viên được xem truy vết nguồn dữ liệu")
+
+
+@router.get("/value-lineage")
+def get_value_lineage(
+    period_key: str = Query(...),
+    ma_kh: str = Query(...),
+    metric: str = Query(...),
+    branch_code: str | None = None,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    _require_admin(user)
+    profile = db.query(CustomerPeriodProfile).filter_by(period_key=period_key, ma_kh=ma_kh).first()
+    if not profile:
+        raise HTTPException(status_code=404, detail="Không tìm thấy hồ sơ khách hàng trong kỳ")
+    items = []
+    if metric in {"loan", "income"}:
+        query = db.query(PF10LoanProfitability, ImportFile).join(ImportFile, ImportFile.id == PF10LoanProfitability.import_file_id).filter(
+            PF10LoanProfitability.period_key == period_key,
+            PF10LoanProfitability.customer_code == ma_kh,
+        )
+        if branch_code:
+            query = query.filter(PF10LoanProfitability.branch_code == branch_code)
+        for row, source_file in query.order_by(PF10LoanProfitability.branch_code, PF10LoanProfitability.id).limit(1000):
+            value = row.interest_amount if metric == "income" else row.end_of_month_balance
+            items.append({
+                "source": "PF10", "file": source_file.original_filename, "source_record_id": row.id,
+                "branch_code": row.branch_code, "reference": row.account_number,
+                "source_column": "INTEREST" if metric == "income" else "EOMBAL",
+                "value": serialize_value(value), "formula": "SUM(INTEREST)" if metric == "income" else "SUM(EOMBAL) theo loại vay",
+            })
+    if metric in {"deposit", "casa"}:
+        query = db.query(PF14AccountBalance, ImportFile).join(ImportFile, ImportFile.id == PF14AccountBalance.import_file_id).filter(
+            PF14AccountBalance.period_key == period_key, PF14AccountBalance.custseq == ma_kh,
+        )
+        query = query.filter(
+            func.coalesce(PF14AccountBalance.monterm, 0) > 0
+            if metric == "deposit"
+            else func.coalesce(PF14AccountBalance.monterm, 0) == 0
+        )
+        if branch_code:
+            query = query.filter(PF14AccountBalance.trbrcd == branch_code)
+        rate_rows = db.query(CustomerPeriodExchangeRate).filter(CustomerPeriodExchangeRate.period_key == period_key).all()
+        rates = {str(row.ccy or "VND").strip().upper(): float(row.exchange_rate or 1) for row in rate_rows}
+        for row, source_file in query.order_by(PF14AccountBalance.trbrcd, PF14AccountBalance.id).limit(1000):
+            original_value = row.monthlyendbalance if metric == "deposit" else row.averagebalance
+            ccy = str(row.ccy or "VND").strip().upper()
+            rate = rates.get(ccy, 1)
+            value = float(original_value or 0) * rate
+            items.append({
+                "source": "PF14", "file": source_file.original_filename, "source_record_id": row.id,
+                "branch_code": row.trbrcd, "reference": row.accountno,
+                "source_column": "MONTHLYENDBALANCE" if metric == "deposit" else "AVERAGEBALANCE",
+                "value": serialize_value(value), "original_value": serialize_value(original_value),
+                "currency_code": ccy, "exchange_rate": rate,
+                "formula": "Số dư nguồn × tỷ giá DP01; sau đó SUM theo tài khoản",
+            })
+    if metric == "income":
+        query = db.query(KH02CustomerTransaction, ImportFile).join(ImportFile, ImportFile.id == KH02CustomerTransaction.import_file_id).filter(
+            KH02CustomerTransaction.period_key == period_key, KH02CustomerTransaction.customer_code == ma_kh,
+        )
+        if branch_code:
+            query = query.filter(KH02CustomerTransaction.branch_code == branch_code)
+        fee_prefixes = ("7040", "711001", "711002", "711036", "711037", "711039", "714", "721001", "709002", "711003", "711004", "711005", "711006", "711007", "711008", "711009", "711010", "711011", "711012", "711013", "711014", "711096")
+        for row, source_file in query.order_by(KH02CustomerTransaction.branch_code, KH02CustomerTransaction.id).limit(2000):
+            code = str(row.account_code or "").strip()
+            if not any(code.startswith(prefix) for prefix in fee_prefixes):
+                continue
+            items.append({
+                "source": "KH02", "file": source_file.original_filename, "source_record_id": row.id,
+                "branch_code": row.branch_code, "reference": row.transaction_sequence,
+                "source_column": f"ACCTCD={code}; CRAMT-DRAMT", "value": serialize_value((row.credit_amount or 0) - (row.debit_amount or 0)),
+                "formula": "SUM(CRAMT) - SUM(DRAMT) theo nhóm tài khoản cấu hình",
+            })
+    total = sum(float(item.get("value") or 0) for item in items)
+    return {
+        "period_key": period_key, "ma_kh": ma_kh, "metric": metric,
+        "branch_code": branch_code, "total": total, "record_count": len(items), "items": items,
+        "admin_only": True,
+    }
 
 
 @router.get("/periods")

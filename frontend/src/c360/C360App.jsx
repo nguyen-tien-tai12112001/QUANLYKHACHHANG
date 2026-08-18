@@ -570,6 +570,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
   const [financialLoading, setFinancialLoading] = useState(false);
   const [fullCustomer, setFullCustomer] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [lineage, setLineage] = useState({ open: false, loading: false, metric: '', items: [], total: 0, record_count: 0 });
 
   useEffect(() => {
     if (!open || !customer?.ma_kh || !periodKey) return;
@@ -797,6 +798,19 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
   const loanInterestIncome = Number(viewedCustomer.pf10_interest || 0);
   const serviceFeeIncome = feeFields.reduce((sum, field) => sum + Number(metricCustomer[field.key] || 0), 0);
   const periodRevenue = loanInterestIncome + serviceFeeIncome;
+  const canViewLineage = (currentUser?.permissions || []).includes('admin');
+  const loadLineage = async (metric) => {
+    setLineage({ open: true, loading: true, metric, items: [], total: 0, record_count: 0 });
+    try {
+      const { data: response } = await client.get('/customer-processing/value-lineage', {
+        params: { period_key: periodKey, ma_kh: viewedCustomer.ma_kh, metric, branch_code: profileBranch || undefined }, hideGlobalLoading: true,
+      });
+      setLineage({ open: true, loading: false, metric, ...(response || {}) });
+    } catch (requestError) {
+      message.error(requestError.response?.data?.detail || 'Không tải được truy vết nguồn');
+      setLineage((current) => ({ ...current, loading: false }));
+    }
+  };
   const classificationPrevious = {};
   const classificationRows = [...(classificationData?.items || [])]
     .sort((a, b) => `${a.period_key}-${a.branch_code}`.localeCompare(`${b.period_key}-${b.branch_code}`))
@@ -854,6 +868,13 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         <div><BankOutlined /><span><strong>{profileBranch ? `Đang xem riêng quan hệ tại Chi nhánh ${profileBranch}` : 'Đang xem toàn bộ quan hệ của khách hàng'}</strong><small>{profileBranch ? `Tất cả số tiền, tài khoản, LDS và cán bộ bên dưới chỉ thuộc chi nhánh này. Chi nhánh chính toàn hồ sơ: ${customerRecord.primary_branch_code || 'chưa xác định'}.` : 'Số liệu được cộng từ tất cả chi nhánh khách hàng có quan hệ.'}</small></span></div>
         <AppliedScopeBanner params={{ ...(analysisParams || {}), branch_code: profileBranch || analysisParams?.branch_code }} />
       </div>
+      <div className="c360-branch-scope-cards">
+        <button type="button" className={!profileBranch ? 'is-active is-all' : 'is-all'} onClick={() => { setProfileBranch(null); setLoanBranch(null); }}><span>Toàn bộ quan hệ</span><strong>{branchDetails.length} chi nhánh</strong><small>Tổng hợp toàn khách hàng</small></button>
+        {branchDetails.map((item) => {
+          const isPrimary = item.branch_code === customerRecord.primary_branch_code;
+          return <button type="button" key={`${item.branch_code}-${item.ma_pgd}`} className={`${profileBranch === item.branch_code ? 'is-active' : ''} ${isPrimary ? 'is-primary' : ''}`} onClick={() => { setProfileBranch(item.branch_code); setLoanBranch(null); }}><span>Chi nhánh {item.branch_code}{isPrimary ? <Tag color="gold">CHÍNH</Tag> : null}</span><strong>{compactMoney(Number(item.so_du_tien_gui || 0) + Number(item.so_du_tgtt_binh_quan || 0) + Number(item.so_du_tien_vay || 0))}</strong><small>{item.ten_can_bo || item.ma_cb || 'Chưa có CBQL'} · {item.ten_pgd || item.ma_pgd || 'Chưa rõ phòng'}</small></button>;
+        })}
+      </div>
       <Row gutter={[14, 14]} className="demo-quick-metrics c360-profile-metrics">
         <Col xs={12} lg={8} xl><Tooltip title="Nguồn PF14/DP01 · Tổng tiền gửi CKH cuối kỳ + TGTT bình quân, quy đổi VNĐ"><div role="button" tabIndex={0} className="is-deposit" onClick={() => changeProfileTab('deposit')}><WalletOutlined /><Text>Tổng tiền gửi</Text><strong>{compactMoney(totalDeposit)}</strong><small>PF14/DP01 · CKH + TGTT BQ</small></div></Tooltip></Col>
         <Col xs={12} lg={8} xl><Tooltip title="Nguồn PF10/LN01 · Tổng dư nợ ngắn hạn, trung dài hạn và thấu chi"><div role="button" tabIndex={0} className="is-loan" onClick={() => changeProfileTab('credit')}><BankOutlined /><Text>Tổng tiền vay</Text><strong>{compactMoney(totalLoan)}</strong><small>PF10/LN01 · {viewedCustomer.pf10_lds_count || 0} LDS</small></div></Tooltip></Col>
@@ -890,6 +911,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
           label: 'Tiền gửi',
           children: (
             <div className="c360-credit-pane">
+              {canViewLineage ? <div className="c360-admin-lineage-action"><Text type="secondary">Giải thích số dư từ PF14 và tỷ giá DP01</Text><Button size="small" icon={<DatabaseOutlined />} onClick={() => loadLineage(depositCategory === 'term' ? 'deposit' : 'casa')}>Truy vết con số</Button></div> : null}
               <div className="c360-insight-strip">
                 <div role="button" tabIndex={0} onClick={() => setGl02Open(true)}><Text>Doanh số TKTT</Text><strong>{compactMoney(viewedCustomer.doanh_so_chuyen_tien_ve_tk)}</strong><small>GL02 · Bấm xem theo chi nhánh</small></div>
                 <Tooltip title={gl02Activity.latest_transaction ? (
@@ -1025,6 +1047,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
           label: `Tiền vay (${viewedCustomer.pf10_lds_count || 0} LDS)`,
           children: (
             <div className="c360-credit-pane">
+              {canViewLineage ? <div className="c360-admin-lineage-action"><Text type="secondary">Giải thích dư nợ từ từng tài khoản PF10</Text><Button size="small" icon={<DatabaseOutlined />} onClick={() => loadLineage('loan')}>Truy vết con số</Button></div> : null}
               <div className="c360-insight-strip c360-loan-obligations">
                 <div><Text>Gốc phải thu</Text><strong>{loanData.obligations?.source_available ? compactMoney(loanData.obligations.principal_due) : '—'}</strong><small>tháng {loanData.obligations?.next_month || 'tới'} · LN01</small></div>
                 <div><Text>Lãi phải thu</Text><strong>{loanData.obligations?.source_available ? compactMoney(loanData.obligations.interest_due) : '—'}</strong><small>tháng {loanData.obligations?.next_month || 'tới'} · LN01</small></div>
@@ -1139,7 +1162,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
             <div className="c360-domain-pane">
               <div className="c360-pane-heading">
                 <div><Text strong>Thu nhập theo khách hàng</Text><small>Tách riêng lãi tiền vay PF10 và phí dịch vụ KH02; không tự đưa chênh lệch vào phí khác</small></div>
-                <Tag color="gold">PF10 · KH02</Tag>
+                <Space><Tag color="gold">PF10 · KH02</Tag>{canViewLineage ? <Button size="small" icon={<DatabaseOutlined />} onClick={() => loadLineage('income')}>Truy vết con số</Button> : null}</Space>
               </div>
               <div className="c360-insight-strip c360-income-breakdown">
                 <div><Text>Tổng thu nhập trong kỳ</Text><strong>{fullMoney(periodRevenue)}</strong><small>Lãi tiền vay + phí dịch vụ</small></div>
@@ -1305,6 +1328,12 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
             { title: 'TSK', dataIndex: 'other_asset_amount', width: 150, align: 'right', render: fullMoney },
           ]} />
       </Modal>
+      <Drawer width="min(1080px, 96vw)" open={lineage.open} onClose={() => setLineage((current) => ({ ...current, open: false }))} title={`Truy vết nguồn · ${{ income: 'Thu nhập trong kỳ', loan: 'Dư nợ', deposit: 'Tiền gửi CKH', casa: 'TGTT bình quân' }[lineage.metric] || lineage.metric} · KH ${viewedCustomer.ma_kh}`}>
+        <Alert showIcon type="warning" message="Nội dung dành riêng cho quản trị viên" description={`Tổng ${fullMoney(lineage.total)} từ ${Number(lineage.record_count || 0).toLocaleString('vi-VN')} bản ghi nguồn. Mỗi dòng giữ tên file và ID bản ghi để kiểm tra lại.`} style={{ marginBottom: 12 }} />
+        <Table loading={lineage.loading} size="small" sticky rowKey={(row) => `${row.source}-${row.source_record_id}`} dataSource={lineage.items || []} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 1100, y: 'calc(100vh - 250px)' }} columns={[
+          { title: 'Nguồn', dataIndex: 'source', width: 80, fixed: 'left', render: (value) => <Tag color="blue">{value}</Tag> }, { title: 'Chi nhánh', dataIndex: 'branch_code', width: 95 }, { title: 'Tệp nguồn', dataIndex: 'file', width: 260, ellipsis: true }, { title: 'ID bản ghi', dataIndex: 'source_record_id', width: 105 }, { title: 'Tài khoản/LDS', dataIndex: 'reference', width: 180, render: (value) => <Text copyable>{value || '—'}</Text> }, { title: 'Cột nguồn', dataIndex: 'source_column', width: 210 }, { title: 'Giá trị đóng góp', dataIndex: 'value', width: 165, align: 'right', render: fullMoney }, { title: 'Công thức', dataIndex: 'formula', width: 250 },
+        ]} />
+      </Drawer>
       </div>
     </Modal>
   );
@@ -1329,6 +1358,8 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
   const [kpiDrillLoading, setKpiDrillLoading] = useState(false);
   const [kpiDrillFilters, setKpiDrillFilters] = useState({ keyword: '', branch: '', customerType: '', officer: '', sortBy: '', sortDir: 'desc' });
   const [kpiDrillDraft, setKpiDrillDraft] = useState({ keyword: '', branch: '', customerType: '', officer: '' });
+  const [quality, setQuality] = useState({ summary: {} });
+  const [qualityDrill, setQualityDrill] = useState({ open: false, issue: '', items: [], total: 0, page: 1, loading: false });
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -1381,11 +1412,13 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
             return response;
           }),
         client.get('/imports/source-readiness', { params: { period_key: periodKey }, ...background }).catch(() => ({ data: null })),
+        client.get('/customer-processing/profile-quality', { params: { period_key: periodKey, branch_code: profileParams.branch_code }, ...background }),
       ];
       const requests = await Promise.allSettled(requestPromises);
       const value = (index) => requests[index].status === 'fulfilled' ? requests[index].value?.data : null;
       if (value(2)) setComparison(value(2));
       if (value(4)) setReadiness(value(4));
+      if (value(5)) setQuality(value(5));
       const failedCount = requests.filter((item) => item.status === 'rejected').length;
       if (failedCount) message.warning(`${failedCount} khối phân tích chưa tải được; KPI chính vẫn sử dụng bình thường.`);
       client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true }, ...background })
@@ -1517,6 +1550,17 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     }
   };
 
+  const loadQualityIssue = async (issue, page = 1) => {
+    setQualityDrill((current) => ({ ...current, open: true, issue, page, loading: true }));
+    try {
+      const { data: response } = await client.get('/customer-processing/profile-quality', { params: { period_key: periodKey, branch_code: profileParams.branch_code, issue, page, page_size: 10 } });
+      setQualityDrill({ open: true, issue, page, loading: false, items: response?.items || [], total: Number(response?.total || 0) });
+    } catch (requestError) {
+      message.error(requestError.response?.data?.detail || 'Không tải được danh sách chất lượng hồ sơ');
+      setQualityDrill((current) => ({ ...current, loading: false }));
+    }
+  };
+
   const insightMetric = (label, value, note, tone = '') => (
     <div className={`c360-dashboard-stat ${tone}`}>
       <Text type="secondary">{label}</Text>
@@ -1598,6 +1642,12 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       </>}
       {dashboardView === 'alerts' && <>
       <div className="c360-dashboard-section-title is-warning"><div><Text className="demo-eyebrow">CẦN XỬ LÝ</Text><Title level={4}>Cảnh báo và biến động cần rà soát</Title></div><Text type="secondary">Bấm khách hàng để mở hồ sơ C360</Text></div>
+      <Card title="Chất lượng hồ sơ khách hàng" className="demo-panel demo-section">
+        <div className="c360-quality-action-grid">
+          <button type="button" onClick={() => loadQualityIssue('missing_officer')}><UserOutlined /><span><Text strong>Khách hàng chưa có CBQL</Text><small>Cả mã và tên cán bộ đang trống theo nguồn đã xử lý</small></span><strong>{Number(quality.summary?.missing_officer || 0).toLocaleString('vi-VN')}</strong></button>
+          <button type="button" onClick={() => loadQualityIssue('unclear_primary_branch')}><BankOutlined /><span><Text strong>Đa chi nhánh chưa rõ chi nhánh chính</Text><small>Có từ hai quan hệ nhưng thiếu hoặc mâu thuẫn mã chi nhánh chính</small></span><strong>{Number(quality.summary?.unclear_primary_branch || 0).toLocaleString('vi-VN')}</strong></button>
+        </div>
+      </Card>
       <Card title="Khách hàng có biến động bất thường" className="demo-panel demo-section" loading={blockLoading.alerts}>
         <div className="c360-anomaly-summary">
           <Tag color="error">Tiền gửi giảm mạnh: {Number(abnormal.deposit_drop_count || 0).toLocaleString('vi-VN')}</Tag>
@@ -1707,6 +1757,12 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
         </div>
       </Card>
       </>}
+      <Drawer width="min(1040px, 96vw)" open={qualityDrill.open} onClose={() => setQualityDrill((current) => ({ ...current, open: false }))} title={qualityDrill.issue === 'missing_officer' ? 'Khách hàng chưa có cán bộ quản lý' : 'Khách hàng đa chi nhánh chưa rõ chi nhánh chính'}>
+        <Alert showIcon type="info" message={`${qualityDrill.total.toLocaleString('vi-VN')} hồ sơ cần rà soát`} description={qualityDrill.issue === 'missing_officer' ? 'Cán bộ ở chi nhánh khác không được tự động gán sang.' : 'Chi nhánh chính bị thiếu hoặc không nằm trong danh sách quan hệ.'} style={{ marginBottom: 12 }} />
+        <Table loading={qualityDrill.loading} size="small" sticky rowKey="ma_kh" dataSource={qualityDrill.items} onRow={(row) => ({ onClick: () => onOpenCustomer(row) })} rowClassName="demo-clickable-row" pagination={{ current: qualityDrill.page, pageSize: 10, total: qualityDrill.total, showSizeChanger: false, onChange: (page) => loadQualityIssue(qualityDrill.issue, page) }} scroll={{ x: 950, y: 'calc(100vh - 250px)' }} columns={[
+          { title: 'Chi nhánh chính', dataIndex: 'primary_branch_code', width: 150, fixed: 'left', render: (value, row) => row.primary_branch_configured ? <Tag color="gold">{value}</Tag> : <div><Tag color="error">Chưa xác nhận</Tag>{row.suggested_primary_branch ? <small>Gợi ý: {row.suggested_primary_branch}</small> : null}</div> }, { title: 'Khách hàng', width: 270, render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text copyable>{row.ma_kh}</Text></div> }, { title: 'Các chi nhánh quan hệ', dataIndex: 'branch_codes', width: 200 }, { title: 'Số CN', dataIndex: 'branch_count', width: 80, align: 'center' }, { title: 'CBQL', width: 190, render: (_, row) => row.ten_can_bo || row.ma_cb || <Tag color="error">Chưa có</Tag> }, { title: 'Tiền gửi', dataIndex: 'so_du_tien_gui', width: 150, align: 'right', render: compactMoney }, { title: 'Dư nợ', dataIndex: 'so_du_tien_vay', width: 150, align: 'right', render: compactMoney },
+        ]} />
+      </Drawer>
       <Drawer width="min(1120px, 96vw)" open={kpiDrill.open} onClose={() => setKpiDrill((current) => ({ ...current, open: false }))} title={`${kpiDrill.label || 'Khách hàng tạo ra chỉ tiêu'} · Kỳ ${periodLabel(periodKey)}`}>
         <AppliedScopeBanner params={profileParams} total={kpiDrill.total} />
         <div className="c360-kpi-drill-filters">
