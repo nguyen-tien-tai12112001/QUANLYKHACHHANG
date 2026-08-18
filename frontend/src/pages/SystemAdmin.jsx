@@ -109,6 +109,30 @@ function roleColor(code) {
   return 'green';
 }
 
+function roleShortLabel(code) {
+  return {
+    ADMIN: 'Quản trị',
+    HEAD_OFFICE_LEADER: 'Lãnh đạo Hội sở',
+    BRANCH_MANAGER: 'Lãnh đạo CN II',
+    DEPARTMENT_MANAGER: 'Lãnh đạo phòng/PGD',
+    USER: 'Cán bộ QLKH',
+  }[code] || code;
+}
+
+function compactPermissionList(items = []) {
+  const groups = [...new Set(items.map((item) => item.permission_group).filter(Boolean))];
+  const detail = items.map((item) => `${item.permission_name} (${item.permission_code})`).join('\n');
+  return (
+    <Tooltip title={<span className="admin-permission-tooltip">{detail || 'Chưa cấp quyền'}</span>} placement="left">
+      <div className="admin-permission-summary">
+        <Tag color="geekblue">{items.length} quyền</Tag>
+        {groups.slice(0, 2).map((group) => <Tag key={group}>{group}</Tag>)}
+        {groups.length > 2 && <Tag>+{groups.length - 2} nhóm</Tag>}
+      </div>
+    </Tooltip>
+  );
+}
+
 function dataScopeTag(value) {
   const scopeMap = {
     province: ['red', 'Toàn tỉnh'],
@@ -449,7 +473,7 @@ function SystemAdmin({ section = 'branches' }) {
       return [
         { title: 'Mã chi nhánh', dataIndex: 'branch_code', key: 'branch_code', width: 140, render: (value) => <Tag color="red">{value}</Tag> },
         { title: 'Tên chi nhánh', dataIndex: 'branch_name', key: 'branch_name' },
-        { title: 'Cấp đơn vị', dataIndex: 'branch_level', key: 'branch_level', width: 155, render: (value) => <Tag color={value === 'HEAD_OFFICE' ? 'purple' : 'blue'}>{value === 'HEAD_OFFICE' ? 'Hội sở' : 'Chi nhánh loại II'}</Tag> },
+        { title: 'Cấp đơn vị', dataIndex: 'branch_level', key: 'branch_level', width: 135, align: 'center', render: (value) => <Tag className="admin-unit-level-tag" color={value === 'HEAD_OFFICE' ? 'purple' : 'blue'}>{value === 'HEAD_OFFICE' ? 'Hội sở' : 'CN loại II'}</Tag> },
         { title: 'Trực thuộc', dataIndex: 'parent_branch_name', key: 'parent_branch_name', width: 220, render: (value) => value || <Text type="secondary">Đơn vị gốc</Text> },
         { title: 'Phòng ban', dataIndex: 'department_count', key: 'department_count', width: 110 },
         { title: 'Cán bộ', dataIndex: 'user_count', key: 'user_count', width: 100 },
@@ -489,25 +513,22 @@ function SystemAdmin({ section = 'branches' }) {
         { title: 'User IPCAS', dataIndex: 'ipcas_username', key: 'ipcas_username', width: 135, align: 'center', render: (value) => value ? <Tag color="blue">{value}</Tag> : <Tag color="warning">Chưa có</Tag> },
         { title: 'Chi nhánh', dataIndex: 'branch_name', key: 'branch_name', width: 220, render: (value) => ellipsisText(value) },
         { title: 'Phòng ban', dataIndex: 'department_name', key: 'department_name', width: 220, render: (value) => value ? ellipsisText(value) : <Tag color="warning">Chưa gán</Tag> },
-        { title: 'Nhóm quyền', dataIndex: 'role_code', key: 'role_code', width: 165, align: 'center', render: (value, row) => <Tag color={roleColor(value)}>{row.role_name || 'Chưa gán'}</Tag> },
+        { title: 'Nhóm quyền', dataIndex: 'role_code', key: 'role_code', width: 180, align: 'center', render: (value) => <Tooltip title={value}><Tag className="admin-role-tag" color={roleColor(value)}>{roleShortLabel(value) || 'Chưa gán'}</Tag></Tooltip> },
         { title: 'Phạm vi dữ liệu', dataIndex: 'data_scope', key: 'data_scope', width: 155, align: 'center', render: dataScopeTag },
         { title: 'Trạng thái', dataIndex: 'is_active', key: 'is_active', width: 125, align: 'center', render: activeTag },
       ];
     }
     return [
-      { title: 'Mã nhóm', dataIndex: 'role_code', key: 'role_code', width: 130, render: (value) => <Tag color={roleColor(value)}>{value}</Tag> },
-      { title: 'Tên nhóm quyền', dataIndex: 'role_name', key: 'role_name', width: 210 },
-      { title: 'Mô tả', dataIndex: 'description', key: 'description' },
+      { title: 'Vai trò', dataIndex: 'role_code', key: 'role_code', width: 190, render: (value) => <Tooltip title={value}><Tag className="admin-role-tag" color={roleColor(value)}>{roleShortLabel(value)}</Tag></Tooltip> },
+      { title: 'Tên nhóm quyền', dataIndex: 'role_name', key: 'role_name', width: 235, render: (value) => ellipsisText(value, { strong: true }) },
+      { title: 'Mô tả', dataIndex: 'description', key: 'description', width: 320, render: (value) => ellipsisText(value) },
       { title: 'Người dùng', dataIndex: 'user_count', key: 'user_count', width: 110 },
       {
         title: 'Quyền được cấp',
         dataIndex: 'permissions',
         key: 'permissions',
-        render: (items) => (
-          <Space wrap size={4}>
-            {(items || []).map((item) => <Tag color="blue" key={item.permission_code}>{item.permission_name}</Tag>)}
-          </Space>
-        ),
+        width: 330,
+        render: compactPermissionList,
       },
     ];
   }, [section]);
@@ -735,7 +756,7 @@ function SystemAdmin({ section = 'branches' }) {
           tableLayout="fixed"
           className={`admin-data-table admin-data-table-${section}`}
           pagination={{ pageSize: 10, showSizeChanger: true }}
-          scroll={{ x: section === 'users' ? 1500 : section === 'departments' ? 1280 : section === 'roles' ? 1200 : 900 }}
+          scroll={{ x: section === 'users' ? 1580 : section === 'departments' ? 1580 : section === 'roles' ? 1400 : 1250 }}
         />
       </Card>
 
