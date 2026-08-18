@@ -1693,7 +1693,7 @@ function RealCustomerList({ context, onOpenCustomer }) {
 
   const requestParams = useMemo(() => {
     const [sortBy, sortDir] = sort.split(':');
-    return {
+    const localParams = {
       period_key: periodKey,
       branch_code: branchCode || undefined,
       pgd_code: pgdCode || undefined,
@@ -1730,9 +1730,12 @@ function RealCustomerList({ context, onOpenCustomer }) {
       max_casa: filters.max_casa_million != null ? filters.max_casa_million * 1_000_000 : undefined,
       service_codes: filters.service_codes?.join(',') || undefined,
       min_service_count: filters.min_service_count ?? undefined,
-      ...context.profileParams,
       sort_by: sortBy,
       sort_dir: sortDir,
+    };
+    return {
+      ...context.profileParams,
+      ...Object.fromEntries(Object.entries(localParams).filter(([, value]) => value !== undefined)),
     };
   }, [branchCode, filters, periodKey, pgdCode, query, sort]);
 

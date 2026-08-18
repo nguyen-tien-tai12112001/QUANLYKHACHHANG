@@ -633,6 +633,9 @@ def apply_profile_filters(
                 CustomerPeriodProfile.ma_kh.ilike(like),
                 CustomerPeriodProfile.ten_kh.ilike(like),
                 CustomerPeriodProfile.telephone.ilike(like),
+                CustomerPeriodProfile.ma_cb.ilike(like),
+                CustomerPeriodProfile.officer_employee_code.ilike(like),
+                CustomerPeriodProfile.ten_can_bo.ilike(like),
             )
         )
     if branch_code:
