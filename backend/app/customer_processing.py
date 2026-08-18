@@ -1698,15 +1698,15 @@ PROFILE_CIF_ENRICH_SQL = text("""
         END,
         nghe_nghiep=c.occupation,
         management_source=CASE WHEN uo.customer_id IS NOT NULL THEN 'USER_CIF'
-          WHEN dpb.customer_id IS NOT NULL THEN 'DP01_BALANCE'
+          WHEN dpo.customer_id IS NOT NULL THEN 'DP01_BALANCE'
           WHEN bo.customer_id IS NOT NULL THEN 'BC06'
           WHEN lo.customer_id IS NOT NULL THEN 'LN01' ELSE 'CIF_BRANCH' END,
         managing_branch_code=COALESCE(uo.branch_code,dpb.branch_code,bo.branch_code,lo.branch_code,p.primary_branch_code),
-        managing_department_code=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpb.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END,
-        managing_department_name=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpb.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END,
-        ma_cb=CASE WHEN uo.customer_id IS NOT NULL THEN COALESCE(uo.credit_officer_code,uo.employee_code) WHEN dpb.customer_id IS NOT NULL THEN COALESCE(dpo.credit_officer_code,dpo.employee_code) ELSE COALESCE(lo.credit_officer_code,lo.employee_code,p.ma_cb) END,
-        officer_employee_code=CASE WHEN uo.customer_id IS NOT NULL THEN uo.employee_code WHEN dpb.customer_id IS NOT NULL THEN dpo.employee_code ELSE COALESCE(lo.employee_code,p.officer_employee_code) END,
-        ten_can_bo=CASE WHEN uo.customer_id IS NOT NULL THEN uo.full_name WHEN dpb.customer_id IS NOT NULL THEN dpo.full_name ELSE COALESCE(lo.full_name,p.ten_can_bo) END,
+        managing_department_code=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpo.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END,
+        managing_department_name=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpo.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END,
+        ma_cb=CASE WHEN uo.customer_id IS NOT NULL THEN COALESCE(uo.credit_officer_code,uo.employee_code) WHEN dpo.customer_id IS NOT NULL THEN COALESCE(dpo.credit_officer_code,dpo.employee_code) ELSE COALESCE(lo.credit_officer_code,lo.employee_code,p.ma_cb) END,
+        officer_employee_code=CASE WHEN uo.customer_id IS NOT NULL THEN uo.employee_code WHEN dpo.customer_id IS NOT NULL THEN dpo.employee_code ELSE COALESCE(lo.employee_code,p.officer_employee_code) END,
+        ten_can_bo=CASE WHEN uo.customer_id IS NOT NULL THEN uo.full_name WHEN dpo.customer_id IS NOT NULL THEN dpo.full_name ELSE COALESCE(lo.full_name,p.ten_can_bo) END,
         telephone=COALESCE(c.telephone,p.telephone),
         primary_branch_code=COALESCE(uo.branch_code,dpb.branch_code,bo.branch_code,lo.branch_code,p.primary_branch_code),
         primary_pgd_code=CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpb.customer_id IS NOT NULL THEN dpo.department_code ELSE COALESCE(lo.department_code,p.primary_pgd_code) END,
@@ -1802,19 +1802,19 @@ PROFILE_ENRICHMENT_TEMP_SQL = text("""
              THEN to_date(li.raw_data->>'gd_ngaysinh','DD/MM/YYYY') END AS ngay_sinh,
         c.occupation AS nghe_nghiep,
         CASE WHEN uo.customer_id IS NOT NULL THEN 'USER_CIF'
-             WHEN dpb.customer_id IS NOT NULL THEN 'DP01_BALANCE'
+             WHEN dpo.customer_id IS NOT NULL THEN 'DP01_BALANCE'
              WHEN bo.customer_id IS NOT NULL THEN 'BC06'
              WHEN lo.customer_id IS NOT NULL THEN 'LN01' ELSE 'CIF_BRANCH' END AS management_source,
         COALESCE(uo.branch_code,dpb.branch_code,bo.branch_code,lo.branch_code) AS managing_branch_code,
-        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpb.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END AS managing_department_code,
-        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpb.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END AS managing_department_name,
-        CASE WHEN uo.customer_id IS NOT NULL THEN COALESCE(uo.credit_officer_code,uo.employee_code) WHEN dpb.customer_id IS NOT NULL THEN COALESCE(dpo.credit_officer_code,dpo.employee_code) ELSE COALESCE(lo.credit_officer_code,lo.employee_code) END AS ma_cb,
-        CASE WHEN uo.customer_id IS NOT NULL THEN uo.employee_code WHEN dpb.customer_id IS NOT NULL THEN dpo.employee_code ELSE lo.employee_code END AS officer_employee_code,
-        CASE WHEN uo.customer_id IS NOT NULL THEN uo.full_name WHEN dpb.customer_id IS NOT NULL THEN dpo.full_name ELSE lo.full_name END AS ten_can_bo,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpo.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END AS managing_department_code,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpo.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END AS managing_department_name,
+        CASE WHEN uo.customer_id IS NOT NULL THEN COALESCE(uo.credit_officer_code,uo.employee_code) WHEN dpo.customer_id IS NOT NULL THEN COALESCE(dpo.credit_officer_code,dpo.employee_code) ELSE COALESCE(lo.credit_officer_code,lo.employee_code) END AS ma_cb,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.employee_code WHEN dpo.customer_id IS NOT NULL THEN dpo.employee_code ELSE lo.employee_code END AS officer_employee_code,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.full_name WHEN dpo.customer_id IS NOT NULL THEN dpo.full_name ELSE lo.full_name END AS ten_can_bo,
         c.telephone,
         COALESCE(uo.branch_code,dpb.branch_code,bo.branch_code,lo.branch_code) AS primary_branch_code,
-        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpb.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END AS primary_pgd_code,
-        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpb.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END AS primary_pgd_name
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_code WHEN dpo.customer_id IS NOT NULL THEN dpo.department_code ELSE lo.department_code END AS primary_pgd_code,
+        CASE WHEN uo.customer_id IS NOT NULL THEN uo.department_name WHEN dpo.customer_id IS NOT NULL THEN dpo.department_name ELSE lo.department_name END AS primary_pgd_name
     FROM cif_customers c
     LEFT JOIN latest_identifier li ON li.customer_id=c.id
     LEFT JOIN user_owner uo ON uo.customer_id=c.id

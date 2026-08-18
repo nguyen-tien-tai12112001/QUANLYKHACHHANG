@@ -292,6 +292,29 @@ def enrich_profile_org_names(db: Session, payloads: list[dict]) -> list[dict]:
             branch_code = detail_branch or next((item.strip() for item in str(payload.get("branch_codes") or "").replace(";", ",").split(",") if item.strip()), "")
             if branch_code:
                 payload["primary_branch_code"] = branch_code
+        # Một số kỳ cũ đã xác định được cán bộ tại quan hệ chi nhánh nhưng bản
+        # ghi tổng bị trống do nhánh DP01 được chọn trước khi đối chiếu user.
+        # Dùng đúng quan hệ của chi nhánh chính làm giá trị dự phòng để danh
+        # sách và hồ sơ chi tiết luôn thống nhất.
+        details = payload.get("branch_details")
+        if isinstance(details, list) and details:
+            primary_branch = str(payload.get("primary_branch_code") or "").strip()
+            primary_pgd = str(payload.get("primary_pgd_code") or "").strip()
+            primary_detail = next((
+                item for item in details
+                if str(item.get("branch_code") or "").strip() == primary_branch
+                and (not primary_pgd or str(item.get("ma_pgd") or "").strip() == primary_pgd)
+            ), None) or next((
+                item for item in details
+                if str(item.get("branch_code") or "").strip() == primary_branch
+            ), None)
+            if primary_detail:
+                for field in ("ma_cb", "ten_can_bo", "officer_employee_code"):
+                    if not str(payload.get(field) or "").strip() and primary_detail.get(field):
+                        payload[field] = primary_detail[field]
+                if not primary_pgd and primary_detail.get("ma_pgd"):
+                    payload["primary_pgd_code"] = primary_detail["ma_pgd"]
+                    payload["primary_pgd_name"] = primary_detail.get("ten_pgd")
         enrich_officer(payload)
         labels = []
         for raw_item in str(payload.get("pgd_codes") or "").split(","):
@@ -317,7 +340,6 @@ def enrich_profile_org_names(db: Session, payloads: list[dict]) -> list[dict]:
                 payload.get("primary_pgd_name"),
             )
 
-        details = payload.get("branch_details")
         if isinstance(details, list):
             for detail in details:
                 # Cán bộ quản lý là quan hệ theo từng khách hàng + chi nhánh.
