@@ -2295,14 +2295,6 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
               <i />
               <div><b>3</b><span><strong>Bấm “Xem dữ liệu”</strong><small>Áp dụng đồng bộ cho toàn bộ C360</small></span></div>
             </div>
-            <Button
-              type="primary"
-              size="large"
-              icon={<SearchOutlined />}
-              onClick={() => document.querySelector('.global-scope-bar')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-            >
-              Đi tới bộ lọc chung
-            </Button>
             <div className="c360-empty-scope__privacy"><CheckCircleFilled /> Chưa phát sinh truy vấn dữ liệu nghiệp vụ</div>
           </Card>
         ) : content}
