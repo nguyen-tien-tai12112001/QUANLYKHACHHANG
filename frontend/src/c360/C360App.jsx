@@ -209,7 +209,6 @@ const productGroups = [
     tone: 'green',
     items: [
       ['abic_batd', 'Bảo an tín dụng'],
-      ['batd', 'Bảo an tín dụng'],
       ['abic_batk', 'Bảo an tài khoản'],
       ['abic_bathe', 'Bảo an chủ thẻ'],
       ['abic_bhts', 'Bảo hiểm tài sản'],
@@ -795,8 +794,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     + Number(viewedCustomer.du_no_trung_dai_han || 0)
     + Number(viewedCustomer.du_no_thau_chi || 0)
     || Number(viewedCustomer.so_du_tien_vay || 0);
-  const periodRevenue = Number(viewedCustomer.pf10_interest || 0)
-    + feeFields.reduce((sum, field) => sum + Number(metricCustomer[field.key] || 0), 0);
+  const loanInterestIncome = Number(viewedCustomer.pf10_interest || 0);
+  const serviceFeeIncome = feeFields.reduce((sum, field) => sum + Number(metricCustomer[field.key] || 0), 0);
+  const periodRevenue = loanInterestIncome + serviceFeeIncome;
   const classificationPrevious = {};
   const classificationRows = [...(classificationData?.items || [])]
     .sort((a, b) => `${a.period_key}-${a.branch_code}`.localeCompare(`${b.period_key}-${b.branch_code}`))
@@ -845,7 +845,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
             options={canSwitchCustomerScope ? [
               { value: 'all', label: 'Toàn bộ quan hệ · Tất cả chi nhánh' },
               ...[...new Set(branchDetails.map((item) => item.branch_code).filter(Boolean))]
-                .map((value) => ({ value, label: `Chỉ quan hệ tại CN ${value}` })),
+                .map((value) => ({ value, label: `Chỉ quan hệ tại CN ${value}${value === customerRecord.primary_branch_code ? ' · Chi nhánh chính' : ''}` })),
             ] : [{ value: profileBranch || initialBranchCode, label: `Quan hệ tại CN ${profileBranch || initialBranchCode}` }]}
           />
         </Space>
@@ -857,7 +857,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
       <Row gutter={[14, 14]} className="demo-quick-metrics c360-profile-metrics">
         <Col xs={12} lg={8} xl><Tooltip title="Nguồn PF14/DP01 · Tổng tiền gửi CKH cuối kỳ + TGTT bình quân, quy đổi VNĐ"><div role="button" tabIndex={0} className="is-deposit" onClick={() => changeProfileTab('deposit')}><WalletOutlined /><Text>Tổng tiền gửi</Text><strong>{compactMoney(totalDeposit)}</strong><small>PF14/DP01 · CKH + TGTT BQ</small></div></Tooltip></Col>
         <Col xs={12} lg={8} xl><Tooltip title="Nguồn PF10/LN01 · Tổng dư nợ ngắn hạn, trung dài hạn và thấu chi"><div role="button" tabIndex={0} className="is-loan" onClick={() => changeProfileTab('credit')}><BankOutlined /><Text>Tổng tiền vay</Text><strong>{compactMoney(totalLoan)}</strong><small>PF10/LN01 · {viewedCustomer.pf10_lds_count || 0} LDS</small></div></Tooltip></Col>
-        <Col xs={12} lg={8} xl><Tooltip title="Nguồn KH02 và PF10 · Tổng phí nghiệp vụ trong kỳ cộng thu nhập lãi PF10"><div role="button" tabIndex={0} className="is-casa" onClick={() => changeProfileTab('fees')}><DatabaseOutlined /><Text>Doanh thu/phí trong kỳ</Text><strong>{compactMoney(periodRevenue)}</strong><small>KH02/PF10 · Theo kỳ</small></div></Tooltip></Col>
+        <Col xs={12} lg={8} xl><Tooltip title={`Tổng thu nhập ${fullMoney(periodRevenue)} = Lãi tiền vay ${fullMoney(loanInterestIncome)} + Phí dịch vụ ${fullMoney(serviceFeeIncome)}`}><div role="button" tabIndex={0} className="is-casa" onClick={() => changeProfileTab('fees')}><DatabaseOutlined /><Text>Tổng thu nhập trong kỳ</Text><strong>{compactMoney(periodRevenue)}</strong><small>Lãi vay {compactMoney(loanInterestIncome)} · Phí {compactMoney(serviceFeeIncome)}</small></div></Tooltip></Col>
         <Col xs={12} lg={8} xl><Tooltip title="Nguồn CN05, DP01, Bill Payment và các cờ sản phẩm đã xử lý"><div role="button" tabIndex={0} className="is-product" onClick={() => changeProfileTab('products')}><CreditCardOutlined /><Text>Sản phẩm đang sử dụng</Text><strong>{activeProducts.length}</strong><small>CN05/DP01/Bill Payment · {trackedProducts.length} SP</small></div></Tooltip></Col>
         <Col xs={12} lg={8} xl><Tooltip title="Đếm quan hệ khách hàng–chi nhánh từ CustomerPeriodBranchDetail"><div role="button" tabIndex={0} className="is-branch" onClick={() => changeProfileTab('relationships')}><BankOutlined /><Text>Chi nhánh có quan hệ</Text><strong>{viewedCustomer.branch_count || 0}</strong><small>BranchDetail · {profileBranch ? `CN ${profileBranch}` : 'Toàn KH'}</small></div></Tooltip></Col>
       </Row>
@@ -868,7 +868,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
           children: <Descriptions bordered column={2} size="small" items={[
             { key: 'code', label: 'Mã khách hàng', children: <Text strong copyable={{ text: viewedCustomer.ma_kh }}>{viewedCustomer.ma_kh}</Text> },
             { key: 'type', label: 'Loại khách hàng', children: customerTypeLabel(viewedCustomer.loai_khach_hang) },
-            { key: 'branches', label: 'Các chi nhánh', children: viewedCustomer.branch_codes || 'Chưa có dữ liệu' },
+            { key: 'branches', label: 'Các chi nhánh', children: branchDetails.length ? <Space size={[4, 4]} wrap>{[...new Set(branchDetails.map((item) => item.branch_code).filter(Boolean))].map((code) => <Tag key={code} color={code === customerRecord.primary_branch_code ? 'gold' : 'default'}>{code}{code === customerRecord.primary_branch_code ? ' · CHÍNH' : ''}</Tag>)}</Space> : (viewedCustomer.branch_codes || 'Chưa có dữ liệu') },
             { key: 'pgds', label: 'Các phòng/PGD', children: profileBranch
               ? (selectedBranchDetail?.ten_pgd || 'Chưa xác định phòng/PGD')
               : (viewedCustomer.pgd_names || viewedCustomer.primary_pgd_name || 'Chưa có dữ liệu') },
@@ -1138,8 +1138,14 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
           children: (
             <div className="c360-domain-pane">
               <div className="c360-pane-heading">
-                <div><Text strong>Thu nhập phí theo khách hàng</Text><small>Phân loại theo từng nhóm dịch vụ, không cộng giá trị chưa có nguồn</small></div>
-                <Tag color="gold">KH02 · Nguồn bổ sung</Tag>
+                <div><Text strong>Thu nhập theo khách hàng</Text><small>Tách riêng lãi tiền vay PF10 và phí dịch vụ KH02; không tự đưa chênh lệch vào phí khác</small></div>
+                <Tag color="gold">PF10 · KH02</Tag>
+              </div>
+              <div className="c360-insight-strip c360-income-breakdown">
+                <div><Text>Tổng thu nhập trong kỳ</Text><strong>{fullMoney(periodRevenue)}</strong><small>Lãi tiền vay + phí dịch vụ</small></div>
+                <div><Text>Lãi tiền vay</Text><strong>{fullMoney(loanInterestIncome)}</strong><small>PF10 · INTEREST</small></div>
+                <div><Text>Tổng phí dịch vụ</Text><strong>{fullMoney(serviceFeeIncome)}</strong><small>Chỉ cộng các phí có nguồn</small></div>
+                <div><Text>Đối soát thành phần</Text><strong className="is-up">KHỚP</strong><small>{fullMoney(loanInterestIncome)} + {fullMoney(serviceFeeIncome)}</small></div>
               </div>
               <DomainMetricGrid
                 customer={metricCustomer}
@@ -1203,8 +1209,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
               pagination={false}
               scroll={{ x: 900 }}
               dataSource={branchDetails}
+              rowClassName={(row) => row.branch_code === customerRecord.primary_branch_code ? 'c360-primary-branch-row' : ''}
               columns={[
-                { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100, fixed: 'left' },
+                { title: 'Chi nhánh', dataIndex: 'branch_code', width: 150, fixed: 'left', render: (value) => <Space size={4}><Text strong>{value}</Text>{value === customerRecord.primary_branch_code ? <Tag color="gold">CHÍNH</Tag> : null}</Space> },
                 { title: 'PGD', width: 190, render: (_, row) => <div><Text>{row.ten_pgd || row.ma_pgd || '—'}</Text>{row.ten_pgd && row.ma_pgd ? <><br /><Text type="secondary">{row.ma_pgd}</Text></> : null}</div> },
                 { title: 'Cán bộ quản lý', width: 180, render: (_, row) => row.ten_can_bo || row.ma_cb || '—' },
                 { title: 'Tiền gửi CKH', dataIndex: 'so_du_tien_gui', align: 'right', width: 140, render: compactMoney },

@@ -1934,6 +1934,17 @@
 .c360-kpi-drill-filters .ant-input-group-addon .ant-btn,
 .c360-kpi-drill-filters > .ant-btn { height: 38px; }
 
+.c360-primary-branch-row > td {
+  background: #fff9e8 !important;
+  border-top-color: #f3d486 !important;
+  border-bottom-color: #f3d486 !important;
+}
+
+.c360-primary-branch-row:hover > td { background: #fff3c7 !important; }
+
+.c360-income-breakdown { margin-bottom: 14px; }
+.c360-income-breakdown > div:first-child { border-color: #d7b45b; background: linear-gradient(145deg, #fffaf0, #fff); }
+
 @media (max-width: 980px) {
   .c360-applied-scope, .c360-profile-scope-banner { grid-template-columns: 1fr; flex-direction: column; align-items: flex-start; }
   .c360-applied-scope > div { justify-content: flex-start; }

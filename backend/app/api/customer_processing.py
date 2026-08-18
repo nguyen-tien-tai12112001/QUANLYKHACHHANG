@@ -3499,10 +3499,11 @@ def list_branch_details(period_key: str = Query(...), ma_kh: str = Query(...), d
                 "engagement_score": engagement_score,
                 "engagement_reason": "; ".join(reasons),
                 "has_primary_location": bool(profile and profile.primary_branch_code),
+                "is_primary_branch": bool(profile and profile.primary_branch_code == payload.get("branch_code")),
                 "is_primary_location": bool(
                     profile
-                    and profile.primary_branch_code == payload.get("branch_code")
-                    and (profile.primary_pgd_code or "") == (payload.get("ma_pgd") or "")
+                    and str(profile.primary_branch_code or "").strip() == str(payload.get("branch_code") or "").strip()
+                    and str(profile.primary_pgd_code or "").strip() == str(payload.get("ma_pgd") or "").strip()
                 ),
             }
         )
