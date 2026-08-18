@@ -886,8 +886,21 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
             <div className="c360-credit-pane">
               <div className="c360-insight-strip">
                 <div role="button" tabIndex={0} onClick={() => setGl02Open(true)}><Text>Doanh số TKTT</Text><strong>{compactMoney(viewedCustomer.doanh_so_chuyen_tien_ve_tk)}</strong><small>GL02 · Bấm xem theo chi nhánh</small></div>
-                <Tooltip title={gl02Activity.latest_transaction?.remark || gl02Activity.latest_transaction?.reference || 'Chưa có nội dung giao dịch GL02'}>
-                  <div><Text>Giao dịch TKTT gần nhất</Text><strong>{dateTimeLabel(latestGlTransactionAt)}</strong><small>{gl02Activity.latest_transaction?.remark || gl02Activity.latest_transaction?.reference || `Không có GL02 hợp lệ tại ${profileBranch ? `CN ${profileBranch}` : 'phạm vi đang xem'}`}</small></div>
+                <Tooltip title={gl02Activity.latest_transaction ? (
+                  <div>
+                    <div>Nội dung gốc: {gl02Activity.latest_transaction.remark || '—'}</div>
+                    <div>Tham chiếu: {gl02Activity.latest_transaction.reference || '—'}</div>
+                    <div>Ghi Nợ: {fullMoney(gl02Activity.latest_transaction.debit_amount)}</div>
+                    <div>Ghi Có: {fullMoney(gl02Activity.latest_transaction.credit_amount)}</div>
+                  </div>
+                ) : 'Chưa có nội dung giao dịch GL02'}>
+                  <div>
+                    <Text>Giao dịch TKTT gần nhất</Text>
+                    <strong>{dateTimeLabel(latestGlTransactionAt)}</strong>
+                    <small>{gl02Activity.latest_transaction
+                      ? `${gl02Activity.latest_transaction.direction_label || 'Giao dịch'} ${fullMoney(gl02Activity.latest_transaction.amount)} · ${gl02Activity.latest_transaction.description || gl02Activity.latest_transaction.remark || 'Chưa có diễn giải'}`
+                      : `Không có GL02 hợp lệ tại ${profileBranch ? `CN ${profileBranch}` : 'phạm vi đang xem'}`}</small>
+                  </div>
                 </Tooltip>
                 <div><Text>TK/sổ đang hoạt động</Text><strong>{depositData.analytics?.active || 0}</strong><small>{demandAccountCount} TKTT · {termAccountCount} TGCKH</small></div>
                 <div><Text>Mới / tất toán</Text><strong>{depositData.analytics?.new || 0} / {depositData.analytics?.closed || 0}</strong><small>trong kỳ</small></div>

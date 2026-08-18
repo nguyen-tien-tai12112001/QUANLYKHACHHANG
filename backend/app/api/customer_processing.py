@@ -1612,6 +1612,42 @@ def get_rr01_handled_risk(
     }
 
 
+def describe_gl02_transaction(remark: str | None, debit_amount, credit_amount) -> dict:
+    """Diễn giải GL02; chiều giao dịch luôn căn cứ số tiền, không đoán từ REMARK."""
+    normalized = " ".join(str(remark or "").strip().lower().split())
+    descriptions = (
+        ("arrear commission for deposits", "Thu phí dịch vụ tiền gửi/truy thu phí tiền gửi"),
+        ("capitalisation for deposits", "Nhập lãi tiền gửi vào tài khoản"),
+        ("loan repayment", "Thanh toán khoản vay"),
+        ("withdrawal banknet atm", "Rút tiền tại ATM BankNet"),
+        ("visa banknet cash transaction withdrawal", "Rút tiền mặt qua thẻ Visa/BankNet"),
+        ("purchase banknet pos", "Thanh toán mua hàng qua POS BankNet"),
+        ("time deposit open", "Mở tiền gửi có kỳ hạn"),
+        ("time deposit auto close", "Tất toán tự động tiền gửi có kỳ hạn"),
+        ("phi dich vu agribank plus", "Thu phí dịch vụ Agribank Plus"),
+        ("phi tin nhan ott", "Thu phí tin nhắn OTT Agribank Plus"),
+        ("phi dv sms banking", "Thu phí SMS Banking"),
+    )
+    description = next((label for marker, label in descriptions if marker in normalized), None)
+    debit = float(debit_amount or 0)
+    credit = float(credit_amount or 0)
+    if debit > 0 and credit <= 0:
+        direction, direction_label, amount = "debit", "Ghi Nợ", debit
+    elif credit > 0 and debit <= 0:
+        direction, direction_label, amount = "credit", "Ghi Có", credit
+    elif debit > 0 and credit > 0:
+        direction, direction_label, amount = "both", "Có cả Nợ và Có", None
+    else:
+        direction, direction_label, amount = "none", "Không phát sinh tiền", 0
+    return {
+        "direction": direction,
+        "direction_label": direction_label,
+        "amount": serialize_value(amount),
+        "description": description or (str(remark).strip() if remark else "Chưa có nội dung giao dịch"),
+        "description_translated": bool(description),
+    }
+
+
 @router.get("/gl02-account-activity")
 def get_gl02_account_activity(
     period_key: str = Query(...), ma_kh: str = Query(...), branch_code: str | None = None,
@@ -1703,6 +1739,11 @@ def get_gl02_account_activity(
         })
     latest_transaction = None
     if latest_row:
+        transaction_meaning = describe_gl02_transaction(
+            latest_row.remark,
+            latest_row.debit_amount,
+            latest_row.credit_amount,
+        )
         latest_transaction = {
             "transaction_at": serialize_value(latest_row.created_datetime or latest_row.transaction_date),
             "transaction_date": serialize_value(latest_row.transaction_date),
@@ -1712,6 +1753,7 @@ def get_gl02_account_activity(
             "transaction_code": latest_row.transaction_code,
             "debit_amount": serialize_value(latest_row.debit_amount),
             "credit_amount": serialize_value(latest_row.credit_amount),
+            **transaction_meaning,
         }
     return {
         "period_key": period_key, "ma_kh": ma_kh, "daily": daily,
