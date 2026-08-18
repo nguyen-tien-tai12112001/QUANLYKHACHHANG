@@ -1919,7 +1919,24 @@
 .c360-profile-scope-banner .c360-applied-scope { margin: 0; background: rgb(255 255 255 / 72%); }
 .c360-metric-source { color: #8f3151 !important; font-size: 10px !important; font-weight: 650; }
 
+.c360-kpi-drill-filters {
+  display: grid;
+  grid-template-columns: minmax(280px, 1.7fr) minmax(130px, .65fr) minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 12px;
+  background: linear-gradient(115deg, #fff8f5, #f4f8ff);
+  border: 1px solid #eadde2;
+  border-radius: 12px;
+}
+
+.c360-kpi-drill-filters .ant-input-affix-wrapper,
+.c360-kpi-drill-filters .ant-input-group-addon .ant-btn,
+.c360-kpi-drill-filters > .ant-btn { height: 38px; }
+
 @media (max-width: 980px) {
   .c360-applied-scope, .c360-profile-scope-banner { grid-template-columns: 1fr; flex-direction: column; align-items: flex-start; }
   .c360-applied-scope > div { justify-content: flex-start; }
+  .c360-kpi-drill-filters { grid-template-columns: 1fr 1fr; }
+  .c360-kpi-drill-filters > :first-child { grid-column: 1 / -1; }
 }

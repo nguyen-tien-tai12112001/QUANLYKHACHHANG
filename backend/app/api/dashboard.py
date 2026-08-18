@@ -6,7 +6,7 @@ from time import monotonic
 from fastapi import APIRouter, Depends, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
-from sqlalchemy import and_, case, desc, func, or_, text
+from sqlalchemy import and_, case, desc, func, literal, or_, text
 from sqlalchemy.orm import Query as OrmQuery, Session
 from sqlalchemy.orm import aliased
 
@@ -1103,6 +1103,11 @@ def dashboard_business_drilldown(
     period_key: str = Query(...),
     metric: str = Query(default="deposit"),
     detail_keyword: str | None = Query(default=None),
+    detail_branch_code: str | None = Query(default=None),
+    detail_customer_type: str | None = Query(default=None),
+    detail_officer: str | None = Query(default=None),
+    sort_by: str | None = Query(default=None),
+    sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=500),
     filters: dict = Depends(_advanced_filters),
@@ -1115,7 +1120,40 @@ def dashboard_business_drilldown(
     query = query.filter(_business_drilldown_condition(model, metric))
     if detail_keyword:
         pattern = f"%{detail_keyword.strip()}%"
-        query = query.filter(or_(model.ma_kh.ilike(pattern), model.ten_kh.ilike(pattern)))
+        keyword_conditions = [
+            model.ma_kh.ilike(pattern), model.ten_kh.ilike(pattern),
+            model.ma_cb.ilike(pattern), model.ten_can_bo.ilike(pattern),
+        ]
+        if model is CustomerPeriodProfile:
+            keyword_conditions.append(model.ma_kh.in_(
+                db.query(CustomerPeriodBranchDetail.ma_kh).filter(
+                    CustomerPeriodBranchDetail.period_key == period_key,
+                    or_(
+                        CustomerPeriodBranchDetail.ma_cb.ilike(pattern),
+                        CustomerPeriodBranchDetail.ten_can_bo.ilike(pattern),
+                    ),
+                )
+            ))
+        query = query.filter(or_(*keyword_conditions))
+    if detail_branch_code:
+        branch_column = model.branch_code if model is CustomerPeriodBranchDetail else model.primary_branch_code
+        query = query.filter(branch_column == detail_branch_code.strip())
+    if detail_customer_type:
+        query = query.filter(model.loai_khach_hang == detail_customer_type.strip())
+    if detail_officer:
+        officer_pattern = f"%{detail_officer.strip()}%"
+        officer_conditions = [model.ma_cb.ilike(officer_pattern), model.ten_can_bo.ilike(officer_pattern)]
+        if model is CustomerPeriodProfile:
+            officer_conditions.append(model.ma_kh.in_(
+                db.query(CustomerPeriodBranchDetail.ma_kh).filter(
+                    CustomerPeriodBranchDetail.period_key == period_key,
+                    or_(
+                        CustomerPeriodBranchDetail.ma_cb.ilike(officer_pattern),
+                        CustomerPeriodBranchDetail.ten_can_bo.ilike(officer_pattern),
+                    ),
+                )
+            ))
+        query = query.filter(or_(*officer_conditions))
     total = query.with_entities(func.count(func.distinct(model.ma_kh))).scalar() or 0
     fee_expr = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
     risk_expr = func.coalesce(model.dprr_chung_lk, 0) + func.coalesce(model.dprr_cuthe_lk, 0)
@@ -1146,8 +1184,24 @@ def dashboard_business_drilldown(
         getattr(model, "du_no_xlrr", func.cast(0, model.so_du_tien_vay.type)).label("written_off"),
         (model.branch_code if model is CustomerPeriodBranchDetail else model.primary_branch_code).label("branch_code"),
         model.ma_cb, model.ten_can_bo,
+        (CustomerPeriodProfile.branch_details if model is CustomerPeriodProfile else literal(None)).label("branch_details"),
     )
-    if metric == "all":
+    sort_columns = {
+        "branch": model.branch_code if model is CustomerPeriodBranchDetail else model.primary_branch_code,
+        "customer": model.ten_kh,
+        "deposit": model.so_du_tien_gui,
+        "casa": model.so_du_tgtt_binh_quan,
+        "loan": model.so_du_tien_vay,
+        "fee": fee_expr,
+        "officer": model.ten_can_bo,
+    }
+    selected_sort = sort_columns.get(sort_by or "")
+    if selected_sort is not None:
+        selected_query = selected_query.order_by(
+            selected_sort.asc().nullslast() if sort_dir == "asc" else selected_sort.desc().nullslast(),
+            model.ma_kh,
+        )
+    elif metric == "all":
         selected_query = selected_query.order_by(
             desc(case((func.coalesce(model.so_du_tien_gui, 0) > 0, 1), else_=0)),
             desc(case((func.coalesce(model.so_du_tien_vay, 0) > 0, 1), else_=0)),
@@ -1159,12 +1213,24 @@ def dashboard_business_drilldown(
     else:
         selected_query = selected_query.order_by(desc(order_expr), model.ma_kh)
     selected = selected_query.offset((page - 1) * page_size).limit(page_size).all()
-    items = [{
-        "ma_kh": row[0], "ten_kh": row[1], "customer_type": row[2],
-        "deposit": float(row[3] or 0), "casa": float(row[4] or 0), "loan": float(row[5] or 0),
-        "fee": float(row[6] or 0), "provision": float(row[7] or 0), "service_count": int(row[8] or 0),
-        "written_off": float(row[9] or 0), "branch_code": row[10], "officer_code": row[11], "officer_name": row[12],
-    } for row in selected]
+    items = []
+    for row in selected:
+        officer_code, officer_name = row[11], row[12]
+        if not officer_code and not officer_name and isinstance(row[13], list):
+            primary_detail = next((
+                item for item in row[13]
+                if str(item.get("branch_code") or "").strip() == str(row[10] or "").strip()
+            ), None)
+            if primary_detail:
+                officer_code = primary_detail.get("ma_cb") or primary_detail.get("officer_employee_code")
+                officer_name = primary_detail.get("ten_can_bo")
+        items.append({
+            "ma_kh": row[0], "ten_kh": row[1], "customer_type": row[2],
+            "deposit": float(row[3] or 0), "casa": float(row[4] or 0), "loan": float(row[5] or 0),
+            "fee": float(row[6] or 0), "provision": float(row[7] or 0), "service_count": int(row[8] or 0),
+            "written_off": float(row[9] or 0), "branch_code": row[10],
+            "officer_code": officer_code, "officer_name": officer_name,
+        })
     if metric.startswith("service:"):
         label = f"Khách hàng đang dùng {SERVICE_LABELS.get(metric.split(':', 1)[1], metric)}"
     elif metric.startswith("no_service:"):

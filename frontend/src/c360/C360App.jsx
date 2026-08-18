@@ -99,6 +99,12 @@ const primaryBranchLabel = (row = {}) => row.primary_branch_code
   || row.managing_branch_code
   || String(row.branch_codes || '').replaceAll(';', ',').split(',').map((item) => item.trim()).find(Boolean)
   || 'Chưa xác định';
+const customerTypeLabel = (value) => {
+  const raw = String(value || '').trim();
+  if (!raw) return 'Chưa phân loại';
+  if (/^\d+$/.test(raw)) return `Chưa cấu hình (${raw})`;
+  return raw.replace(/c\?\s*vốn ĐT nước ngoài/gi, 'có vốn ĐT nước ngoài');
+};
 const changePercent = (current, previous) => Number(previous) ? ((Number(current) - Number(previous)) / Number(previous)) * 100 : 0;
 const dateLabel = (value) => value ? new Date(`${value}T00:00:00`).toLocaleDateString('vi-VN') : '—';
 const dateTimeLabel = (value) => value ? new Date(value).toLocaleString('vi-VN') : 'Chưa phát sinh';
@@ -822,7 +828,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         <Avatar size={48} className="demo-profile-avatar">{viewedCustomer.ten_kh?.charAt(0) || 'K'}</Avatar>
         <div>
           <Text className="c360-profile-kicker">HỒ SƠ KHÁCH HÀNG 360° · KỲ {periodLabel(periodKey)}</Text>
-          <Space wrap><Title level={2}>{viewedCustomer.ten_kh || 'Chưa có tên khách hàng'}</Title><Tag color="blue">{viewedCustomer.loai_khach_hang || 'Chưa phân loại'}</Tag><Tag color="success">ĐANG HOẠT ĐỘNG</Tag>{profileLoading ? <Tag color="processing">Đang đồng bộ hồ sơ…</Tag> : null}</Space>
+          <Space wrap><Title level={2}>{viewedCustomer.ten_kh || 'Chưa có tên khách hàng'}</Title><Tag color="blue">{customerTypeLabel(viewedCustomer.loai_khach_hang)}</Tag><Tag color="success">ĐANG HOẠT ĐỘNG</Tag>{profileLoading ? <Tag color="processing">Đang đồng bộ hồ sơ…</Tag> : null}</Space>
           <div className="demo-profile-meta"><span>Mã KH lõi: {viewedCustomer.ma_kh}</span><span>{viewedCustomer.telephone || 'Chưa có điện thoại'}</span><span>CBQL: {viewedCustomer.ten_can_bo || viewedCustomer.ma_cb || '—'}</span></div>
         </div>
         <Space className="c360-profile-actions" wrap>
@@ -861,7 +867,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
           label: 'Thông tin khách hàng',
           children: <Descriptions bordered column={2} size="small" items={[
             { key: 'code', label: 'Mã khách hàng', children: <Text strong copyable={{ text: viewedCustomer.ma_kh }}>{viewedCustomer.ma_kh}</Text> },
-            { key: 'type', label: 'Loại khách hàng', children: viewedCustomer.loai_khach_hang || 'Chưa có dữ liệu' },
+            { key: 'type', label: 'Loại khách hàng', children: customerTypeLabel(viewedCustomer.loai_khach_hang) },
             { key: 'branches', label: 'Các chi nhánh', children: viewedCustomer.branch_codes || 'Chưa có dữ liệu' },
             { key: 'pgds', label: 'Các phòng/PGD', children: profileBranch
               ? (selectedBranchDetail?.ten_pgd || 'Chưa xác định phòng/PGD')
@@ -1311,8 +1317,11 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
   const [alertLoading, setAlertLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
+  const [blockLoading, setBlockLoading] = useState({ overview: true, deposit: true, risk: true, income: true, branches: true, alerts: true, changes: true });
   const [kpiDrill, setKpiDrill] = useState({ open: false, metric: '', label: '', items: [], total: 0, totalValue: 0, page: 1, validation: null });
   const [kpiDrillLoading, setKpiDrillLoading] = useState(false);
+  const [kpiDrillFilters, setKpiDrillFilters] = useState({ keyword: '', branch: '', customerType: '', officer: '', sortBy: '', sortDir: 'desc' });
+  const [kpiDrillDraft, setKpiDrillDraft] = useState({ keyword: '', branch: '', customerType: '', officer: '' });
   const [error, setError] = useState('');
 
   const load = useCallback(async () => {
@@ -1325,6 +1334,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     setReadiness(null);
     setTopCustomers([]);
     setTopChanges({});
+    setBlockLoading({ overview: true, deposit: true, risk: true, income: true, branches: true, alerts: true, changes: true });
     setError('');
     const previousPeriod = context.periods[context.periods.findIndex((item) => item.period_key === periodKey) + 1]?.period_key;
     let primaryLoaded = false;
@@ -1344,36 +1354,49 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       setLoading(false);
       setDetailLoading(true);
       const background = { hideGlobalLoading: true, timeout: 60_000 };
-      const requests = await Promise.allSettled([
-        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', page_size: 8 }, ...background }),
-        client.get('/dashboard/insights', { params: profileParams, ...background }),
+      const requestPromises = [
+        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', page_size: 8 }, ...background })
+          .then((response) => { setTopCustomers(Array.isArray(response.data) ? response.data : response.data?.items || []); return response; }),
+        client.get('/dashboard/insights', { params: profileParams, ...background })
+          .then((response) => {
+            setInsights(response.data);
+            setBlockLoading((current) => ({ ...current, overview: false, deposit: false, alerts: false }));
+            return response;
+          }),
         previousPeriod
           ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: periodKey, previous_period: previousPeriod }, ...background })
           : Promise.resolve({ data: null }),
-        client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false }, ...background }),
+        client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false }, ...background })
+          .then((response) => {
+            setAnalytics(response.data);
+            setData((current) => ({ ...current, service_penetration: response.data?.services || current?.service_penetration || [] }));
+            setBlockLoading((current) => ({ ...current, risk: false, income: false, branches: false }));
+            return response;
+          }),
         client.get('/imports/source-readiness', { params: { period_key: periodKey }, ...background }).catch(() => ({ data: null })),
-      ]);
+      ];
+      const requests = await Promise.allSettled(requestPromises);
       const value = (index) => requests[index].status === 'fulfilled' ? requests[index].value?.data : null;
-      if (value(0)) setTopCustomers(Array.isArray(value(0)) ? value(0) : value(0)?.items || []);
-      if (value(1)) setInsights(value(1));
       if (value(2)) setComparison(value(2));
-      if (value(3)) {
-        setAnalytics(value(3));
-        setData((current) => ({ ...current, service_penetration: value(3)?.services || current?.service_penetration || [] }));
-      }
       if (value(4)) setReadiness(value(4));
       const failedCount = requests.filter((item) => item.status === 'rejected').length;
       if (failedCount) message.warning(`${failedCount} khối phân tích chưa tải được; KPI chính vẫn sử dụng bình thường.`);
       client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true }, ...background })
         .then(({ data: detail }) => setTopChanges(detail?.top_changes || {}))
-        .catch(() => setTopChanges({}));
+        .catch(() => setTopChanges({}))
+        .finally(() => setBlockLoading((current) => ({ ...current, changes: false })));
     } catch (requestError) {
       const detail = requestError.response?.data?.detail || requestError.message || 'Không thể kết nối API';
       if (primaryLoaded) message.warning(`Một số phân tích nền chưa tải xong: ${detail}`);
       else setError(detail);
+      setBlockLoading((current) => ({ ...current, changes: false }));
     } finally {
       setLoading(false);
       setDetailLoading(false);
+      setBlockLoading((current) => ({
+        ...current, overview: false, deposit: false, risk: false,
+        income: false, branches: false, alerts: false,
+      }));
     }
   }, [branchCode, context.periods, periodKey, pgdCode, profileParams, refreshKey]);
 
@@ -1415,12 +1438,21 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
     }
   };
 
-  const loadKpiDrilldown = async (metric, page = 1) => {
+  const loadKpiDrilldown = async (metric, page = 1, filterOverrides = null) => {
+    const activeFilters = filterOverrides ? { ...kpiDrillFilters, ...filterOverrides } : kpiDrillFilters;
     setKpiDrillLoading(true);
     setKpiDrill((current) => ({ ...current, open: true, metric, page, validation: null }));
     try {
       const { data: response } = await client.get('/dashboard/business-drilldown', {
-        params: { ...profileParams, metric, page, page_size: 20 },
+        params: {
+          ...profileParams, metric, page, page_size: 20,
+          detail_keyword: activeFilters.keyword || undefined,
+          detail_branch_code: activeFilters.branch || undefined,
+          detail_customer_type: activeFilters.customerType || undefined,
+          detail_officer: activeFilters.officer || undefined,
+          sort_by: activeFilters.sortBy || undefined,
+          sort_dir: activeFilters.sortDir || 'desc',
+        },
       });
       const currentKpis = data?.kpis || {};
       const rules = {
@@ -1437,13 +1469,29 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       const valueOk = rule.expectedValue == null || Math.abs(actualValue - rule.expectedValue) <= tolerance;
       const scopeOk = (!profileParams.branch_code || response?.scope?.branch_code === profileParams.branch_code)
         && (!profileParams.pgd_code || response?.scope?.pgd_code === profileParams.pgd_code);
-      const validation = { ok: countOk && valueOk && scopeOk, countOk, valueOk, scopeOk, ...rule, actualCount, actualValue };
+      const hasLocalFilters = Boolean(activeFilters.keyword || activeFilters.branch || activeFilters.customerType || activeFilters.officer);
+      const validation = hasLocalFilters ? null : { ok: countOk && valueOk && scopeOk, countOk, valueOk, scopeOk, ...rule, actualCount, actualValue };
       setKpiDrill({ open: true, metric, label: response?.label, items: response?.items || [], total: actualCount, totalValue: actualValue, page, validation });
+      setKpiDrillFilters(activeFilters);
     } catch (requestError) {
       message.error(requestError.response?.data?.detail || 'Không tải được danh sách khách hàng của chỉ tiêu');
     } finally {
       setKpiDrillLoading(false);
     }
+  };
+
+  const openKpiDrilldown = (metric) => {
+    const empty = { keyword: '', branch: '', customerType: '', officer: '', sortBy: '', sortDir: 'desc' };
+    setKpiDrillFilters(empty);
+    setKpiDrillDraft({ keyword: '', branch: '', customerType: '', officer: '' });
+    loadKpiDrilldown(metric, 1, empty);
+  };
+
+  const applyKpiDrillFilters = () => loadKpiDrilldown(kpiDrill.metric, 1, kpiDrillDraft);
+  const resetKpiDrillFilters = () => {
+    const empty = { keyword: '', branch: '', customerType: '', officer: '', sortBy: '', sortDir: 'desc' };
+    setKpiDrillDraft({ keyword: '', branch: '', customerType: '', officer: '' });
+    loadKpiDrilldown(kpiDrill.metric, 1, empty);
   };
 
   const loadAlertPage = async (page) => {
@@ -1469,21 +1517,26 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       <small>{note}</small>
     </div>
   );
+  const kpiHasLocalFilters = Boolean(
+    kpiDrillFilters.keyword || kpiDrillFilters.branch
+    || kpiDrillFilters.customerType || kpiDrillFilters.officer,
+  );
   return (
     <div className="demo-page c360-customer-page c360-executive-dashboard">
       <div className="c360-dashboard-context"><Space><span className="is-live" /><Text strong>Kỳ {periodLabel(periodKey)}</Text><Text type="secondary">Dữ liệu trực tiếp từ database</Text>{loading ? <Tag color="processing">Đang tính các KPI…</Tag> : detailLoading ? <Tag color="processing">Các khối phân tích đang tải riêng…</Tag> : <Tag color="success">Đã cập nhật đầy đủ</Tag>}</Space><Text type="secondary">Bấm KPI để xem đúng danh sách tạo ra chỉ tiêu</Text></div>
       <AppliedScopeBanner params={profileParams} total={kpis.total_customers} />
       <Row gutter={[16, 16]} className={loading ? 'c360-kpi-row is-loading' : 'c360-kpi-row'}>
-        <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng khách hàng" value={Number(kpis.total_customers || 0).toLocaleString('vi-VN')} current={compare.customers?.current ?? kpis.total_customers} previous={compare.customers?.previous} icon={<TeamOutlined />} tone="blue" note={`${comparison?.new_customers || 0} mới · ${comparison?.lost_customers || 0} rời kỳ`} onClick={() => loadKpiDrilldown('all')} explanation={{ formula: 'Đếm duy nhất mã KH lõi trong tập CIF đã xử lý', source: 'CustomerPeriodProfile / Kho CIF', unit: 'Khách hàng' }} /></Col>
-        <Col xs={24} sm={12} xl={6}><RealMetric title="Tiền gửi CKH" value={compactMoney(kpis.total_deposit)} current={compare.deposit?.current ?? kpis.total_deposit} previous={compare.deposit?.previous} icon={<WalletOutlined />} tone="green" note="Tổng số dư cuối kỳ" onClick={() => loadKpiDrilldown('term_deposit')} explanation={{ formula: 'Tổng số dư tiền gửi có kỳ hạn cuối kỳ, quy đổi VNĐ', source: 'PF14; tỷ giá tham chiếu DP01' }} /></Col>
-        <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng dư nợ" value={compactMoney(kpis.total_loan)} current={compare.loan?.current ?? kpis.total_loan} previous={compare.loan?.previous} icon={<BankOutlined />} tone="red" note="Tổng dư nợ khách hàng" onClick={() => loadKpiDrilldown('loan')} explanation={{ formula: 'Tổng dư nợ ngắn hạn + trung dài hạn + thấu chi', source: 'PF10/LN01; tỷ giá tham chiếu DP01' }} /></Col>
-        <Col xs={24} sm={12} xl={6}><RealMetric title="TGTT bình quân" value={compactMoney(kpis.total_casa)} current={compare.casa?.current ?? kpis.total_casa} previous={compare.casa?.previous} icon={<BarChartOutlined />} tone="gold" note={`${kpis.no_service_count || 0} KH chưa dùng dịch vụ`} onClick={() => loadKpiDrilldown('casa')} explanation={{ formula: 'Tổng số dư bình quân tài khoản thanh toán trong tháng', source: 'PF14/DP01; quy đổi VNĐ' }} /></Col>
+        <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng khách hàng" value={Number(kpis.total_customers || 0).toLocaleString('vi-VN')} current={compare.customers?.current ?? kpis.total_customers} previous={compare.customers?.previous} icon={<TeamOutlined />} tone="blue" note={`${comparison?.new_customers || 0} mới · ${comparison?.lost_customers || 0} rời kỳ`} onClick={() => openKpiDrilldown('all')} explanation={{ formula: 'Đếm duy nhất mã KH lõi trong tập CIF đã xử lý', source: 'CustomerPeriodProfile / Kho CIF', unit: 'Khách hàng' }} /></Col>
+        <Col xs={24} sm={12} xl={6}><RealMetric title="Tiền gửi CKH" value={compactMoney(kpis.total_deposit)} current={compare.deposit?.current ?? kpis.total_deposit} previous={compare.deposit?.previous} icon={<WalletOutlined />} tone="green" note="Tổng số dư cuối kỳ" onClick={() => openKpiDrilldown('term_deposit')} explanation={{ formula: 'Tổng số dư tiền gửi có kỳ hạn cuối kỳ, quy đổi VNĐ', source: 'PF14; tỷ giá tham chiếu DP01' }} /></Col>
+        <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng dư nợ" value={compactMoney(kpis.total_loan)} current={compare.loan?.current ?? kpis.total_loan} previous={compare.loan?.previous} icon={<BankOutlined />} tone="red" note="Tổng dư nợ khách hàng" onClick={() => openKpiDrilldown('loan')} explanation={{ formula: 'Tổng dư nợ ngắn hạn + trung dài hạn + thấu chi', source: 'PF10/LN01; tỷ giá tham chiếu DP01' }} /></Col>
+        <Col xs={24} sm={12} xl={6}><RealMetric title="TGTT bình quân" value={compactMoney(kpis.total_casa)} current={compare.casa?.current ?? kpis.total_casa} previous={compare.casa?.previous} icon={<BarChartOutlined />} tone="gold" note={`${kpis.no_service_count || 0} KH chưa dùng dịch vụ`} onClick={() => openKpiDrilldown('casa')} explanation={{ formula: 'Tổng số dư bình quân tài khoản thanh toán trong tháng', source: 'PF14/DP01; quy đổi VNĐ' }} /></Col>
       </Row>
       <Tabs className="c360-dashboard-view-tabs" activeKey={dashboardView} onChange={setDashboardView} items={[{ key: 'results', label: 'Kết quả kỳ' }, { key: 'alerts', label: <span>Cần xử lý <Tag color="error">{Number(abnormal.total || 0).toLocaleString('vi-VN')}</Tag></span> }]} />
       {dashboardView === 'results' && <>
       <Card
         title="Tổng quan khách hàng"
         className="demo-panel demo-section c360-dashboard-overview"
+        loading={blockLoading.overview}
         extra={<Button type="link" onClick={onGoCustomers}>Mở danh sách C360</Button>}
       >
         <div className="c360-dashboard-stat-grid is-four">
@@ -1495,7 +1548,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       </Card>
       <Row gutter={[16, 16]} className="demo-section">
         <Col xs={24} xl={12}>
-          <Card title="Tiền gửi và dòng tiền" className="demo-panel c360-dashboard-domain">
+          <Card title="Tiền gửi và dòng tiền" className="demo-panel c360-dashboard-domain" loading={blockLoading.deposit}>
             <div className="c360-dashboard-stat-grid">
               {insightMetric('Tổng tiền gửi', compactMoney(deposit.total), `${depositChangeRate >= 0 ? '+' : ''}${depositChangeRate.toFixed(1)}% so kỳ trước`, depositChangeRate >= 0 ? 'is-green' : 'is-red')}
               {insightMetric('Biến động số dư', compactMoney(deposit.change), `Kỳ trước ${compactMoney(deposit.previous_total)}`, Number(deposit.change || 0) >= 0 ? 'is-green' : 'is-red')}
@@ -1507,7 +1560,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       </Row>
       <Row gutter={[16, 16]} className="demo-section">
         <Col xs={24} xl={12}>
-          <Card title="Rủi ro tín dụng & XLRR" className="demo-panel c360-dashboard-domain">
+          <Card title="Rủi ro tín dụng & XLRR" className="demo-panel c360-dashboard-domain" loading={blockLoading.risk}>
             <div className="c360-dashboard-stat-grid">
               {insightMetric('DPRR chung trong tháng', compactMoney(executiveRisk.general_period), `Lũy kế ${compactMoney(executiveRisk.general_accumulated)}`, 'is-blue')}
               {insightMetric('DPRR cụ thể trong tháng', compactMoney(executiveRisk.specific_period), `Lũy kế ${compactMoney(executiveRisk.specific_accumulated)}`, 'is-red')}
@@ -1517,7 +1570,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           </Card>
         </Col>
         <Col xs={24} xl={12}>
-          <Card title="Thu nhập phí & sản phẩm" className="demo-panel c360-dashboard-domain">
+          <Card title="Thu nhập phí & sản phẩm" className="demo-panel c360-dashboard-domain" loading={blockLoading.income}>
             <div className="c360-dashboard-stat-grid">
               {insightMetric('Tổng phí ghi nhận', compactMoney(executiveIncome.total_fee), 'Tổng các nguồn phí hiện có', 'is-green')}
               {(executiveIncome.fees || []).slice(0, 3).map((item, index) => insightMetric(item.label, compactMoney(item.value), 'Theo công thức nghiệp vụ cấu hình', ['is-blue', 'is-purple', 'is-gold'][index]))}
@@ -1525,7 +1578,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           </Card>
         </Col>
       </Row>
-      <Card title="Kết quả theo chi nhánh" className="demo-panel demo-section" extra={<Tooltip title="Mỗi dòng tổng hợp số khách hàng và các chỉ tiêu phát sinh tại chi nhánh trong kỳ, theo đúng phạm vi bộ lọc chung."><Text type="secondary">Cách tính: tổng hợp theo quan hệ KH–chi nhánh</Text></Tooltip>}>
+      <Card title="Kết quả theo chi nhánh" className="demo-panel demo-section" loading={blockLoading.branches} extra={<Tooltip title="Mỗi dòng tổng hợp số khách hàng và các chỉ tiêu phát sinh tại chi nhánh trong kỳ, theo đúng phạm vi bộ lọc chung."><Text type="secondary">Cách tính: tổng hợp theo quan hệ KH–chi nhánh</Text></Tooltip>}>
         <Table size="small" rowKey="branch_code" pagination={false} dataSource={analytics?.branches || []} scroll={{ x: 880 }} columns={[
           { title: 'Chi nhánh', dataIndex: 'branch_code', fixed: 'left', width: 110, render: (value) => <Text strong>{value}</Text> },
           { title: 'Khách hàng', dataIndex: 'customers', align: 'right', render: (value) => Number(value || 0).toLocaleString('vi-VN') },
@@ -1538,7 +1591,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       </>}
       {dashboardView === 'alerts' && <>
       <div className="c360-dashboard-section-title is-warning"><div><Text className="demo-eyebrow">CẦN XỬ LÝ</Text><Title level={4}>Cảnh báo và biến động cần rà soát</Title></div><Text type="secondary">Bấm khách hàng để mở hồ sơ C360</Text></div>
-      <Card title="Khách hàng có biến động bất thường" className="demo-panel demo-section">
+      <Card title="Khách hàng có biến động bất thường" className="demo-panel demo-section" loading={blockLoading.alerts}>
         <div className="c360-anomaly-summary">
           <Tag color="error">Tiền gửi giảm mạnh: {Number(abnormal.deposit_drop_count || 0).toLocaleString('vi-VN')}</Tag>
           <Tag color="warning">Dư nợ tăng nhanh: {Number(abnormal.loan_increase_count || 0).toLocaleString('vi-VN')}</Tag>
@@ -1567,7 +1620,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           ]}
         />
       </Card>
-      <Card title="Top biến động trong kỳ" className="demo-panel demo-section">
+      <Card title="Top biến động trong kỳ" className="demo-panel demo-section" loading={blockLoading.changes}>
         <Tabs items={[
           ['deposit_increase', 'Tăng tiền gửi'], ['deposit_decrease', 'Giảm tiền gửi'], ['loan_increase', 'Tăng dư nợ'], ['fee', 'Thu phí lớn'],
         ].map(([key, label]) => ({ key, label, children: <Table size="small" rowKey="ma_kh" pagination={false} dataSource={topChanges[key] || []} onRow={(row) => ({ onClick: () => openInsightCustomer(row) })} rowClassName="demo-clickable-row" scroll={{ x: 820 }} columns={[
@@ -1649,15 +1702,33 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       </>}
       <Drawer width="min(1120px, 96vw)" open={kpiDrill.open} onClose={() => setKpiDrill((current) => ({ ...current, open: false }))} title={`${kpiDrill.label || 'Khách hàng tạo ra chỉ tiêu'} · Kỳ ${periodLabel(periodKey)}`}>
         <AppliedScopeBanner params={profileParams} total={kpiDrill.total} />
-        <Alert type={!kpiDrill.validation ? 'info' : kpiDrill.validation.ok ? 'success' : 'error'} showIcon message={!kpiDrill.validation ? 'Đang đối soát KPI với danh sách…' : kpiDrill.validation.ok ? 'Đối soát KPI và danh sách: KHỚP' : 'Đối soát KPI và danh sách: CÓ CHÊNH LỆCH'} description={<div><span>{kpiDrill.total.toLocaleString('vi-VN')} khách hàng · Tổng giá trị {fullMoney(kpiDrill.totalValue)}</span><br /><span>Công thức: {kpiDrill.validation?.formula || 'Theo chỉ tiêu'} · Nguồn: {kpiDrill.validation?.source || 'CustomerPeriodProfile'} · Đơn vị: {kpiDrill.validation?.unit || 'VNĐ'}</span>{kpiDrill.validation && !kpiDrill.validation.ok ? <><br /><strong>{!kpiDrill.validation.scopeOk ? 'Phạm vi chi nhánh/phòng không khớp. ' : ''}{!kpiDrill.validation.countOk ? `Số KH kỳ vọng ${kpiDrill.validation.expectedCount}, thực tế ${kpiDrill.validation.actualCount}. ` : ''}{!kpiDrill.validation.valueOk ? `Giá trị kỳ vọng ${fullMoney(kpiDrill.validation.expectedValue)}, thực tế ${fullMoney(kpiDrill.validation.actualValue)}.` : ''}</strong></> : null}</div>} style={{ marginBottom: 12 }} />
-        <Table loading={{ spinning: kpiDrillLoading, tip: 'Đang truy vấn khách hàng tạo ra chỉ tiêu…' }} size="small" sticky rowKey="ma_kh" dataSource={kpiDrill.items} rowClassName="demo-clickable-row" onRow={(row) => ({ onClick: () => onOpenCustomer(context.sessionData?.profiles?.items?.find((item) => item.ma_kh === row.ma_kh) || row) })} scroll={{ x: 1120, y: 'calc(100vh - 260px)' }} pagination={{ current: kpiDrill.page, pageSize: 20, total: kpiDrill.total, showSizeChanger: false, onChange: (page) => loadKpiDrilldown(kpiDrill.metric, page) }} columns={[
-          { title: 'Khách hàng', fixed: 'left', width: 250, render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text copyable>{row.ma_kh}</Text></div> },
-          { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100 },
-          { title: 'Cán bộ quản lý', dataIndex: 'officer_name', width: 190, render: (value, row) => value || row.officer_code || '—' },
-          { title: 'Tiền gửi CKH', dataIndex: 'deposit', align: 'right', width: 160, render: fullMoney },
-          { title: 'TGTT bình quân', dataIndex: 'casa', align: 'right', width: 160, render: fullMoney },
-          { title: 'Dư nợ', dataIndex: 'loan', align: 'right', width: 160, render: fullMoney },
-          { title: 'Thu phí', dataIndex: 'fee', align: 'right', width: 150, render: fullMoney },
+        <div className="c360-kpi-drill-filters">
+          <Input.Search
+            allowClear
+            value={kpiDrillDraft.keyword}
+            placeholder="Tên KH, mã KH, mã hoặc tên cán bộ"
+            onChange={(event) => setKpiDrillDraft((current) => ({ ...current, keyword: event.target.value }))}
+            onSearch={applyKpiDrillFilters}
+            enterButton="Tìm"
+          />
+          <Input allowClear value={kpiDrillDraft.branch} placeholder="Mã chi nhánh" onChange={(event) => setKpiDrillDraft((current) => ({ ...current, branch: event.target.value }))} onPressEnter={applyKpiDrillFilters} />
+          <Input allowClear value={kpiDrillDraft.customerType} placeholder="Loại khách hàng" onChange={(event) => setKpiDrillDraft((current) => ({ ...current, customerType: event.target.value }))} onPressEnter={applyKpiDrillFilters} />
+          <Input allowClear value={kpiDrillDraft.officer} placeholder="Cán bộ quản lý" onChange={(event) => setKpiDrillDraft((current) => ({ ...current, officer: event.target.value }))} onPressEnter={applyKpiDrillFilters} />
+          <Button icon={<ReloadOutlined />} onClick={resetKpiDrillFilters}>Xóa lọc</Button>
+        </div>
+        <Alert type={!kpiDrill.validation ? 'info' : kpiDrill.validation.ok ? 'success' : 'error'} showIcon message={kpiDrillLoading ? 'Đang truy vấn danh sách…' : kpiHasLocalFilters ? 'Kết quả theo bộ lọc trong bảng' : !kpiDrill.validation ? 'Đang đối soát KPI với danh sách…' : kpiDrill.validation.ok ? 'Đối soát KPI và danh sách: KHỚP' : 'Đối soát KPI và danh sách: CÓ CHÊNH LỆCH'} description={<div><span>{kpiDrill.total.toLocaleString('vi-VN')} khách hàng · Tổng giá trị {fullMoney(kpiDrill.totalValue)}</span><br /><span>{kpiHasLocalFilters ? 'Số liệu đã được tính lại trên toàn bộ tập khách hàng phù hợp, không chỉ riêng trang đang xem.' : `Công thức: ${kpiDrill.validation?.formula || 'Theo chỉ tiêu'} · Nguồn: ${kpiDrill.validation?.source || 'CustomerPeriodProfile'} · Đơn vị: ${kpiDrill.validation?.unit || 'VNĐ'}`}</span>{kpiDrill.validation && !kpiDrill.validation.ok ? <><br /><strong>{!kpiDrill.validation.scopeOk ? 'Phạm vi chi nhánh/phòng không khớp. ' : ''}{!kpiDrill.validation.countOk ? `Số KH kỳ vọng ${kpiDrill.validation.expectedCount}, thực tế ${kpiDrill.validation.actualCount}. ` : ''}{!kpiDrill.validation.valueOk ? `Giá trị kỳ vọng ${fullMoney(kpiDrill.validation.expectedValue)}, thực tế ${fullMoney(kpiDrill.validation.actualValue)}.` : ''}</strong></> : null}</div>} style={{ marginBottom: 12 }} />
+        <Table loading={{ spinning: kpiDrillLoading, tip: 'Đang truy vấn khách hàng tạo ra chỉ tiêu…' }} size="small" sticky rowKey="ma_kh" dataSource={kpiDrill.items} rowClassName="demo-clickable-row" onRow={(row) => ({ onClick: () => onOpenCustomer(context.sessionData?.profiles?.items?.find((item) => item.ma_kh === row.ma_kh) || row) })} scroll={{ x: 1240, y: 'calc(100vh - 330px)' }} pagination={{ current: kpiDrill.page, pageSize: 20, total: kpiDrill.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: (page) => loadKpiDrilldown(kpiDrill.metric, page) }} onChange={(_, __, sorter) => {
+          const next = { sortBy: sorter?.columnKey || '', sortDir: sorter?.order === 'ascend' ? 'asc' : 'desc' };
+          loadKpiDrilldown(kpiDrill.metric, 1, next);
+        }} columns={[
+          { title: 'Chi nhánh', dataIndex: 'branch_code', key: 'branch', fixed: 'left', width: 105, sorter: true },
+          { title: 'Khách hàng', dataIndex: 'ten_kh', key: 'customer', fixed: 'left', width: 250, sorter: true, render: (value, row) => <div><Text strong>{value || 'Chưa có tên'}</Text><br /><Text copyable>{row.ma_kh}</Text></div> },
+          { title: 'Tiền gửi CKH', dataIndex: 'deposit', key: 'deposit', align: 'right', width: 160, sorter: true, render: fullMoney },
+          { title: 'TGTT bình quân', dataIndex: 'casa', key: 'casa', align: 'right', width: 160, sorter: true, render: fullMoney },
+          { title: 'Dư nợ', dataIndex: 'loan', key: 'loan', align: 'right', width: 160, sorter: true, render: fullMoney },
+          { title: 'Thu phí', dataIndex: 'fee', key: 'fee', align: 'right', width: 145, sorter: true, render: fullMoney },
+          { title: 'Loại khách hàng', dataIndex: 'customer_type', width: 190, render: customerTypeLabel },
+          { title: 'Cán bộ quản lý', dataIndex: 'officer_name', key: 'officer', width: 195, sorter: true, render: (value, row) => <div><Text>{value || '—'}</Text>{row.officer_code ? <><br /><Text type="secondary">{row.officer_code}</Text></> : null}</div> },
         ]} />
       </Drawer>
     </div>
@@ -1854,7 +1925,7 @@ function RealCustomerList({ context, onOpenCustomer }) {
       render: (value, row) => (
         <div className="c360-customer-cell">
           <Avatar>{value?.charAt(0) || 'K'}</Avatar>
-          <span><Text strong>{value || 'Chưa có tên'}</Text><Text type="secondary">{row.ma_kh} · {row.loai_khach_hang || 'Chưa phân loại'}</Text></span>
+          <span><Text strong>{value || 'Chưa có tên'}</Text><Text type="secondary">{row.ma_kh} · {customerTypeLabel(row.loai_khach_hang)}</Text></span>
         </div>
       ),
     },
@@ -1970,7 +2041,7 @@ function RealCustomerList({ context, onOpenCustomer }) {
       >
         <Alert type="info" showIcon message="Có thể kết hợp nhiều điều kiện; các sản phẩm đã chọn được áp dụng đồng thời." />
         <div className="c360-filter-drawer-grid">
-          <label className="is-full"><Text strong>Loại khách hàng</Text><Select mode="multiple" allowClear value={draftFilters.customer_types} placeholder="Chọn một hoặc nhiều loại khách hàng" options={(filterOptions.customer_types || []).map((value) => ({ value, label: value }))} onChange={(value) => updateDraftFilter('customer_types', value)} /></label>
+          <label className="is-full"><Text strong>Loại khách hàng</Text><Select mode="multiple" allowClear value={draftFilters.customer_types} placeholder="Chọn một hoặc nhiều loại khách hàng" options={(filterOptions.customer_types || []).map((value) => ({ value, label: customerTypeLabel(value) }))} onChange={(value) => updateDraftFilter('customer_types', value)} /></label>
           <label className="is-full"><Text strong>Loại hình vay</Text><Select mode="multiple" allowClear value={draftFilters.loan_types} placeholder="Ngắn hạn, trung hạn, dài hạn, thấu chi..." options={(filterOptions.loan_types || []).map((value) => ({ value, label: loanTypeLabel(value) }))} onChange={(value) => updateDraftFilter('loan_types', value)} /></label>
           <label className="is-full"><Text strong>Cán bộ quản lý</Text><Select showSearch allowClear optionFilterProp="label" value={draftFilters.officer_code} placeholder="Chọn cán bộ quản lý" options={filterOptions.officers || []} onChange={(value) => updateDraftFilter('officer_code', value || null)} /></label>
           <Divider className="is-full">Quan hệ và trạng thái</Divider>
