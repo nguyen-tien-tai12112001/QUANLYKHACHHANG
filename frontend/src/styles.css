@@ -171,6 +171,15 @@ body {
   font-size: 13px;
 }
 
+.c360-empty-scope__visual > img {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border: 2px solid rgba(255,255,255,.9);
+  border-radius: 12px;
+  box-shadow: 0 4px 10px rgba(63, 8, 25, .2);
+}
+
 .c360-empty-scope__eyebrow {
   color: #8f1438;
   font-size: 11px;

@@ -2282,7 +2282,7 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
       <div className={embedded ? 'c360-embedded-content' : 'demo-content'}>
         {!periodKey ? (
           <Card className="c360-empty-scope" bordered={false}>
-            <div className="c360-empty-scope__visual"><DatabaseOutlined /><span><FilterOutlined /></span></div>
+            <div className="c360-empty-scope__visual"><img src={logoUrl} alt="Agribank" /><span><FilterOutlined /></span></div>
             <Text className="c360-empty-scope__eyebrow">KHỞI TẠO PHẠM VI PHÂN TÍCH</Text>
             <Title level={3}>Chọn dữ liệu bạn muốn xem</Title>
             <Text type="secondary" className="c360-empty-scope__description">
