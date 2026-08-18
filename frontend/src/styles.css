@@ -127,8 +127,8 @@ body {
 .global-filter-money-inputs label { display: flex; flex-direction: column; gap: 5px; color: #7a626d; font-size: 11px; font-weight: 650; }
 .global-filter-money-inputs small { min-height: 16px; color: #087153; font-size: 10px; font-style: italic; line-height: 1.35; }
 .c360-empty-scope {
-  max-width: 860px;
-  margin: clamp(36px, 7vh, 76px) auto;
+  max-width: 740px;
+  margin: clamp(24px, 5vh, 52px) auto;
   overflow: hidden;
   border: 1px solid #dfe7f0;
   border-radius: 24px;
@@ -140,29 +140,29 @@ body {
   text-align: center;
 }
 
-.c360-empty-scope .ant-card-body { padding: clamp(30px, 5vw, 52px); }
+.c360-empty-scope .ant-card-body { padding: clamp(24px, 4vw, 38px); }
 
 .c360-empty-scope__visual {
   position: relative;
   display: grid;
-  width: 76px;
-  height: 76px;
-  margin: 0 auto 18px;
+  width: 62px;
+  height: 62px;
+  margin: 0 auto 14px;
   place-items: center;
-  border-radius: 22px;
+  border-radius: 18px;
   color: #fff;
   background: linear-gradient(145deg, #8f1438, #b52b52);
   box-shadow: 0 14px 28px rgba(143, 20, 56, .23);
-  font-size: 31px;
+  font-size: 25px;
 }
 
 .c360-empty-scope__visual span {
   position: absolute;
-  right: -8px;
-  bottom: -7px;
+  right: -7px;
+  bottom: -6px;
   display: grid;
-  width: 31px;
-  height: 31px;
+  width: 27px;
+  height: 27px;
   place-items: center;
   border: 3px solid #fff;
   border-radius: 50%;
@@ -178,7 +178,7 @@ body {
   letter-spacing: 1.5px;
 }
 
-.c360-empty-scope h3.ant-typography { margin: 7px 0 8px; color: #253247; font-size: clamp(24px, 3vw, 32px); }
+.c360-empty-scope h3.ant-typography { margin: 5px 0 6px; color: #253247; font-size: clamp(21px, 2.5vw, 27px); }
 
 .c360-empty-scope__description { display: block; max-width: 650px; margin: 0 auto; font-size: 14px; line-height: 1.65; }
 
@@ -187,15 +187,15 @@ body {
   grid-template-columns: 1fr 28px 1.3fr 28px 1.15fr;
   align-items: center;
   gap: 8px;
-  margin: 30px 0;
+  margin: 22px 0;
 }
 
 .c360-empty-scope__steps > div {
   display: flex;
-  min-height: 76px;
+  min-height: 64px;
   align-items: center;
   gap: 11px;
-  padding: 13px;
+  padding: 10px;
   border: 1px solid #e1e8f0;
   border-radius: 14px;
   background: rgba(255,255,255,.82);
@@ -217,9 +217,9 @@ body {
 .c360-empty-scope__steps strong { color: #2d3a4e; font-size: 13px; }
 .c360-empty-scope__steps small { color: #738196; font-size: 11px; line-height: 1.35; }
 .c360-empty-scope__steps > i { height: 1px; background: linear-gradient(90deg, #d7dee8, #9facbc); }
-.c360-empty-scope .ant-btn-primary { min-width: 210px; height: 44px; border-radius: 12px; box-shadow: 0 8px 18px rgba(143, 20, 56, .18); }
+.c360-empty-scope .ant-btn-primary { min-width: 196px; height: 40px; border-radius: 11px; box-shadow: 0 8px 18px rgba(143, 20, 56, .18); }
 
-.c360-empty-scope__privacy { margin-top: 17px; color: #587064; font-size: 12px; }
+.c360-empty-scope__privacy { margin-top: 13px; color: #587064; font-size: 11px; }
 .c360-empty-scope__privacy .anticon { margin-right: 6px; color: #218653; }
 
 @media (max-width: 760px) {
