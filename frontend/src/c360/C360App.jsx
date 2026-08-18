@@ -747,6 +747,10 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         pgd_codes: selectedBranchDetail.ma_pgd,
         branch_count: 1,
         pgd_count: selectedBranchDetail.ma_pgd ? 1 : 0,
+        doanh_so_chuyen_tien_ve_tk: selectedBranchDetail.doanh_so_cramt || 0,
+        last_tktt_transaction_at: null,
+        tktt_inactive_days: null,
+        tktt_activity_status: null,
       }
     : customerRecord;
   const metricCustomer = { ...viewedCustomer, ...(financialMetrics.totals || {}) };
@@ -799,6 +803,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         rank_changed: Boolean(previous && previous.rank_branch !== item.rank_branch),
       };
     });
+  const demandAccountCount = Number((depositData.categories || []).find((item) => item.key === 'demand')?.account_count || 0);
+  const termAccountCount = Number((depositData.categories || []).find((item) => item.key === 'term')?.account_count || 0);
+  const latestGlTransactionAt = gl02Activity.latest_transaction?.transaction_at || (!profileBranch ? viewedCustomer.last_tktt_transaction_at : null);
   return (
     <Modal
       width="100vw"
@@ -880,9 +887,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
               <div className="c360-insight-strip">
                 <div role="button" tabIndex={0} onClick={() => setGl02Open(true)}><Text>Doanh số TKTT</Text><strong>{compactMoney(viewedCustomer.doanh_so_chuyen_tien_ve_tk)}</strong><small>GL02 · Bấm xem theo chi nhánh</small></div>
                 <Tooltip title={gl02Activity.latest_transaction?.remark || gl02Activity.latest_transaction?.reference || 'Chưa có nội dung giao dịch GL02'}>
-                  <div><Text>Giao dịch TKTT gần nhất</Text><strong>{dateTimeLabel(gl02Activity.latest_transaction?.transaction_at || viewedCustomer.last_tktt_transaction_at)}</strong><small>{gl02Activity.latest_transaction?.remark || gl02Activity.latest_transaction?.reference || 'Chưa có giao dịch GL02 hợp lệ'}</small></div>
+                  <div><Text>Giao dịch TKTT gần nhất</Text><strong>{dateTimeLabel(latestGlTransactionAt)}</strong><small>{gl02Activity.latest_transaction?.remark || gl02Activity.latest_transaction?.reference || `Không có GL02 hợp lệ tại ${profileBranch ? `CN ${profileBranch}` : 'phạm vi đang xem'}`}</small></div>
                 </Tooltip>
-                <div><Text>Đang hoạt động</Text><strong>{depositData.analytics?.active || 0}</strong><small>tài khoản</small></div>
+                <div><Text>TK/sổ đang hoạt động</Text><strong>{depositData.analytics?.active || 0}</strong><small>{demandAccountCount} TKTT · {termAccountCount} TGCKH</small></div>
                 <div><Text>Mới / tất toán</Text><strong>{depositData.analytics?.new || 0} / {depositData.analytics?.closed || 0}</strong><small>trong kỳ</small></div>
               </div>
               <section className="c360-primary-accounts">
@@ -907,7 +914,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
                         <Text className="c360-primary-account-number" copyable={account ? { text: account.account_number } : false}>
                           {account?.account_number || '—'}
                         </Text>
-                        <small>{account ? `${account.branch_code || '—'} · ${account.deposit_type_name || account.deposit_type || 'TKTT'}` : 'Không có tài khoản đủ điều kiện trong kỳ'}</small>
+                        <small>{account ? `${account.branch_code || '—'} · ${account.deposit_type_name || account.deposit_type || 'TKTT'}` : `Không có TKTT hoạt động tại ${profileBranch ? `CN ${profileBranch}` : 'phạm vi đang xem'}`}</small>
                         <div className="c360-primary-account-balances">
                           <span><small>Bình quân</small><strong>{fullMoney(account?.average_balance)}</strong></span>
                           <span><small>Cuối kỳ</small><strong>{fullMoney(account?.end_balance)}</strong></span>
