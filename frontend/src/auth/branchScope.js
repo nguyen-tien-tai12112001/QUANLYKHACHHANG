@@ -52,7 +52,7 @@ export function resolveBranchScope(user, requestedCn = null, requestedPgd = null
     };
   }
 
-  if (user.scope === SCOPES.PGD) {
+  if (user.scope === SCOPES.PGD || user.scope === SCOPES.OWN) {
     const lockedCn = homeCn;
     const lockedPgd = homePgd;
     if (requestedCn && requestedCn !== lockedCn) {

@@ -29,6 +29,8 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 class BranchPayload(BaseModel):
     branch_code: str
     branch_name: str
+    branch_level: str = "LEVEL_2"
+    parent_branch_id: int | None = None
     status: str = "active"
 
 
@@ -37,6 +39,7 @@ class DepartmentPayload(BaseModel):
     department_code: str
     department_name: str
     department_type: str | None = None
+    parent_department_id: int | None = None
     manager_user_id: int | None = None
     status: str = "active"
 
@@ -87,6 +90,31 @@ def validate_department_payload(db: Session, payload: DepartmentPayload) -> None
             raise HTTPException(status_code=400, detail="Trưởng phòng không tồn tại")
         if manager.branch_id and manager.branch_id != payload.branch_id:
             raise HTTPException(status_code=400, detail="Trưởng phòng phải thuộc cùng chi nhánh")
+    if payload.parent_department_id:
+        parent = db.query(OrgDepartment).filter(OrgDepartment.id == payload.parent_department_id).first()
+        if not parent or parent.branch_id != payload.branch_id:
+            raise HTTPException(status_code=400, detail="Đơn vị cha phải thuộc cùng chi nhánh")
+
+
+def validate_branch_payload(db: Session, payload: BranchPayload, branch_id: int | None = None) -> None:
+    branch_code = clean_code(payload.branch_code)
+    level = clean_code(payload.branch_level)
+    if level not in {"HEAD_OFFICE", "LEVEL_2"}:
+        raise HTTPException(status_code=400, detail="Loại đơn vị không hợp lệ")
+    if branch_code == "2600" and level != "HEAD_OFFICE":
+        raise HTTPException(status_code=400, detail="Đơn vị 2600 phải là Hội sở")
+    if level == "HEAD_OFFICE":
+        if payload.parent_branch_id:
+            raise HTTPException(status_code=400, detail="Hội sở không được có đơn vị cha")
+        existing = db.query(OrgBranch).filter(OrgBranch.branch_level == "HEAD_OFFICE")
+        if branch_id:
+            existing = existing.filter(OrgBranch.id != branch_id)
+        if existing.first():
+            raise HTTPException(status_code=400, detail="Hệ thống chỉ được có một Hội sở")
+    else:
+        parent = db.query(OrgBranch).filter(OrgBranch.id == payload.parent_branch_id).first()
+        if not parent or parent.branch_level != "HEAD_OFFICE":
+            raise HTTPException(status_code=400, detail="Chi nhánh loại II phải trực thuộc Hội sở")
 
 
 def validate_user_payload(db: Session, payload: UserPayload, user_id: int | None = None) -> None:
@@ -101,6 +129,27 @@ def validate_user_payload(db: Session, payload: UserPayload, user_id: int | None
         raise HTTPException(status_code=400, detail="Phòng ban không tồn tại")
     if department.branch_id != payload.branch_id:
         raise HTTPException(status_code=400, detail="Phòng ban không thuộc chi nhánh đã chọn")
+
+    role = db.query(SystemRole).filter(SystemRole.id == payload.role_id).first()
+    if not role:
+        raise HTTPException(status_code=400, detail="Nhóm quyền không tồn tại")
+    expected_scopes = {
+        "ADMIN": "province",
+        "HEAD_OFFICE_LEADER": "province",
+        "BRANCH_MANAGER": "branch",
+        "DEPARTMENT_MANAGER": "department",
+        "USER": "own",
+    }
+    expected_scope = expected_scopes.get(role.role_code)
+    if expected_scope and payload.data_scope != expected_scope:
+        raise HTTPException(status_code=400, detail=f"Vai trò {role.role_name} phải dùng phạm vi {expected_scope}")
+    if payload.is_superuser and role.role_code != "ADMIN":
+        raise HTTPException(status_code=400, detail="Chỉ vai trò Quản trị hệ thống được cấp quyền quản trị viên")
+    branch = db.query(OrgBranch).filter(OrgBranch.id == payload.branch_id).first()
+    if role.role_code == "HEAD_OFFICE_LEADER" and branch.branch_code != "2600":
+        raise HTTPException(status_code=400, detail="Lãnh đạo Hội sở phải thuộc đơn vị 2600")
+    if role.role_code == "BRANCH_MANAGER" and branch.branch_level != "LEVEL_2":
+        raise HTTPException(status_code=400, detail="Lãnh đạo chi nhánh loại II phải thuộc chi nhánh loại II")
 
     employee_code = clean_code(payload.employee_code)
     exists_employee = db.query(SystemUser).filter(SystemUser.employee_code == employee_code)
@@ -147,6 +196,10 @@ def serialize_branch(branch: OrgBranch) -> dict:
         "id": branch.id,
         "branch_code": branch.branch_code,
         "branch_name": branch.branch_name,
+        "branch_level": branch.branch_level,
+        "parent_branch_id": branch.parent_branch_id,
+        "parent_branch_code": branch.parent_branch.branch_code if branch.parent_branch else None,
+        "parent_branch_name": branch.parent_branch.branch_name if branch.parent_branch else None,
         "status": branch.status,
         "department_count": len(branch.departments),
         "user_count": len(branch.users),
@@ -162,6 +215,8 @@ def serialize_department(department: OrgDepartment) -> dict:
         "department_code": department.department_code,
         "department_name": department.department_name,
         "department_type": department.department_type,
+        "parent_department_id": department.parent_department_id,
+        "parent_department_name": department.parent_department.department_name if department.parent_department else None,
         "manager_user_id": department.manager_user_id,
         "manager_name": department.manager.full_name if department.manager else None,
         "status": department.status,
@@ -250,9 +305,12 @@ def list_branches(keyword: str | None = None, status: str | None = None, db: Ses
 
 @router.post("/branches")
 def create_branch(payload: BranchPayload, request: Request, db: Session = Depends(get_db)):
+    validate_branch_payload(db, payload)
     branch = OrgBranch(
         branch_code=clean_code(payload.branch_code),
         branch_name=payload.branch_name.strip(),
+        branch_level=clean_code(payload.branch_level),
+        parent_branch_id=payload.parent_branch_id,
         status=payload.status,
     )
     db.add(branch)
@@ -271,8 +329,11 @@ def update_branch(branch_id: int, payload: BranchPayload, request: Request, db: 
     branch = db.query(OrgBranch).filter(OrgBranch.id == branch_id).first()
     if not branch:
         raise HTTPException(status_code=404, detail="Không tìm thấy chi nhánh")
+    validate_branch_payload(db, payload, branch_id)
     branch.branch_code = clean_code(payload.branch_code)
     branch.branch_name = payload.branch_name.strip()
+    branch.branch_level = clean_code(payload.branch_level)
+    branch.parent_branch_id = payload.parent_branch_id
     branch.status = payload.status
     try:
         log_action(db, request, "update", "branch", branch.id, f"Cập nhật chi nhánh {branch.branch_code}")
@@ -289,8 +350,8 @@ def delete_branch(branch_id: int, request: Request, db: Session = Depends(get_db
     branch = db.query(OrgBranch).filter(OrgBranch.id == branch_id).first()
     if not branch:
         raise HTTPException(status_code=404, detail="Không tìm thấy chi nhánh")
-    if branch.departments or branch.users:
-        raise HTTPException(status_code=400, detail="Chi nhánh còn phòng ban hoặc người dùng, không thể xóa")
+    if branch.departments or branch.users or branch.child_branches:
+        raise HTTPException(status_code=400, detail="Đơn vị còn chi nhánh con, phòng ban hoặc người dùng, không thể xóa")
     db.delete(branch)
     log_action(db, request, "delete", "branch", branch_id, f"Xóa chi nhánh {branch.branch_code}")
     db.commit()
@@ -330,6 +391,7 @@ def create_department(payload: DepartmentPayload, request: Request, db: Session 
         department_code=clean_code(payload.department_code),
         department_name=payload.department_name.strip(),
         department_type=clean_code(payload.department_type) or None,
+        parent_department_id=payload.parent_department_id,
         manager_user_id=payload.manager_user_id,
         status=payload.status,
     )
@@ -354,6 +416,7 @@ def update_department(department_id: int, payload: DepartmentPayload, request: R
     department.department_code = clean_code(payload.department_code)
     department.department_name = payload.department_name.strip()
     department.department_type = clean_code(payload.department_type) or None
+    department.parent_department_id = payload.parent_department_id
     department.manager_user_id = payload.manager_user_id
     department.status = payload.status
     try:
@@ -371,11 +434,11 @@ def delete_department(department_id: int, request: Request, db: Session = Depend
     department = db.query(OrgDepartment).filter(OrgDepartment.id == department_id).first()
     if not department:
         raise HTTPException(status_code=404, detail="Không tìm thấy phòng ban")
-    if department.users:
+    if department.users or department.child_departments:
         department.status = "inactive"
         log_action(db, request, "deactivate", "department", department_id, f"Ngừng hoạt động phòng ban {department.department_code}")
         db.commit()
-        return {"status": "inactive", "id": department_id, "message": "Phòng ban còn người dùng nên đã chuyển sang ngừng hoạt động"}
+        return {"status": "inactive", "id": department_id, "message": "Phòng ban còn đơn vị con hoặc người dùng nên đã chuyển sang ngừng hoạt động"}
     db.delete(department)
     log_action(db, request, "delete", "department", department_id, f"Xóa phòng ban {department.department_code}")
     db.commit()

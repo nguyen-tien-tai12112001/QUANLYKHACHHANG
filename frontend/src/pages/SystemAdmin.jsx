@@ -86,8 +86,8 @@ const sectionMeta = {
 };
 
 const defaultVisibleColumns = {
-  branches: ['branch_code', 'branch_name', 'department_count', 'user_count', 'status'],
-  departments: ['branch_name', 'department_code', 'department_name', 'manager_name', 'user_count', 'status'],
+  branches: ['branch_code', 'branch_name', 'branch_level', 'parent_branch_name', 'department_count', 'user_count', 'status'],
+  departments: ['branch_name', 'department_code', 'department_name', 'department_type', 'parent_department_name', 'manager_name', 'user_count', 'status'],
   users: ['full_name', 'employee_code', 'customer_cif_code', 'ipcas_username', 'department_name', 'role_code', 'data_scope', 'is_active'],
   roles: ['role_code', 'role_name', 'description', 'user_count', 'permissions'],
 };
@@ -103,16 +103,18 @@ function activeTag(value) {
 
 function roleColor(code) {
   if (code === 'ADMIN') return 'red';
-  if (code === 'MANAGER') return 'gold';
+  if (code === 'HEAD_OFFICE_LEADER') return 'purple';
+  if (code === 'BRANCH_MANAGER') return 'volcano';
+  if (code === 'DEPARTMENT_MANAGER') return 'gold';
   return 'green';
 }
 
 function dataScopeTag(value) {
   const scopeMap = {
-    all: ['red', 'Toàn hệ thống'],
+    province: ['red', 'Toàn tỉnh'],
     branch: ['volcano', 'Theo chi nhánh'],
     department: ['gold', 'Theo phòng ban'],
-    own: ['green', 'Dữ liệu cá nhân'],
+    own: ['green', 'Khách hàng được giao'],
   };
   const [color, label] = scopeMap[value] || ['default', value || 'Chưa cấu hình'];
   return <Tag color={color}>{label}</Tag>;
@@ -148,6 +150,8 @@ function SystemAdmin({ section = 'branches' }) {
   const [form] = Form.useForm();
   const [filterForm] = Form.useForm();
   const modalBranchId = Form.useWatch('branch_id', form);
+  const modalBranchLevel = Form.useWatch('branch_level', form);
+  const modalRoleId = Form.useWatch('role_id', form);
   const filterBranchId = Form.useWatch('branch_id', filterForm);
   const filterValues = Form.useWatch([], filterForm);
 
@@ -219,6 +223,22 @@ function SystemAdmin({ section = 'branches' }) {
     return () => window.clearTimeout(timer);
   }, [JSON.stringify(filterValues || {}), section]);
 
+  useEffect(() => {
+    if (section !== 'users' || !modalRoleId) return;
+    const roleCode = roles.find((item) => item.id === modalRoleId)?.role_code;
+    const scopeByRole = {
+      ADMIN: 'province',
+      HEAD_OFFICE_LEADER: 'province',
+      BRANCH_MANAGER: 'branch',
+      DEPARTMENT_MANAGER: 'department',
+      USER: 'own',
+    };
+    if (scopeByRole[roleCode]) {
+      form.setFieldValue('data_scope', scopeByRole[roleCode]);
+      form.setFieldValue('is_superuser', roleCode === 'ADMIN');
+    }
+  }, [form, modalRoleId, roles, section]);
+
   function openCreate() {
     setEditing(null);
     form.resetFields();
@@ -227,6 +247,10 @@ function SystemAdmin({ section = 'branches' }) {
     } else if (section === 'roles') {
       form.setFieldsValue({ permission_codes: [] });
       setSelectedPermissionCodes([]);
+    } else if (section === 'branches') {
+      form.setFieldsValue({ status: 'active', branch_level: 'LEVEL_2', parent_branch_id: headOfficeOptions[0]?.value });
+    } else if (section === 'departments') {
+      form.setFieldsValue({ status: 'active', department_type: 'BRANCH_DEPARTMENT' });
     } else {
       form.setFieldsValue({ status: 'active' });
     }
@@ -350,11 +374,22 @@ function SystemAdmin({ section = 'branches' }) {
     .filter((item) => !filterBranchId || item.branch_id === filterBranchId)
     .map((item) => ({ label: `${item.employee_code || item.username} - ${item.full_name}`, value: item.id }));
   const dataScopeOptions = [
-    { label: 'Toàn hệ thống', value: 'all' },
+    { label: 'Toàn tỉnh', value: 'province' },
     { label: 'Theo chi nhánh', value: 'branch' },
     { label: 'Theo phòng ban', value: 'department' },
-    { label: 'Chỉ dữ liệu cá nhân', value: 'own' },
+    { label: 'Khách hàng được phân công', value: 'own' },
   ];
+  const branchLevelOptions = [
+    { label: 'Hội sở tỉnh', value: 'HEAD_OFFICE' },
+    { label: 'Chi nhánh loại II', value: 'LEVEL_2' },
+  ];
+  const departmentTypeOptions = [
+    { label: 'Phòng nghiệp vụ Hội sở', value: 'HEAD_OFFICE_DEPARTMENT' },
+    { label: 'Phòng nghiệp vụ chi nhánh', value: 'BRANCH_DEPARTMENT' },
+    { label: 'Phòng giao dịch', value: 'TRANSACTION_OFFICE' },
+  ];
+  const headOfficeOptions = branches.filter((item) => item.branch_level === 'HEAD_OFFICE').map((item) => ({ label: `${item.branch_code} - ${item.branch_name}`, value: item.id }));
+  const parentDepartmentOptions = modalDepartmentOptions.filter((item) => item.value !== editing?.id);
 
   const permissionGroups = useMemo(() => {
     return permissions.reduce((acc, item) => {
@@ -414,6 +449,8 @@ function SystemAdmin({ section = 'branches' }) {
       return [
         { title: 'Mã chi nhánh', dataIndex: 'branch_code', key: 'branch_code', width: 140, render: (value) => <Tag color="red">{value}</Tag> },
         { title: 'Tên chi nhánh', dataIndex: 'branch_name', key: 'branch_name' },
+        { title: 'Cấp đơn vị', dataIndex: 'branch_level', key: 'branch_level', width: 155, render: (value) => <Tag color={value === 'HEAD_OFFICE' ? 'purple' : 'blue'}>{value === 'HEAD_OFFICE' ? 'Hội sở' : 'Chi nhánh loại II'}</Tag> },
+        { title: 'Trực thuộc', dataIndex: 'parent_branch_name', key: 'parent_branch_name', width: 220, render: (value) => value || <Text type="secondary">Đơn vị gốc</Text> },
         { title: 'Phòng ban', dataIndex: 'department_count', key: 'department_count', width: 110 },
         { title: 'Cán bộ', dataIndex: 'user_count', key: 'user_count', width: 100 },
         { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 130, render: activeTag },
@@ -424,6 +461,8 @@ function SystemAdmin({ section = 'branches' }) {
         { title: 'Chi nhánh', dataIndex: 'branch_name', key: 'branch_name', width: 230, render: (value) => ellipsisText(value) },
         { title: 'Mã phòng', dataIndex: 'department_code', key: 'department_code', width: 120, align: 'center', render: (value) => <Tag color="gold">{value}</Tag> },
         { title: 'Tên phòng ban', dataIndex: 'department_name', key: 'department_name', width: 260, render: (value) => ellipsisText(value, { strong: true }) },
+        { title: 'Loại đơn vị', dataIndex: 'department_type', key: 'department_type', width: 190, render: (value) => <Tag color={value === 'TRANSACTION_OFFICE' ? 'cyan' : 'blue'}>{departmentTypeOptions.find((item) => item.value === value)?.label || value || 'Chưa phân loại'}</Tag> },
+        { title: 'Đơn vị cha', dataIndex: 'parent_department_name', key: 'parent_department_name', width: 210, render: (value) => value || <Text type="secondary">Trực thuộc chi nhánh</Text> },
         { title: 'Trưởng phòng', dataIndex: 'manager_name', key: 'manager_name', width: 190, render: (value) => ellipsisText(value, { empty: 'Chưa gán' }) },
         { title: 'Cán bộ', dataIndex: 'user_count', key: 'user_count', width: 100, align: 'right', render: (value) => <Text strong>{Number(value || 0).toLocaleString('vi-VN')}</Text> },
         { title: 'Trạng thái', dataIndex: 'status', key: 'status', width: 130, align: 'center', render: activeTag },
@@ -714,6 +753,8 @@ function SystemAdmin({ section = 'branches' }) {
             <Row gutter={12}>
               <Col span={8}><Form.Item label="Mã chi nhánh" name="branch_code" rules={[{ required: true, message: 'Nhập mã chi nhánh' }]}><Input /></Form.Item></Col>
               <Col span={16}><Form.Item label="Tên chi nhánh" name="branch_name" rules={[{ required: true, message: 'Nhập tên chi nhánh' }]}><Input /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Cấp đơn vị" name="branch_level" rules={[{ required: true, message: 'Chọn cấp đơn vị' }]}><Select options={branchLevelOptions} /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Trực thuộc Hội sở" name="parent_branch_id"><Select {...selectProps('Chọn Hội sở')} options={headOfficeOptions} disabled={modalBranchLevel === 'HEAD_OFFICE'} /></Form.Item></Col>
               <Col span={12}><Form.Item label="Trạng thái" name="status"><Select options={[{ label: 'Hoạt động', value: 'active' }, { label: 'Ngừng dùng', value: 'inactive' }]} /></Form.Item></Col>
             </Row>
           )}
@@ -731,6 +772,8 @@ function SystemAdmin({ section = 'branches' }) {
               </Col>
               <Col span={8}><Form.Item label="Mã phòng" name="department_code" rules={[{ required: true, message: 'Nhập mã phòng' }]}><Input /></Form.Item></Col>
               <Col span={16}><Form.Item label="Tên phòng ban" name="department_name" rules={[{ required: true, message: 'Nhập tên phòng ban' }]}><Input /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Loại đơn vị" name="department_type" rules={[{ required: true, message: 'Chọn loại đơn vị' }]}><Select options={departmentTypeOptions} /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Đơn vị cha (nếu có)" name="parent_department_id"><Select {...selectProps('Trực thuộc trực tiếp chi nhánh')} options={parentDepartmentOptions} /></Form.Item></Col>
               <Col span={12}><Form.Item label="Trưởng phòng" name="manager_user_id"><Select {...selectProps(modalBranchId ? 'Chọn trưởng phòng' : 'Chọn chi nhánh trước')} options={managerOptions} disabled={!modalBranchId} /></Form.Item></Col>
               <Col span={12}><Form.Item label="Trạng thái" name="status"><Select options={[{ label: 'Hoạt động', value: 'active' }, { label: 'Ngừng dùng', value: 'inactive' }]} /></Form.Item></Col>
             </Row>
@@ -755,7 +798,7 @@ function SystemAdmin({ section = 'branches' }) {
                 </Form.Item>
               </Col>
               <Col span={12}><Form.Item label="Nhóm quyền" name="role_id" rules={[{ required: true, message: 'Chọn nhóm quyền' }]}><Select {...selectProps('Chọn nhóm quyền')} options={roleOptions} /></Form.Item></Col>
-              <Col span={12}><Form.Item label="Phạm vi dữ liệu" name="data_scope"><Select options={dataScopeOptions} /></Form.Item></Col>
+              <Col span={12}><Form.Item label="Phạm vi dữ liệu" name="data_scope"><Select options={dataScopeOptions} disabled /></Form.Item></Col>
               <Col span={6}><Form.Item label="Hoạt động" name="is_active" valuePropName="checked"><Switch /></Form.Item></Col>
               <Col span={6}><Form.Item label="Quản trị viên" name="is_superuser" valuePropName="checked"><Switch /></Form.Item></Col>
             </Row>

@@ -21,9 +21,11 @@ DEFAULT_PASSWORD = "1"
 
 
 ROLE_DEFINITIONS = [
-    ("ADMIN", "Quản trị hệ thống", "Toàn quyền quản trị cấu hình, tổ chức và phân quyền."),
-    ("MANAGER", "Quản lý đơn vị", "Theo dõi dữ liệu trong phạm vi chi nhánh/phòng ban."),
-    ("USER", "Người dùng nghiệp vụ", "Sử dụng dashboard, kho dữ liệu và báo cáo."),
+    ("ADMIN", "Quản trị hệ thống", "Toàn quyền hệ thống, bao gồm quản trị dữ liệu, tổ chức và phân quyền."),
+    ("HEAD_OFFICE_LEADER", "Lãnh đạo Hội sở", "Theo dõi và điều hành toàn Hội sở cùng các chi nhánh loại II trực thuộc."),
+    ("BRANCH_MANAGER", "Lãnh đạo chi nhánh loại II", "Theo dõi toàn bộ phòng ban, PGD và khách hàng thuộc chi nhánh."),
+    ("DEPARTMENT_MANAGER", "Lãnh đạo phòng/PGD", "Theo dõi cán bộ và khách hàng thuộc phòng ban hoặc PGD được giao."),
+    ("USER", "Cán bộ quản lý khách hàng", "Theo dõi các khách hàng được phân công trực tiếp."),
 ]
 
 PERMISSION_DEFINITIONS = [
@@ -132,7 +134,7 @@ def seed_roles_permissions(db: Session) -> dict[str, SystemRole]:
 
     role_permission_codes = {
         "ADMIN": list(permissions.keys()),
-        "MANAGER": [
+        "HEAD_OFFICE_LEADER": [
             "dashboard:view",
             "dashboard:drilldown",
             "dashboard:export",
@@ -144,10 +146,26 @@ def seed_roles_permissions(db: Session) -> dict[str, SystemRole]:
             "report:view",
             "report:summarize",
         ],
+        "BRANCH_MANAGER": [
+            "dashboard:view", "dashboard:drilldown", "dashboard:export", "dashboard:health",
+            "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "customer:export",
+            "analytics:view", "analytics:export", "warehouse:view", "cif:view", "processing:view", "reconciliation:view", "mapping:view",
+            "report:view", "report:summarize", "report:export",
+        ],
+        "DEPARTMENT_MANAGER": [
+            "dashboard:view", "dashboard:drilldown", "dashboard:export",
+            "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "customer:export",
+            "analytics:view", "analytics:export", "warehouse:view", "cif:view", "processing:view", "mapping:view", "report:view", "report:export",
+        ],
         "USER": ["dashboard:view", "dashboard:drilldown", "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "analytics:view", "warehouse:view", "cif:view", "processing:view", "mapping:view", "report:view"],
     }
     for role_code, permission_codes in role_permission_codes.items():
         role = roles[role_code]
+        desired_permission_ids = {permissions[code].id for code in permission_codes}
+        db.query(SystemRolePermission).filter(
+            SystemRolePermission.role_id == role.id,
+            ~SystemRolePermission.permission_id.in_(desired_permission_ids),
+        ).delete(synchronize_session=False)
         for permission_code in permission_codes:
             exists = (
                 db.query(SystemRolePermission)

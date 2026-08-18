@@ -1415,10 +1415,14 @@ class OrgBranch(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     branch_code: Mapped[str] = mapped_column(String(10), unique=True, index=True, nullable=False)
     branch_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    branch_level: Mapped[str] = mapped_column(String(30), default="LEVEL_2", nullable=False, index=True)
+    parent_branch_id: Mapped[int | None] = mapped_column(ForeignKey("org_branches.id"), index=True)
     status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
+    parent_branch = relationship("OrgBranch", remote_side=[id], back_populates="child_branches")
+    child_branches = relationship("OrgBranch", back_populates="parent_branch")
     departments = relationship("OrgDepartment", back_populates="branch")
     users = relationship("SystemUser", back_populates="branch")
 
@@ -1431,6 +1435,7 @@ class OrgDepartment(Base):
     department_code: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     department_name: Mapped[str] = mapped_column(String(255), nullable=False)
     department_type: Mapped[str | None] = mapped_column(String(50), index=True)
+    parent_department_id: Mapped[int | None] = mapped_column(ForeignKey("org_departments.id"), index=True)
     manager_user_id: Mapped[int | None] = mapped_column(ForeignKey("system_users.id"), index=True)
     status: Mapped[str] = mapped_column(String(30), default="active", nullable=False)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -1439,6 +1444,8 @@ class OrgDepartment(Base):
     branch = relationship("OrgBranch", back_populates="departments")
     users = relationship("SystemUser", back_populates="department", foreign_keys="SystemUser.department_id")
     manager = relationship("SystemUser", foreign_keys=[manager_user_id])
+    parent_department = relationship("OrgDepartment", remote_side=[id], back_populates="child_departments", foreign_keys=[parent_department_id])
+    child_departments = relationship("OrgDepartment", back_populates="parent_department", foreign_keys=[parent_department_id])
 
     __table_args__ = (
         UniqueConstraint("branch_id", "department_code", name="uq_org_departments_branch_code"),

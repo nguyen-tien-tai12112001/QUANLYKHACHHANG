@@ -13,4 +13,5 @@ SCOPES = {
     "PROVINCE": "province",
     "BRANCH": "branch",
     "PGD": "pgd",
+    "OWN": "own",
 }

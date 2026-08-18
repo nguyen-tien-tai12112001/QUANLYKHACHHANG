@@ -33,7 +33,12 @@ def serialize_user(user: SystemUser) -> dict:
         permission_codes.append("admin")
 
     data_scope = user.data_scope or "branch"
-    scope = "province" if user.is_superuser or data_scope == "system" else "pgd" if data_scope == "department" else "branch"
+    scope = (
+        "province" if user.is_superuser or data_scope in {"all", "system", "province"}
+        else "pgd" if data_scope == "department"
+        else "own" if data_scope == "own"
+        else "branch"
+    )
     branch_code = user.branch.branch_code if user.branch else None
     department_code = user.department.department_code if user.department else None
     return {
@@ -51,11 +56,11 @@ def serialize_user(user: SystemUser) -> dict:
         "ma_cn": branch_code,
         "department": user.department.department_name if user.department else None,
         "department_code": department_code,
-        "ma_pgd": department_code if scope == "pgd" else None,
+        "ma_pgd": department_code if scope in {"pgd", "own"} else None,
         "data_scope": data_scope,
         "scope": scope,
         "allowed_branches": [branch_code] if branch_code and scope != "province" else [],
-        "allowed_pgds": [department_code] if department_code and scope == "pgd" else [],
+        "allowed_pgds": [department_code] if department_code and scope in {"pgd", "own"} else [],
         "permissions": permission_codes,
     }
 
