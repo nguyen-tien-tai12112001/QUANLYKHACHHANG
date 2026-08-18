@@ -2280,7 +2280,32 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
   const workspace = (
     <>
       <div className={embedded ? 'c360-embedded-content' : 'demo-content'}>
-        {!periodKey ? <Card className="c360-empty-scope"><Empty description="Chọn điều kiện trên bộ lọc chung và bấm Xem dữ liệu" /><Text type="secondary">Hệ thống chưa truy vấn dữ liệu nghiệp vụ để tránh tải thừa.</Text></Card> : content}
+        {!periodKey ? (
+          <Card className="c360-empty-scope" bordered={false}>
+            <div className="c360-empty-scope__visual"><DatabaseOutlined /><span><FilterOutlined /></span></div>
+            <Text className="c360-empty-scope__eyebrow">KHỞI TẠO PHẠM VI PHÂN TÍCH</Text>
+            <Title level={3}>Chọn dữ liệu bạn muốn xem</Title>
+            <Text type="secondary" className="c360-empty-scope__description">
+              Hệ thống chỉ truy vấn sau khi bạn xác nhận bộ lọc, giúp tải đúng phạm vi và tránh xử lý dữ liệu không cần thiết.
+            </Text>
+            <div className="c360-empty-scope__steps">
+              <div><b>1</b><span><strong>Chọn kỳ dữ liệu</strong><small>Điều kiện bắt buộc</small></span></div>
+              <i />
+              <div><b>2</b><span><strong>Chọn phạm vi</strong><small>Chi nhánh, phòng ban và điều kiện nâng cao</small></span></div>
+              <i />
+              <div><b>3</b><span><strong>Bấm “Xem dữ liệu”</strong><small>Áp dụng đồng bộ cho toàn bộ C360</small></span></div>
+            </div>
+            <Button
+              type="primary"
+              size="large"
+              icon={<SearchOutlined />}
+              onClick={() => document.querySelector('.global-scope-bar')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+            >
+              Đi tới bộ lọc chung
+            </Button>
+            <div className="c360-empty-scope__privacy"><CheckCircleFilled /> Chưa phát sinh truy vấn dữ liệu nghiệp vụ</div>
+          </Card>
+        ) : content}
       </div>
       <CustomerModal customer={selectedCustomer} periodKey={periodKey} initialBranchCode={branchCode} analysisParams={sharedProfileParams} currentUser={currentUser} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
     </>
