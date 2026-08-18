@@ -526,14 +526,13 @@ function CashFlowChart({ rows = [] }) {
   );
 }
 
-function RealMetric({ title, value, icon, tone, current, previous, note, onClick, explanation }) {
+function RealMetric({ title, value, icon, tone, current, previous, note, onClick, explanation, loading = false }) {
   const content = (
-    <Card className={`c360-real-metric is-${tone}`} onClick={onClick}>
+    <Card className={`c360-real-metric is-${tone}${loading ? ' is-loading' : ''}`} onClick={loading ? undefined : onClick}>
       <span>{icon}</span>
       <Text type="secondary">{title}</Text>
-      <strong>{value}</strong>
-      <Change current={current} previous={previous} />
-      <small>{note}</small>
+      {loading ? <Skeleton.Input active size="small" block /> : <strong>{value}</strong>}
+      {loading ? <small>Đang tính theo bộ lọc mới…</small> : <><Change current={current} previous={previous} /><small>{note}</small></>}
       {explanation ? <small className="c360-metric-source">ⓘ {explanation.source}</small> : null}
     </Card>
   );
@@ -778,7 +777,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     .join(' | ');
   const officerShortSummary = [...new Set(officerScope
     .filter((item) => item.ten_can_bo)
-    .map((item) => `${item.ten_can_bo} (${viewedCustomer.managing_department_name || item.officer_department_name || item.ten_pgd || 'Chưa xác định phòng'})`))]
+    .map((item) => `${item.ten_can_bo} (${item.officer_department_name || item.ten_pgd || viewedCustomer.managing_department_name || 'Chưa xác định phòng'})`))]
     .join(' | ');
   const activeProducts = trackedProducts.filter(([key]) => hasData(viewedCustomer[key]) && Number(viewedCustomer[key]) > 0);
   const totalDeposit = Number(viewedCustomer.so_du_tien_gui || 0) + Number(viewedCustomer.so_du_tgtt_binh_quan || 0);
@@ -1299,6 +1298,13 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
   const load = useCallback(async () => {
     if (!periodKey) return;
     setLoading(true);
+    setData(null);
+    setInsights(null);
+    setComparison(null);
+    setAnalytics(null);
+    setReadiness(null);
+    setTopCustomers([]);
+    setTopChanges({});
     setError('');
     const previousPeriod = context.periods[context.periods.findIndex((item) => item.period_key === periodKey) + 1]?.period_key;
     let primaryLoaded = false;
@@ -1353,7 +1359,6 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
 
   useEffect(() => { load(); }, [load]);
 
-  if (loading) return <DataLoadingState message="Đang tải các chỉ tiêu điều hành…" detail="KPI chính sẽ hiển thị trước; biểu đồ và phân tích chi tiết tiếp tục được tải ở nền." />;
   if (error) return <ErrorState error={error} onRetry={load} />;
   const kpis = data?.kpis || {};
   const compare = comparison?.summary || {};
@@ -1446,9 +1451,9 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
   );
   return (
     <div className="demo-page c360-customer-page c360-executive-dashboard">
-      <div className="c360-dashboard-context"><Space><span className="is-live" /><Text strong>Kỳ {periodLabel(periodKey)}</Text><Text type="secondary">Dữ liệu trực tiếp từ database</Text>{detailLoading ? <Tag color="processing">Đang tải biểu đồ và phân tích bổ sung…</Tag> : <Tag color="success">Đã cập nhật đầy đủ</Tag>}</Space><Text type="secondary">Bấm KPI để xem đúng danh sách tạo ra chỉ tiêu</Text></div>
+      <div className="c360-dashboard-context"><Space><span className="is-live" /><Text strong>Kỳ {periodLabel(periodKey)}</Text><Text type="secondary">Dữ liệu trực tiếp từ database</Text>{loading ? <Tag color="processing">Đang tính các KPI…</Tag> : detailLoading ? <Tag color="processing">Các khối phân tích đang tải riêng…</Tag> : <Tag color="success">Đã cập nhật đầy đủ</Tag>}</Space><Text type="secondary">Bấm KPI để xem đúng danh sách tạo ra chỉ tiêu</Text></div>
       <AppliedScopeBanner params={profileParams} total={kpis.total_customers} />
-      <Row gutter={[16, 16]}>
+      <Row gutter={[16, 16]} className={loading ? 'c360-kpi-row is-loading' : 'c360-kpi-row'}>
         <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng khách hàng" value={Number(kpis.total_customers || 0).toLocaleString('vi-VN')} current={compare.customers?.current ?? kpis.total_customers} previous={compare.customers?.previous} icon={<TeamOutlined />} tone="blue" note={`${comparison?.new_customers || 0} mới · ${comparison?.lost_customers || 0} rời kỳ`} onClick={() => loadKpiDrilldown('all')} explanation={{ formula: 'Đếm duy nhất mã KH lõi trong tập CIF đã xử lý', source: 'CustomerPeriodProfile / Kho CIF', unit: 'Khách hàng' }} /></Col>
         <Col xs={24} sm={12} xl={6}><RealMetric title="Tiền gửi CKH" value={compactMoney(kpis.total_deposit)} current={compare.deposit?.current ?? kpis.total_deposit} previous={compare.deposit?.previous} icon={<WalletOutlined />} tone="green" note="Tổng số dư cuối kỳ" onClick={() => loadKpiDrilldown('term_deposit')} explanation={{ formula: 'Tổng số dư tiền gửi có kỳ hạn cuối kỳ, quy đổi VNĐ', source: 'PF14; tỷ giá tham chiếu DP01' }} /></Col>
         <Col xs={24} sm={12} xl={6}><RealMetric title="Tổng dư nợ" value={compactMoney(kpis.total_loan)} current={compare.loan?.current ?? kpis.total_loan} previous={compare.loan?.previous} icon={<BankOutlined />} tone="red" note="Tổng dư nợ khách hàng" onClick={() => loadKpiDrilldown('loan')} explanation={{ formula: 'Tổng dư nợ ngắn hạn + trung dài hạn + thấu chi', source: 'PF10/LN01; tỷ giá tham chiếu DP01' }} /></Col>

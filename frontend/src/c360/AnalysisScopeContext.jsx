@@ -14,9 +14,10 @@ export const EMPTY_ADVANCED_SCOPE = {
 };
 
 export function AnalysisScopeProvider({ children, currentUser }) {
+  const fixedBranchCode = currentUser?.scope !== 'province' ? (currentUser?.ma_cn || currentUser?.branch_code || null) : null;
   const [periods, setPeriods] = useState([]);
   const [options, setOptions] = useState({ branches: [], pgd_options: [], officers: [], customer_types: [], loan_types: [] });
-  const [draft, setDraft] = useState({ periodKey: '', branchCode: null, pgdCode: null, advanced: EMPTY_ADVANCED_SCOPE });
+  const [draft, setDraft] = useState({ periodKey: '', branchCode: fixedBranchCode, pgdCode: null, advanced: EMPTY_ADVANCED_SCOPE });
   const [applied, setApplied] = useState(null);
   const [metadataLoading, setMetadataLoading] = useState(true);
   const [sessionVersion, setSessionVersion] = useState(0);
@@ -119,14 +120,11 @@ export function AnalysisScopeProvider({ children, currentUser }) {
       if (active) setSessionLoading(false);
       const background = { hideGlobalLoading: true };
       Promise.allSettled([
-        client.get('/dashboard/summary', { params: profileParams, ...background }),
-        client.get('/dashboard/insights', { params: profileParams, ...background }),
+      client.get('/dashboard/insights', { params: profileParams, ...background }),
         client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true }, ...background }),
-        client.get('/dashboard/business-analytics', { params: profileParams, ...background }),
-        client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false }, ...background }),
+      client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false }, ...background }),
         client.get('/dashboard/business-trends', { params: { periods: 12, branch_code: orgParams.branch_code, pgd_code: orgParams.pgd_code }, ...background }),
         client.get('/customer-processing/profile-groups', { params: profileParams, ...background }),
-        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', limit: 8 }, ...background }),
         client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' }, ...background }),
         client.get('/customer-processing/reconciliations', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined, latest_job_only: true, page: 1, page_size: 1 }, ...background }),
         client.get('/imports/source-readiness', { params: { period_key: applied.periodKey }, ...background }),
@@ -137,27 +135,31 @@ export function AnalysisScopeProvider({ children, currentUser }) {
   }, [applied, periods, sessionVersion]);
 
   const value = useMemo(() => ({
-    periods, options, draft, applied, metadataLoading, sessionVersion, sessionLoading, sessionSummary, sessionData,
-    updateDraft: (patch) => setDraft((current) => ({ ...current, ...patch })),
+    periods, options, draft, applied, metadataLoading, sessionVersion, sessionLoading, sessionSummary, sessionData, fixedBranchCode,
+    updateDraft: (patch) => setDraft((current) => ({
+      ...current,
+      ...patch,
+      branchCode: fixedBranchCode || (Object.prototype.hasOwnProperty.call(patch, 'branchCode') ? patch.branchCode : current.branchCode),
+    })),
     updateAdvanced: (patch) => setDraft((current) => ({ ...current, advanced: { ...current.advanced, ...patch } })),
     apply: () => {
       if (!draft.periodKey) return false;
       clearApiCache();
-      const next = { ...draft, advanced: { ...draft.advanced } };
+      const next = { ...draft, branchCode: fixedBranchCode || draft.branchCode, advanced: { ...draft.advanced } };
       setApplied(next);
       setSessionData(null);
       setSessionVersion((value) => value + 1);
       return true;
     },
     reset: () => {
-      setDraft({ periodKey: '', branchCode: null, pgdCode: null, advanced: EMPTY_ADVANCED_SCOPE });
+      setDraft({ periodKey: '', branchCode: fixedBranchCode, pgdCode: null, advanced: EMPTY_ADVANCED_SCOPE });
       setApplied(null);
       setSessionSummary(null);
       setSessionData(null);
       clearApiCache();
     },
     refresh: () => { clearApiCache(); setSessionVersion((value) => value + 1); },
-  }), [applied, draft, metadataLoading, options, periods, sessionVersion]);
+  }), [applied, draft, fixedBranchCode, metadataLoading, options, periods, sessionData, sessionLoading, sessionSummary, sessionVersion]);
   return <AnalysisScopeContext.Provider value={value}>{children}</AnalysisScopeContext.Provider>;
 }
 

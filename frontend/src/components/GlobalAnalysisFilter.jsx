@@ -40,7 +40,7 @@ export default function GlobalAnalysisFilter({ activeMenu }) {
   const scope = useAnalysisScope();
   const [open, setOpen] = useState(false);
   if (!C360_PAGES.has(activeMenu) || !scope) return null;
-  const { draft, applied, options, periods, metadataLoading } = scope;
+  const { draft, applied, options, periods, metadataLoading, fixedBranchCode } = scope;
   const advancedCount = Object.values(draft.advanced || {}).filter((value) => Array.isArray(value) ? value.length : value != null && value !== '').length;
   const apply = () => {
     const invalidRange = [['Tiền gửi', draft.advanced.minDeposit, draft.advanced.maxDeposit], ['Tiền vay', draft.advanced.minLoan, draft.advanced.maxLoan], ['CASA', draft.advanced.minCasa, draft.advanced.maxCasa]].find(([, min, max]) => min != null && max != null && max < min);
@@ -58,8 +58,8 @@ export default function GlobalAnalysisFilter({ activeMenu }) {
           : <span className="global-scope-status"><i />Chưa tải dữ liệu</span>}
       </div>
       <div className="global-scope-controls">
-        <label className="global-scope-field is-period"><span><CalendarOutlined /> Kỳ dữ liệu <em>*</em></span><Select loading={metadataLoading} value={draft.periodKey || undefined} placeholder="Chọn kỳ" onChange={(periodKey) => scope.updateDraft({ periodKey, branchCode: null, pgdCode: null })} options={periods.map((item) => ({ value: item.period_key, label: `${item.period_key.slice(4, 6)}/${item.period_key.slice(0, 4)}` }))} /></label>
-        <label className="global-scope-field"><span><BankOutlined /> Chi nhánh</span><Select disabled={!draft.periodKey} allowClear value={draft.branchCode || undefined} placeholder="Tất cả chi nhánh" onChange={(branchCode) => scope.updateDraft({ branchCode: branchCode || null, pgdCode: null })} options={(options.branches || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></label>
+        <label className="global-scope-field is-period"><span><CalendarOutlined /> Kỳ dữ liệu <em>*</em></span><Select loading={metadataLoading} value={draft.periodKey || undefined} placeholder="Chọn kỳ" onChange={(periodKey) => scope.updateDraft({ periodKey, branchCode: fixedBranchCode, pgdCode: null })} options={periods.map((item) => ({ value: item.period_key, label: `${item.period_key.slice(4, 6)}/${item.period_key.slice(0, 4)}` }))} /></label>
+        <label className="global-scope-field"><span><BankOutlined /> Chi nhánh</span><Select disabled={!draft.periodKey || Boolean(fixedBranchCode)} allowClear={!fixedBranchCode} value={draft.branchCode || fixedBranchCode || undefined} placeholder="Tất cả chi nhánh" onChange={(branchCode) => scope.updateDraft({ branchCode: branchCode || null, pgdCode: null })} options={(options.branches || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></label>
         <label className="global-scope-field"><span><ApartmentOutlined /> Phòng ban</span><Select disabled={!draft.periodKey || !draft.branchCode} allowClear value={draft.pgdCode || undefined} placeholder={draft.branchCode ? 'Tất cả phòng ban' : 'Chọn chi nhánh trước'} onChange={(pgdCode) => scope.updateDraft({ pgdCode: pgdCode || null })} options={(options.pgd_options || []).map((item) => ({ value: optionValue(item), label: optionLabel(item) }))} /></label>
         <div className="global-scope-actions">
           <Button className="global-scope-advanced-btn" disabled={!draft.periodKey} title={!draft.periodKey ? 'Vui lòng chọn kỳ dữ liệu trước' : 'Mở bộ lọc nâng cao'} icon={<FilterOutlined />} onClick={() => { if (!draft.periodKey) return message.warning('Vui lòng chọn kỳ dữ liệu trước khi lọc nâng cao'); setOpen(true); }}>Nâng cao{advancedCount ? <b>{advancedCount}</b> : null}</Button>

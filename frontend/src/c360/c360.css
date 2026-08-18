@@ -75,6 +75,7 @@
 .c360-dashboard-view-tabs .ant-tag { margin-inline-start: 5px; margin-inline-end: 0; }
 
 .c360-real-metric {
+  position: relative;
   height: 100%;
   cursor: pointer;
   overflow: hidden;
@@ -124,6 +125,27 @@
 .c360-real-metric.is-green { --real-color: #218653; --real-soft: #eaf7f0; }
 .c360-real-metric.is-red { --real-color: #a51f40; --real-soft: #fff0f3; }
 .c360-real-metric.is-gold { --real-color: #b97809; --real-soft: #fff6e5; }
+
+.c360-kpi-row.is-loading .c360-real-metric .ant-card-body > :not(.ant-typography:nth-child(2)) {
+  visibility: hidden;
+}
+
+.c360-kpi-row.is-loading .c360-real-metric::after {
+  content: "Đang tính theo bộ lọc mới…";
+  position: absolute;
+  inset: 48px 16px 15px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  color: var(--real-color);
+  font-size: 12px;
+  font-weight: 600;
+  background: linear-gradient(90deg, var(--real-soft) 25%, #fff 50%, var(--real-soft) 75%);
+  background-size: 200% 100%;
+  animation: c360-kpi-shimmer 1.2s linear infinite;
+}
+
+@keyframes c360-kpi-shimmer { to { background-position: -200% 0; } }
 
 .c360-dashboard-stat-grid {
   display: grid;
@@ -858,11 +880,11 @@
   transform: translateY(-2px);
 }
 
-.c360-profile-metrics .is-deposit { --profile-metric: var(--c360-success); }
-.c360-profile-metrics .is-loan { --profile-metric: var(--c360-primary); }
-.c360-profile-metrics .is-casa { --profile-metric: var(--c360-blue); }
-.c360-profile-metrics .is-product { --profile-metric: var(--c360-gold); }
-.c360-profile-metrics .is-branch { --profile-metric: #7564a8; }
+.c360-profile-metrics .is-deposit { --profile-metric: #087a4f; }
+.c360-profile-metrics .is-loan { --profile-metric: #a61942; }
+.c360-profile-metrics .is-casa { --profile-metric: #1769aa; }
+.c360-profile-metrics .is-product { --profile-metric: #c97805; }
+.c360-profile-metrics .is-branch { --profile-metric: #694ea0; }
 
 .c360-domain-metric.has-positive-value {
   border-color: #9bd8bd;
