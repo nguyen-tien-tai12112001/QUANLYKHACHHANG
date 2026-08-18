@@ -1139,14 +1139,26 @@ def dashboard_business_drilldown(
         "international_fee": model.phi_ttqt,
         "written_off": getattr(model, "du_no_xlrr", model.so_du_tien_vay),
     }.get(metric, service_expr)
-    selected = query.with_entities(
+    selected_query = query.with_entities(
         model.ma_kh, model.ten_kh, model.loai_khach_hang,
         model.so_du_tien_gui, model.so_du_tgtt_binh_quan, model.so_du_tien_vay,
         fee_expr.label("fee"), risk_expr.label("provision"), service_expr.label("service_count"),
         getattr(model, "du_no_xlrr", func.cast(0, model.so_du_tien_vay.type)).label("written_off"),
         (model.branch_code if model is CustomerPeriodBranchDetail else model.primary_branch_code).label("branch_code"),
         model.ma_cb, model.ten_can_bo,
-    ).order_by(desc(order_expr), model.ma_kh).offset((page - 1) * page_size).limit(page_size).all()
+    )
+    if metric == "all":
+        selected_query = selected_query.order_by(
+            desc(case((func.coalesce(model.so_du_tien_gui, 0) > 0, 1), else_=0)),
+            desc(case((func.coalesce(model.so_du_tien_vay, 0) > 0, 1), else_=0)),
+            desc(case((func.coalesce(model.so_du_tgtt_binh_quan, 0) > 0, 1), else_=0)),
+            desc(case((model.ten_can_bo.isnot(None), 1), else_=0)),
+            desc(func.coalesce(model.so_du_tien_gui, 0) + func.coalesce(model.so_du_tien_vay, 0) + func.coalesce(model.so_du_tgtt_binh_quan, 0)),
+            model.ma_kh,
+        )
+    else:
+        selected_query = selected_query.order_by(desc(order_expr), model.ma_kh)
+    selected = selected_query.offset((page - 1) * page_size).limit(page_size).all()
     items = [{
         "ma_kh": row[0], "ten_kh": row[1], "customer_type": row[2],
         "deposit": float(row[3] or 0), "casa": float(row[4] or 0), "loan": float(row[5] or 0),
@@ -1294,14 +1306,44 @@ def dashboard_insights(
         .limit(anomaly_page_size)
         .all()
     )
+    scoped_current = {}
+    scoped_previous = {}
+    if scope.ma_cn and anomaly_rows:
+        anomaly_customer_codes = [row.ma_kh for row, _ in anomaly_rows]
+
+        def scoped_finance(target_period):
+            if not target_period:
+                return {}
+            scoped_query = db.query(
+                CustomerPeriodBranchDetail.ma_kh,
+                func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_gui), 0),
+                func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tgtt_binh_quan), 0),
+                func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_vay), 0),
+                func.max(CustomerPeriodBranchDetail.ma_cb),
+                func.max(CustomerPeriodBranchDetail.ten_can_bo),
+            ).filter(
+                CustomerPeriodBranchDetail.period_key == target_period,
+                CustomerPeriodBranchDetail.branch_code == scope.ma_cn,
+                CustomerPeriodBranchDetail.ma_kh.in_(anomaly_customer_codes),
+            )
+            if scope.ma_pgd:
+                scoped_query = scoped_query.filter(CustomerPeriodBranchDetail.ma_pgd == scope.ma_pgd)
+            return {item[0]: item for item in scoped_query.group_by(CustomerPeriodBranchDetail.ma_kh).all()}
+
+        scoped_current = scoped_finance(period_key)
+        scoped_previous = scoped_finance(previous_period)
     anomalies = []
     for row, old in anomaly_rows:
         flags = []
-        now_deposit = float((row.so_du_tien_gui or 0) + (row.so_du_tgtt_binh_quan or 0))
-        old_deposit = float((old.so_du_tien_gui or 0) + (old.so_du_tgtt_binh_quan or 0)) if old else 0
+        current_scope_row = scoped_current.get(row.ma_kh)
+        previous_scope_row = scoped_previous.get(row.ma_kh)
+        now_deposit = float((current_scope_row[1] or 0) + (current_scope_row[2] or 0)) if current_scope_row else float((row.so_du_tien_gui or 0) + (row.so_du_tgtt_binh_quan or 0))
+        old_deposit = float((previous_scope_row[1] or 0) + (previous_scope_row[2] or 0)) if previous_scope_row else (float((old.so_du_tien_gui or 0) + (old.so_du_tgtt_binh_quan or 0)) if old else 0)
+        now_loan = float(current_scope_row[3] or 0) if current_scope_row else float(row.so_du_tien_vay or 0)
+        old_loan = float(previous_scope_row[3] or 0) if previous_scope_row else (float(old.so_du_tien_vay or 0) if old else 0)
         if old_deposit > 0 and now_deposit <= old_deposit * 0.7:
             flags.append("Tiền gửi giảm mạnh")
-        if old and float(old.so_du_tien_vay or 0) > 0 and float(row.so_du_tien_vay or 0) >= float(old.so_du_tien_vay or 0) * 1.3:
+        if old_loan > 0 and now_loan >= old_loan * 1.3:
             flags.append("Dư nợ tăng nhanh")
         now_services = sum(float(getattr(row, key) or 0) for key in ACTIVE_SERVICE_KEYS)
         old_services = sum(float(getattr(old, key) or 0) for key in ACTIVE_SERVICE_KEYS) if old else 0
@@ -1312,11 +1354,14 @@ def dashboard_insights(
             "ma_kh": row.ma_kh,
             "ten_kh": row.ten_kh,
             "primary_branch_code": row.primary_branch_code,
+            "viewing_branch_code": scope.ma_cn,
+            "viewing_officer_code": current_scope_row[4] if current_scope_row else None,
+            "viewing_officer_name": current_scope_row[5] if current_scope_row else None,
             "branch_codes": row.branch_codes,
             "deposit": now_deposit,
             "previous_deposit": old_deposit,
-            "loan": float(row.so_du_tien_vay or 0),
-            "previous_loan": float(old.so_du_tien_vay or 0) if old else 0,
+            "loan": now_loan,
+            "previous_loan": old_loan,
             "flags": flags,
         })
 

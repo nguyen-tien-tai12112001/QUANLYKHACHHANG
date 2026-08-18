@@ -82,6 +82,28 @@ const baseMenuItems = [
   },
 ];
 
+export const PAGE_PERMISSIONS = {
+  'c360-dashboard': ['dashboard:view'],
+  'c360-insights': ['dashboard:view'],
+  'c360-customers': ['customer:view'],
+  'analysis-deposit': ['analytics:view'],
+  'analysis-credit': ['analytics:view'],
+  'analysis-income': ['analytics:view'],
+  'analysis-unit': ['analytics:view'],
+  'data-warehouse': ['warehouse:view'],
+  'data-cif': ['cif:view'],
+  'customer-processing': ['processing:view'],
+  'data-sources': ['warehouse:view'],
+  'data-reconciliation': ['reconciliation:view'],
+  'data-mapping': ['mapping:view'],
+  'admin-branches': ['admin:branch:view'],
+  'admin-departments': ['admin:department:view'],
+  'admin-users': ['admin:user:view'],
+  'admin-roles': ['admin:role:view'],
+  'admin-configuration': ['admin:config:view'],
+  'admin-audit-logs': ['admin:audit:view'],
+};
+
 function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout }) {
   const analysisScope = useAnalysisScope();
   const [collapsed, setCollapsed] = useState(false);
@@ -97,9 +119,12 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
   });
   const siderWidth = collapsed ? 76 : 260;
   const parentMenu = pageMeta.parent;
-  const menuItems = useMemo(() => baseMenuItems.map((group) => ({
-    ...group,
-    children: group.children?.map((item) => (
+  const menuItems = useMemo(() => {
+    const granted = new Set(currentUser?.permissions || []);
+    const canSee = (item) => granted.has('admin') || (PAGE_PERMISSIONS[item.key] || []).some((code) => granted.has(code));
+    return baseMenuItems.map((group) => ({
+      ...group,
+      children: group.children?.filter(canSee).map((item) => (
       item.key === 'data-sources'
         ? {
           ...item,
@@ -111,8 +136,9 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
           ),
         }
         : item
-    )),
-  })), [sourceIssueCount]);
+      )),
+    })).filter((group) => group.children?.length);
+  }, [currentUser?.permissions, sourceIssueCount]);
 
   useEffect(() => {
     setOpenKeys((current) => {
@@ -209,7 +235,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
           </Space>
           <Space className="app-user" size={12}>
             <Avatar className="app-user-avatar">{currentUser?.full_name?.charAt(0) || 'C'}</Avatar>
-            <span>
+            <span className="app-user-identity">
               <Typography.Text strong>{currentUser?.full_name}</Typography.Text>
               <Typography.Text type="secondary" className="app-user-subtitle">
                 {[currentUser?.branch_code, currentUser?.role_name || 'Người dùng'].filter(Boolean).join(' · ')}

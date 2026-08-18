@@ -422,6 +422,10 @@ def _branch_finance_agg_subquery(db: Session, period_key: str, branch_code: str,
         func.max(CustomerPeriodBranchDetail.the_td_quoc_te).label("the_td_quoc_te"),
         func.max(CustomerPeriodBranchDetail.the_td_loc_viet).label("the_td_loc_viet"),
         func.max(CustomerPeriodBranchDetail.loai_khach_hang).label("loai_khach_hang"),
+        func.max(CustomerPeriodBranchDetail.ma_pgd).label("ma_pgd"),
+        func.max(CustomerPeriodBranchDetail.ten_pgd).label("ten_pgd"),
+        func.max(CustomerPeriodBranchDetail.ma_cb).label("ma_cb"),
+        func.max(CustomerPeriodBranchDetail.ten_can_bo).label("ten_can_bo"),
     ).filter(
         CustomerPeriodBranchDetail.period_key == period_key,
         CustomerPeriodBranchDetail.branch_code == branch_code.strip(),
@@ -767,6 +771,10 @@ def _branch_finance_by_ma_kh(
             agg.c.so_du_tien_vay,
             agg.c.so_du_tien_gui,
             agg.c.so_du_tgtt_binh_quan,
+            agg.c.ma_pgd,
+            agg.c.ten_pgd,
+            agg.c.ma_cb,
+            agg.c.ten_can_bo,
         )
         .filter(agg.c.ma_kh.in_(ma_khs))
         .all()
@@ -792,6 +800,7 @@ def _apply_branch_finance_to_payloads(
         [str(item.get("ma_kh") or "") for item in payloads if item.get("ma_kh")],
     )
     for item in payloads:
+        item["viewing_branch_code"] = branch_code
         fin = finance_map.get(str(item.get("ma_kh") or ""))
         if fin is None:
             item["so_du_tien_vay"] = 0
@@ -801,6 +810,14 @@ def _apply_branch_finance_to_payloads(
         item["so_du_tien_vay"] = serialize_value(fin.so_du_tien_vay)
         item["so_du_tien_gui"] = serialize_value(fin.so_du_tien_gui)
         item["so_du_tgtt_binh_quan"] = serialize_value(fin.so_du_tgtt_binh_quan)
+        item["viewing_pgd_code"] = fin.ma_pgd
+        item["viewing_pgd_name"] = fin.ten_pgd
+        item["viewing_officer_code"] = fin.ma_cb
+        item["viewing_officer_name"] = fin.ten_can_bo
+        # Trong danh sách đang xem theo đơn vị, cán bộ và PGD phải là của đúng
+        # quan hệ tại đơn vị đó; vẫn giữ primary_* để chú thích chi nhánh chính.
+        item["ma_cb"] = fin.ma_cb
+        item["ten_can_bo"] = fin.ten_can_bo
     return payloads
 
 
@@ -1601,6 +1618,19 @@ def get_gl02_account_activity(
         func.max(func.coalesce(GL02LedgerTransaction.created_datetime, func.cast(GL02LedgerTransaction.transaction_date, SQLDateTime))).label("last_transaction_at"),
     ).filter(*base_filters).group_by(GL02LedgerTransaction.customer_branch_code).order_by(GL02LedgerTransaction.customer_branch_code).all()
 
+    latest_row = (
+        db.query(GL02LedgerTransaction)
+        .filter(*base_filters)
+        .order_by(
+            desc(func.coalesce(
+                GL02LedgerTransaction.created_datetime,
+                func.cast(GL02LedgerTransaction.transaction_date, SQLDateTime),
+            )),
+            desc(GL02LedgerTransaction.id),
+        )
+        .first()
+    )
+
     history_rows = db.query(
         GL02LedgerTransaction.period_key.label("period_key"),
         ImportBatch.period_date.label("period_date"),
@@ -1646,7 +1676,22 @@ def get_gl02_account_activity(
             "last_transaction_at": serialize_value(row.last_transaction_at),
             "inactive_days": inactive_days, "activity_status": status,
         })
-    return {"period_key": period_key, "ma_kh": ma_kh, "daily": daily, "branches": branches, "history": history}
+    latest_transaction = None
+    if latest_row:
+        latest_transaction = {
+            "transaction_at": serialize_value(latest_row.created_datetime or latest_row.transaction_date),
+            "transaction_date": serialize_value(latest_row.transaction_date),
+            "branch_code": latest_row.customer_branch_code,
+            "reference": latest_row.reference,
+            "remark": latest_row.remark,
+            "transaction_code": latest_row.transaction_code,
+            "debit_amount": serialize_value(latest_row.debit_amount),
+            "credit_amount": serialize_value(latest_row.credit_amount),
+        }
+    return {
+        "period_key": period_key, "ma_kh": ma_kh, "daily": daily,
+        "branches": branches, "history": history, "latest_transaction": latest_transaction,
+    }
 
 
 @router.get("/pf10-loans")
@@ -2550,12 +2595,30 @@ def get_profile_summary(
         min_service_count=min_service_count,
         missing_phone=missing_phone,
     )
-    summary = query.with_entities(
-        func.count(CustomerPeriodProfile.id),
-        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
-        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_gui), 0),
-        func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
-    ).one()
+    if branch_code:
+        # Bộ lọc nâng cao xác định tập KH; số tiền phải lấy đúng phần quan hệ tại
+        # chi nhánh/PGD đang xem, không cộng tổng toàn tỉnh của khách đa chi nhánh.
+        customer_ids = query.with_entities(CustomerPeriodProfile.ma_kh).distinct().subquery()
+        detail_query = db.query(CustomerPeriodBranchDetail).filter(
+            CustomerPeriodBranchDetail.period_key == period_key,
+            CustomerPeriodBranchDetail.branch_code == branch_code.strip(),
+            CustomerPeriodBranchDetail.ma_kh.in_(db.query(customer_ids.c.ma_kh)),
+        )
+        if pgd_code:
+            detail_query = detail_query.filter(CustomerPeriodBranchDetail.ma_pgd == pgd_code.strip())
+        summary = detail_query.with_entities(
+            func.count(func.distinct(CustomerPeriodBranchDetail.ma_kh)),
+            func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_vay), 0),
+            func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_gui), 0),
+            func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tgtt_binh_quan), 0),
+        ).one()
+    else:
+        summary = query.with_entities(
+            func.count(CustomerPeriodProfile.id),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_vay), 0),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tien_gui), 0),
+            func.coalesce(func.sum(CustomerPeriodProfile.so_du_tgtt_binh_quan), 0),
+        ).one()
     no_service_count = query.filter(no_service_condition()).count()
     return {
         "total_customers": serialize_value(summary[0]),

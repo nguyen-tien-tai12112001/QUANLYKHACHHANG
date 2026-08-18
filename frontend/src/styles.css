@@ -938,10 +938,13 @@ body {
   margin-left: auto;
 }
 
-.app-user > span {
+.app-user-identity {
   display: inline-flex;
   flex-direction: column;
-  line-height: 1.2;
+  align-items: flex-start;
+  gap: 3px;
+  min-width: 170px;
+  line-height: 1.15;
 }
 
 .app-user-avatar {

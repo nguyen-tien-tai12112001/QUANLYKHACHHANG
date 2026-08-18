@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { notification } from 'antd';
 
 import { AuthProvider } from './auth';
-import MainLayout from './components/MainLayout';
+import MainLayout, { PAGE_PERMISSIONS } from './components/MainLayout';
 import GlobalApiLoading from './components/GlobalApiLoading';
 import ImportData from './pages/ImportData';
 import CustomerProcessing from './pages/CustomerProcessing';
@@ -124,12 +124,17 @@ function LegacyApp() {
     return <Login onLogin={handleLogin} />;
   }
 
+  const granted = new Set(currentUser.permissions || []);
+  const requiredPermissions = PAGE_PERMISSIONS[activeMenu] || [];
+  const authorizedMenu = granted.has('admin') || requiredPermissions.some((code) => granted.has(code));
+  const visibleMenu = authorizedMenu ? activeMenu : 'c360-dashboard';
+
   return (
     <AuthProvider>
       <AnalysisScopeProvider currentUser={currentUser}>
         <GlobalApiLoading />
-        <MainLayout activeMenu={activeMenu} onMenuChange={handleMenuChange} currentUser={currentUser} onLogout={handleLogout}>
-          {pages[activeMenu] || pages['c360-dashboard']}
+        <MainLayout activeMenu={visibleMenu} onMenuChange={handleMenuChange} currentUser={currentUser} onLogout={handleLogout}>
+          {pages[visibleMenu] || pages['c360-dashboard']}
         </MainLayout>
       </AnalysisScopeProvider>
     </AuthProvider>

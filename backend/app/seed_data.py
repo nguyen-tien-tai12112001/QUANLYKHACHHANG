@@ -141,23 +141,21 @@ def seed_roles_permissions(db: Session) -> dict[str, SystemRole]:
             "dashboard:health",
             "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "customer:export",
             "analytics:view", "analytics:export",
-            "warehouse:view",
-            "cif:view", "processing:view", "reconciliation:view", "reconciliation:review", "mapping:view",
             "report:view",
             "report:summarize",
         ],
         "BRANCH_MANAGER": [
             "dashboard:view", "dashboard:drilldown", "dashboard:export", "dashboard:health",
             "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "customer:export",
-            "analytics:view", "analytics:export", "warehouse:view", "cif:view", "processing:view", "reconciliation:view", "mapping:view",
+            "analytics:view", "analytics:export",
             "report:view", "report:summarize", "report:export",
         ],
         "DEPARTMENT_MANAGER": [
             "dashboard:view", "dashboard:drilldown", "dashboard:export",
             "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "customer:export",
-            "analytics:view", "analytics:export", "warehouse:view", "cif:view", "processing:view", "mapping:view", "report:view", "report:export",
+            "analytics:view", "analytics:export", "report:view", "report:export",
         ],
-        "USER": ["dashboard:view", "dashboard:drilldown", "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "analytics:view", "warehouse:view", "cif:view", "processing:view", "mapping:view", "report:view"],
+        "USER": ["dashboard:view", "dashboard:drilldown", "customer:view", "customer:profile:view", "customer:deposit:view", "customer:credit:view", "customer:income:view", "analytics:view", "report:view"],
     }
     for role_code, permission_codes in role_permission_codes.items():
         role = roles[role_code]
@@ -268,17 +266,21 @@ def seed_organization(db: Session, default_password_hash: str) -> None:
             "full_name": full_name or username,
             "branch_id": branch.id if branch else None,
             "department_id": department.id if department else None,
-            "role_id": role_user.id if role_user else None,
             "is_active": True,
         }
 
         if not user:
-            user = SystemUser(password_hash=default_password_hash, **payload)
+            user = SystemUser(
+                password_hash=default_password_hash,
+                role_id=role_user.id if role_user else None,
+                **payload,
+            )
             db.add(user)
         else:
             for key, value in payload.items():
                 setattr(user, key, value)
-            user.password_hash = default_password_hash
+            # Đồng bộ danh mục cán bộ không được xóa vai trò đã phân công hoặc
+            # đặt lại mật khẩu mỗi lần backend khởi động.
 
 
 def seed_admin(db: Session, roles: dict[str, SystemRole], default_password_hash: str) -> None:

@@ -540,7 +540,7 @@ function RealMetric({ title, value, icon, tone, current, previous, note, onClick
   return explanation ? <Tooltip title={<div><strong>{explanation.formula}</strong><br />Nguồn: {explanation.source}<br />Đơn vị: {explanation.unit || 'VNĐ'}<br />Cập nhật theo kỳ đang chọn.</div>}>{content}</Tooltip> : content;
 }
 
-function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams, open, onClose }) {
+function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams, currentUser, open, onClose }) {
   const modalAnchorRef = useRef(null);
   const [history, setHistory] = useState([]);
   const [historyError, setHistoryError] = useState('');
@@ -754,6 +754,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
   const primaryBranchDetail = branchDetails.find(
     (item) => item.branch_code === customerRecord.primary_branch_code,
   );
+  const canSwitchCustomerScope = currentUser?.scope === 'province';
   // Ở chế độ toàn KH chỉ hiển thị cán bộ của chi nhánh chính. Cán bộ tại chi nhánh
   // khác chỉ xuất hiện khi người dùng chọn đúng quan hệ chi nhánh đó.
   const officerScope = profileBranch && selectedBranchDetail
@@ -823,21 +824,22 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
           <Select
             className="c360-profile-scope"
             value={profileBranch || 'all'}
+            disabled={!canSwitchCustomerScope}
             onChange={(value) => {
               const next = value === 'all' ? null : value;
               setProfileBranch(next);
               setLoanBranch(null);
             }}
-            options={[
+            options={canSwitchCustomerScope ? [
               { value: 'all', label: 'Toàn bộ quan hệ · Tất cả chi nhánh' },
               ...[...new Set(branchDetails.map((item) => item.branch_code).filter(Boolean))]
                 .map((value) => ({ value, label: `Chỉ quan hệ tại CN ${value}` })),
-            ]}
+            ] : [{ value: profileBranch || initialBranchCode, label: `Quan hệ tại CN ${profileBranch || initialBranchCode}` }]}
           />
         </Space>
       </div>
       <div className="c360-profile-scope-banner">
-        <div><BankOutlined /><span><strong>{profileBranch ? `Đang xem riêng quan hệ tại Chi nhánh ${profileBranch}` : 'Đang xem toàn bộ quan hệ của khách hàng'}</strong><small>{profileBranch ? 'Tất cả số tiền, tài khoản, LDS, cán bộ và lịch sử bên dưới chỉ thuộc chi nhánh này.' : 'Số liệu được cộng từ tất cả chi nhánh khách hàng có quan hệ.'}</small></span></div>
+        <div><BankOutlined /><span><strong>{profileBranch ? `Đang xem riêng quan hệ tại Chi nhánh ${profileBranch}` : 'Đang xem toàn bộ quan hệ của khách hàng'}</strong><small>{profileBranch ? `Tất cả số tiền, tài khoản, LDS và cán bộ bên dưới chỉ thuộc chi nhánh này. Chi nhánh chính toàn hồ sơ: ${customerRecord.primary_branch_code || 'chưa xác định'}.` : 'Số liệu được cộng từ tất cả chi nhánh khách hàng có quan hệ.'}</small></span></div>
         <AppliedScopeBanner params={{ ...(analysisParams || {}), branch_code: profileBranch || analysisParams?.branch_code }} />
       </div>
       <Row gutter={[14, 14]} className="demo-quick-metrics c360-profile-metrics">
@@ -878,9 +880,8 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
             <div className="c360-credit-pane">
               <div className="c360-insight-strip">
                 <div role="button" tabIndex={0} onClick={() => setGl02Open(true)}><Text>Doanh số TKTT</Text><strong>{compactMoney(viewedCustomer.doanh_so_chuyen_tien_ve_tk)}</strong><small>GL02 · Bấm xem theo chi nhánh</small></div>
-                <div><Text>Giao dịch TKTT gần nhất</Text><strong>{dateTimeLabel(viewedCustomer.last_tktt_transaction_at)}</strong><small>{viewedCustomer.tktt_inactive_days == null ? 'Chưa có giao dịch GL02 hợp lệ' : `Cách ngày cuối kỳ ${viewedCustomer.tktt_inactive_days} ngày`}</small></div>
-                <Tooltip title="Đang hoạt động: giao dịch gần nhất cách ngày cuối kỳ không quá 7 ngày. Ít hoạt động: từ 8–30 ngày. Không hoạt động: trên 30 ngày hoặc chưa có giao dịch hợp lệ.">
-                  <div><Text>Trạng thái TKTT</Text><strong><Tag color={(activityLabels[viewedCustomer.tktt_activity_status] || activityLabels.inactive)[1]}>{(activityLabels[viewedCustomer.tktt_activity_status] || activityLabels.inactive)[0]}</Tag></strong><small>Hover để xem cách xác định</small></div>
+                <Tooltip title={gl02Activity.latest_transaction?.remark || gl02Activity.latest_transaction?.reference || 'Chưa có nội dung giao dịch GL02'}>
+                  <div><Text>Giao dịch TKTT gần nhất</Text><strong>{dateTimeLabel(gl02Activity.latest_transaction?.transaction_at || viewedCustomer.last_tktt_transaction_at)}</strong><small>{gl02Activity.latest_transaction?.remark || gl02Activity.latest_transaction?.reference || 'Chưa có giao dịch GL02 hợp lệ'}</small></div>
                 </Tooltip>
                 <div><Text>Đang hoạt động</Text><strong>{depositData.analytics?.active || 0}</strong><small>tài khoản</small></div>
                 <div><Text>Mới / tất toán</Text><strong>{depositData.analytics?.new || 0} / {depositData.analytics?.closed || 0}</strong><small>trong kỳ</small></div>
@@ -1316,10 +1317,9 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
       primaryLoaded = true;
       setLoading(false);
       setDetailLoading(true);
-      const background = { hideGlobalLoading: true };
-      const [summaryRes, profilesRes, insightsRes, comparisonRes, analyticsRes, readinessRes] = await Promise.all([
-        client.get('/dashboard/summary', { params: profileParams, ...background }),
-        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', limit: 8 }, ...background }),
+      const background = { hideGlobalLoading: true, timeout: 60_000 };
+      const requests = await Promise.allSettled([
+        client.get('/customer-processing/profiles', { params: { ...profileParams, sort_by: 'so_du_tien_gui', sort_dir: 'desc', page_size: 8 }, ...background }),
         client.get('/dashboard/insights', { params: profileParams, ...background }),
         previousPeriod
           ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: periodKey, previous_period: previousPeriod }, ...background })
@@ -1327,12 +1327,17 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
         client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false }, ...background }),
         client.get('/imports/source-readiness', { params: { period_key: periodKey }, ...background }).catch(() => ({ data: null })),
       ]);
-      setData(summaryRes.data);
-      setInsights(insightsRes.data);
-      setTopCustomers(Array.isArray(profilesRes.data) ? profilesRes.data : profilesRes.data?.items || []);
-      setComparison(comparisonRes.data);
-      setAnalytics(analyticsRes.data);
-      setReadiness(readinessRes.data);
+      const value = (index) => requests[index].status === 'fulfilled' ? requests[index].value?.data : null;
+      if (value(0)) setTopCustomers(Array.isArray(value(0)) ? value(0) : value(0)?.items || []);
+      if (value(1)) setInsights(value(1));
+      if (value(2)) setComparison(value(2));
+      if (value(3)) {
+        setAnalytics(value(3));
+        setData((current) => ({ ...current, service_penetration: value(3)?.services || current?.service_penetration || [] }));
+      }
+      if (value(4)) setReadiness(value(4));
+      const failedCount = requests.filter((item) => item.status === 'rejected').length;
+      if (failedCount) message.warning(`${failedCount} khối phân tích chưa tải được; KPI chính vẫn sử dụng bình thường.`);
       client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true }, ...background })
         .then(({ data: detail }) => setTopChanges(detail?.top_changes || {}))
         .catch(() => setTopChanges({}));
@@ -1527,7 +1532,8 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers }) {
           locale={{ emptyText: 'Không phát hiện khách hàng có biến động vượt ngưỡng trong kỳ' }}
           columns={[
             { title: 'Khách hàng', fixed: 'left', width: 240, render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text type="secondary">{row.ma_kh}</Text></div> },
-            { title: 'Chi nhánh chính', width: 125, render: (_, row) => primaryBranchLabel(row) },
+            { title: 'Quan hệ đang xem', width: 155, render: (_, row) => <div><Text strong>{row.viewing_branch_code || branchCode || primaryBranchLabel(row)}</Text>{row.primary_branch_code && row.primary_branch_code !== (row.viewing_branch_code || branchCode) ? <><br /><Tag color="blue">CN chính: {row.primary_branch_code}</Tag></> : null}</div> },
+            { title: 'Cán bộ tại đơn vị', width: 175, render: (_, row) => row.viewing_officer_name || row.viewing_officer_code || '—' },
             { title: 'Cảnh báo', dataIndex: 'flags', width: 270, render: (flags = []) => <Space size={[4, 4]} wrap>{flags.map((flag) => <Tag key={flag} color={flag.includes('Tiền gửi') ? 'error' : flag.includes('Dư nợ') ? 'warning' : 'processing'}>{flag}</Tag>)}</Space> },
             { title: 'Tiền gửi kỳ này', dataIndex: 'deposit', align: 'right', width: 145, render: compactMoney },
             { title: 'Tiền gửi kỳ trước', dataIndex: 'previous_deposit', align: 'right', width: 145, render: compactMoney },
@@ -1824,7 +1830,7 @@ function RealCustomerList({ context, onOpenCustomer }) {
         </div>
       ),
     },
-    { key: 'location', title: 'Chi nhánh/PGD chính', width: 190, render: (_, row) => <div><Text>{primaryBranchLabel(row)}</Text><br /><Text type="secondary">{row.primary_pgd_name || row.primary_pgd_code || 'Chưa xác định'}</Text></div> },
+    { key: 'location', title: branchCode ? 'Quan hệ đang xem' : 'Chi nhánh/PGD chính', width: 210, render: (_, row) => <div><Text strong>{row.viewing_branch_code || primaryBranchLabel(row)}</Text><br /><Text type="secondary">{row.viewing_pgd_name || row.viewing_pgd_code || row.primary_pgd_name || row.primary_pgd_code || 'Chưa xác định'}</Text>{row.viewing_branch_code && row.primary_branch_code && row.viewing_branch_code !== row.primary_branch_code ? <><br /><Tag color="blue">CN chính: {row.primary_branch_code}</Tag></> : null}</div> },
     { key: 'officer', title: 'Cán bộ quản lý', dataIndex: 'ten_can_bo', width: 180, render: (value, row) => <div><Text>{value || row.ma_cb || '—'}</Text>{value && row.ma_cb ? <><br /><Text type="secondary">{row.ma_cb}</Text></> : null}</div> },
     { key: 'deposit', title: 'Tiền gửi CKH', dataIndex: 'so_du_tien_gui', align: 'right', width: 145, render: compactMoney },
     { key: 'casa', title: 'TGTT bình quân', dataIndex: 'so_du_tgtt_binh_quan', align: 'right', width: 145, render: compactMoney },
@@ -2264,7 +2270,7 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
       <div className={embedded ? 'c360-embedded-content' : 'demo-content'}>
         {!periodKey ? <Card className="c360-empty-scope"><Empty description="Chọn điều kiện trên bộ lọc chung và bấm Xem dữ liệu" /><Text type="secondary">Hệ thống chưa truy vấn dữ liệu nghiệp vụ để tránh tải thừa.</Text></Card> : content}
       </div>
-      <CustomerModal customer={selectedCustomer} periodKey={periodKey} initialBranchCode={branchCode} analysisParams={sharedProfileParams} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
+      <CustomerModal customer={selectedCustomer} periodKey={periodKey} initialBranchCode={branchCode} analysisParams={sharedProfileParams} currentUser={currentUser} open={Boolean(selectedCustomer)} onClose={() => setSelectedCustomer(null)} />
     </>
   );
 
