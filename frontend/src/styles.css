@@ -650,26 +650,26 @@ body {
 }
 
 /* Chuẩn hóa mọi bảng Ant Design: phần thân không được phủ lên tiêu đề khi cuộn. */
-.app-content .ant-table-wrapper {
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-wrapper {
   min-width: 0;
   max-width: 100%;
 }
 
-.app-content .ant-table-container {
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-container {
   max-width: 100%;
   isolation: isolate;
 }
 
-.app-content .ant-table-header,
-.app-content .ant-table-sticky-holder {
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-header,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-sticky-holder {
   position: relative;
   z-index: 12 !important;
   background: #f7f9fc !important;
   box-shadow: 0 1px 0 #dfe6ef;
 }
 
-.app-content .ant-table-thead > tr > th,
-.app-content .ant-table-thead > tr > td {
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-thead > tr > th,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-thead > tr > td {
   position: relative;
   z-index: 4;
   overflow: hidden;
@@ -678,28 +678,64 @@ body {
   vertical-align: middle !important;
 }
 
-.app-content .ant-table-thead > tr > .ant-table-cell-fix-left,
-.app-content .ant-table-thead > tr > .ant-table-cell-fix-right,
-.app-content .ant-table-sticky-holder .ant-table-cell-fix-left,
-.app-content .ant-table-sticky-holder .ant-table-cell-fix-right {
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-thead > tr > .ant-table-cell-fix-left,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-thead > tr > .ant-table-cell-fix-right,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-sticky-holder .ant-table-cell-fix-left,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-sticky-holder .ant-table-cell-fix-right {
   z-index: 16 !important;
 }
 
-.app-content .ant-table-body,
-.app-content .ant-table-content {
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-body,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-content {
   position: relative;
   z-index: 1;
   max-width: 100%;
-  scrollbar-gutter: stable;
+  max-height: min(390px, calc(100vh - 310px)) !important;
+  overflow-x: auto !important;
+  overflow-y: auto !important;
+  scrollbar-color: #9ba9ba #edf1f5;
+  scrollbar-gutter: stable both-edges;
+  scrollbar-width: auto;
 }
 
-.app-content .ant-table-tbody > tr > .ant-table-cell-fix-left,
-.app-content .ant-table-tbody > tr > .ant-table-cell-fix-right {
+/* Bảng không khai báo scroll.y vẫn giữ tiêu đề khi cuộn trong khung 5–6 dòng. */
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-content .ant-table-thead {
+  position: sticky;
+  top: 0;
+  z-index: 14;
+}
+
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-body::-webkit-scrollbar,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-content::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-body::-webkit-scrollbar-track,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-content::-webkit-scrollbar-track {
+  border-radius: 8px;
+  background: #edf1f5;
+}
+
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-body::-webkit-scrollbar-thumb,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-content::-webkit-scrollbar-thumb {
+  border: 3px solid #edf1f5;
+  border-radius: 8px;
+  background: #9ba9ba;
+}
+
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-body::-webkit-scrollbar-thumb:hover,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-content::-webkit-scrollbar-thumb:hover {
+  background: #66778c;
+}
+
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-tbody > tr > .ant-table-cell-fix-left,
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-tbody > tr > .ant-table-cell-fix-right {
   z-index: 3 !important;
   background: #fff;
 }
 
-.app-content .ant-table-cell-scrollbar {
+:where(.app-content, .ant-modal, .ant-drawer) .ant-table-cell-scrollbar {
   z-index: 15 !important;
   background: #f7f9fc !important;
 }
