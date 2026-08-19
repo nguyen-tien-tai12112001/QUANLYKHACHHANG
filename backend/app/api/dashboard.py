@@ -13,10 +13,12 @@ from sqlalchemy.orm import aliased
 from app.auth.branch_scope import BranchScope
 from app.auth.dependencies import get_branch_scope
 from app.database import get_db
+from app.analysis_cache import get_shared_analysis_cache, set_shared_analysis_cache
 from app.models import (
     CN05CustomerService,
     CustomerPeriodBranchDetail,
     CustomerPeriodProfile,
+    CustomerProcessingJob,
     LN01Loan,
     PF14AccountBalance,
     ReportSourceStatus,
@@ -82,7 +84,21 @@ def _matching_customer_ids(db: Session, period_key: str, scope: BranchScope, fil
 
 
 def _restrict_to_matching_customers(query, model, customer_ids):
-    return query.filter(model.ma_kh.in_(customer_ids))
+    return query if customer_ids is None else query.filter(model.ma_kh.in_(customer_ids))
+
+
+def _customer_filter_ids(db: Session, period_key: str, scope: BranchScope, filters: dict):
+    """Avoid a redundant self-IN subquery for the common province/no-filter view."""
+    if not scope.ma_cn and not scope.ma_pgd and not filters:
+        return None
+    return _matching_customer_ids(db, period_key, scope, filters)
+
+
+def _analysis_data_version(db: Session, period_key: str | None = None) -> int:
+    query = db.query(func.max(CustomerProcessingJob.id)).filter(CustomerProcessingJob.status == "success")
+    if period_key:
+        query = query.filter(CustomerProcessingJob.period_key <= period_key)
+    return int(query.scalar() or 0)
 
 # Đồng bộ với quy tắc cơ hội bán chéo / loại KH thực tế từ DP01.
 RETAIL_CUSTOMER_TYPES = ("Cá nhân", "KHCN")
@@ -715,14 +731,16 @@ def dashboard_summary(
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
-    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+    # Heavy dashboard requests are queued by the client; allow PostgreSQL to
+    # parallelize each aggregate instead of forcing a slow single-worker scan.
+    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 2"))
     filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
     cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:{filter_key}")
     cached = _SUMMARY_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
 
-    customer_ids = _matching_customer_ids(db, period_key, scope, filters)
+    customer_ids = _customer_filter_ids(db, period_key, scope, filters)
     if scope.ma_cn:
         payload = _summary_from_branch(db, period_key, scope.ma_cn, scope.ma_pgd, customer_ids)
     else:
@@ -820,14 +838,19 @@ def dashboard_business_analytics(
     db: Session = Depends(get_db),
 ):
     """Compact aggregate shared by the executive dashboard and four domain pages."""
-    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 2"))
     filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
     cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:{int(include_rankings)}:{filter_key}")
     cached = _BUSINESS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
+    shared_key = (*cache_key, _analysis_data_version(db, period_key))
+    shared = get_shared_analysis_cache("business-analytics", shared_key)
+    if shared is not None:
+        _BUSINESS_CACHE[cache_key] = (monotonic(), shared)
+        return shared
     query, model = _analytics_source(db, period_key, scope.ma_cn, scope.ma_pgd)
-    customer_ids = _matching_customer_ids(db, period_key, scope, filters)
+    customer_ids = _customer_filter_ids(db, period_key, scope, filters)
     query = _restrict_to_matching_customers(query, model, customer_ids)
     fee_expr = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
     service_expr = sum(func.coalesce(getattr(model, field), 0) for field in ACTIVE_SERVICE_KEYS)
@@ -908,12 +931,15 @@ def dashboard_business_analytics(
         branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.branch_code == scope.ma_cn)
     if scope.ma_pgd:
         branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.ma_pgd == scope.ma_pgd)
-    branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.ma_kh.in_(customer_ids))
+    if customer_ids is not None:
+        branch_rows_query = branch_rows_query.filter(CustomerPeriodBranchDetail.ma_kh.in_(customer_ids))
     branch_rows = branch_rows_query.group_by(CustomerPeriodBranchDetail.branch_code).all()
 
+    loan_group_query = _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd)
+    if customer_ids is not None:
+        loan_group_query = loan_group_query.filter(LN01Loan.custseq.in_(customer_ids))
     loan_group_rows = (
-        _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd)
-        .filter(LN01Loan.custseq.in_(customer_ids))
+        loan_group_query
         .with_entities(
             LN01Loan.debt_group,
             func.count(func.distinct(LN01Loan.custseq)),
@@ -978,6 +1004,7 @@ def dashboard_business_analytics(
         },
     }
     _BUSINESS_CACHE[cache_key] = (monotonic(), result)
+    set_shared_analysis_cache("business-analytics", shared_key, result)
     return result
 
 
@@ -994,6 +1021,11 @@ def dashboard_business_trends(
     cached = _BUSINESS_TREND_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
+    shared_key = (*cache_key, _analysis_data_version(db, period_key))
+    shared = get_shared_analysis_cache("business-trends", shared_key)
+    if shared is not None:
+        _BUSINESS_TREND_CACHE[cache_key] = (monotonic(), shared)
+        return shared
     period_keys = [row[0] for row in (
         db.query(CustomerPeriodProfile.period_key)
         .filter(CustomerPeriodProfile.period_key <= period_key if period_key else True)
@@ -1003,8 +1035,9 @@ def dashboard_business_trends(
     model = CustomerPeriodBranchDetail if scope.ma_cn else CustomerPeriodProfile
     query = db.query(model).filter(model.period_key.in_(period_keys))
     if period_key:
-        customer_ids = _matching_customer_ids(db, period_key, scope, filters)
-        query = query.filter(model.ma_kh.in_(customer_ids))
+        customer_ids = _customer_filter_ids(db, period_key, scope, filters)
+        if customer_ids is not None:
+            query = query.filter(model.ma_kh.in_(customer_ids))
     if scope.ma_cn:
         query = query.filter(CustomerPeriodBranchDetail.branch_code == scope.ma_cn)
     if scope.ma_pgd:
@@ -1059,6 +1092,7 @@ def dashboard_business_trends(
         })
     result = {"items": rows, "scope": {"branch_code": scope.ma_cn, "pgd_code": scope.ma_pgd}}
     _BUSINESS_TREND_CACHE[cache_key] = (monotonic(), result)
+    set_shared_analysis_cache("business-trends", shared_key, result)
     return result
 
 
@@ -1324,12 +1358,17 @@ def dashboard_insights(
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
-    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 0"))
+    db.execute(text("SET LOCAL max_parallel_workers_per_gather = 2"))
     filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
     cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:top={int(include_top_changes)}:alerts_only={int(anomalies_only)}:{anomaly_page}:{anomaly_page_size}:total={int(anomaly_include_total)}:{filter_key}")
     cached = _INSIGHTS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
+    shared_key = (*cache_key, _analysis_data_version(db, period_key))
+    shared = get_shared_analysis_cache("insights", shared_key)
+    if shared is not None:
+        _INSIGHTS_CACHE[cache_key] = (monotonic(), shared)
+        return shared
 
     current = aliased(CustomerPeriodProfile)
     previous = aliased(CustomerPeriodProfile)
@@ -1349,8 +1388,9 @@ def dashboard_insights(
         )
         .filter(current.period_key == period_key)
     )
-    customer_ids = _matching_customer_ids(db, period_key, scope, filters)
-    joined = joined.filter(current.ma_kh.in_(customer_ids))
+    customer_ids = _customer_filter_ids(db, period_key, scope, filters)
+    if customer_ids is not None:
+        joined = joined.filter(current.ma_kh.in_(customer_ids))
     if scope.ma_cn:
         joined = joined.filter(current.branch_codes.ilike(f"%{scope.ma_cn}%"))
     if scope.ma_pgd:
@@ -1501,6 +1541,7 @@ def dashboard_insights(
             },
         }
         _INSIGHTS_CACHE[cache_key] = (monotonic(), result)
+        set_shared_analysis_cache("insights", shared_key, result)
         return result
 
     def serialize_change_rows(rows, value_kind: str):
@@ -1553,8 +1594,9 @@ def dashboard_insights(
         if scope.ma_cn:
             current_accounts_query = current_accounts_query.filter(PF14AccountBalance.trbrcd == scope.ma_cn)
             previous_accounts_query = previous_accounts_query.filter(PF14AccountBalance.trbrcd == scope.ma_cn)
-        current_accounts_query = current_accounts_query.filter(PF14AccountBalance.custseq.in_(customer_ids))
-        previous_accounts_query = previous_accounts_query.filter(PF14AccountBalance.custseq.in_(customer_ids))
+        if customer_ids is not None:
+            current_accounts_query = current_accounts_query.filter(PF14AccountBalance.custseq.in_(customer_ids))
+            previous_accounts_query = previous_accounts_query.filter(PF14AccountBalance.custseq.in_(customer_ids))
         current_accounts = current_accounts_query.subquery()
         previous_accounts = previous_accounts_query.subquery()
         account_changes = (
@@ -1577,7 +1619,9 @@ def dashboard_insights(
         new_accounts = int(account_changes[0] or 0)
         closed_accounts = int(account_changes[1] or 0)
 
-    ln_query = _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd).filter(LN01Loan.custseq.in_(customer_ids))
+    ln_query = _ln01_query(db, period_key, scope.ma_cn, scope.ma_pgd)
+    if customer_ids is not None:
+        ln_query = ln_query.filter(LN01Loan.custseq.in_(customer_ids))
     period_date = datetime.strptime(period_key, "%Y%m%d").date()
     next_month_start = date(period_date.year + (period_date.month == 12), 1 if period_date.month == 12 else period_date.month + 1, 1)
     next_month_end = date(next_month_start.year + (next_month_start.month == 12), 1 if next_month_start.month == 12 else next_month_start.month + 1, 1)
@@ -1634,4 +1678,5 @@ def dashboard_insights(
         },
     }
     _INSIGHTS_CACHE[cache_key] = (monotonic(), result)
+    set_shared_analysis_cache("insights", shared_key, result)
     return result

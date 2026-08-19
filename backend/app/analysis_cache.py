@@ -7,6 +7,7 @@ back to PostgreSQL without changing the API response or business data.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from urllib.parse import urlencode
 
@@ -50,6 +51,26 @@ def cache_status() -> tuple[bool, str | None]:
         return bool(_redis().ping()), None
     except Exception as exc:  # Redis is deliberately non-critical.
         return False, str(exc)
+
+
+def get_shared_analysis_cache(namespace: str, key_parts) -> dict | None:
+    """Read a permission-resolved aggregate cached by endpoint scope."""
+    digest = hashlib.sha256(repr(key_parts).encode()).hexdigest()
+    try:
+        raw = _redis().get(f"c360:shared:{namespace}:{digest}")
+        return json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def set_shared_analysis_cache(namespace: str, key_parts, payload: dict) -> None:
+    digest = hashlib.sha256(repr(key_parts).encode()).hexdigest()
+    try:
+        raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
+        if len(raw) <= settings.ANALYSIS_CACHE_MAX_BYTES:
+            _redis().setex(f"c360:shared:{namespace}:{digest}", settings.ANALYSIS_CACHE_TTL, raw)
+    except Exception as exc:
+        logger.debug("Shared analysis cache write skipped: %s", exc)
 
 
 class AnalysisSessionCacheMiddleware(BaseHTTPMiddleware):
