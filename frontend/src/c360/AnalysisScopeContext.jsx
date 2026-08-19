@@ -90,6 +90,7 @@ export function AnalysisScopeProvider({ children, currentUser }) {
   useEffect(() => {
     if (!applied?.periodKey) return;
     let active = true;
+    const loadStartedAt = performance.now();
     const profileParams = scopeToProfileParams(applied);
     // Nạp trước các tập tổng hợp dùng chung. Khi chuyển tab, request trùng sẽ lấy
     // từ cache của phiên thay vì truy vấn lại database.
@@ -114,7 +115,13 @@ export function AnalysisScopeProvider({ children, currentUser }) {
           summary: summaryResponse,
           profiles: results[1]?.status === 'fulfilled' ? results[1].value?.data : null,
         });
-        notification.success({ message: 'Đã tải phạm vi dữ liệu', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng. Các khối phân tích đang được làm ấm có kiểm soát.`, placement: 'topRight' });
+        const elapsedSeconds = Math.max((performance.now() - loadStartedAt) / 1000, 0.1);
+        notification.success({
+          message: 'Dữ liệu phân tích đã sẵn sàng',
+          description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng · Hoàn tất trong ${elapsedSeconds.toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} giây. Các phân tích chuyên sâu tiếp tục được chuẩn bị ở chế độ nền.`,
+          placement: 'topRight',
+          duration: 5,
+        });
 
         // Không bắn đồng thời các truy vấn tổng hợp lớn: PostgreSQL từng phải
         // spill ra file tạm và chậm hơn khi 12-16 request tranh tài nguyên.
