@@ -574,7 +574,11 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
 
   useEffect(() => {
     if (!open || !customer?.ma_kh || !periodKey) return;
-    if (Array.isArray(customer.branch_details)) {
+    // Dữ liệu trả về từ truy vấn có lọc chi nhánh vẫn có branch_details, nhưng
+    // các chỉ tiêu cấp trên cùng đã được thay bằng số riêng của chi nhánh đó.
+    // Chỉ tái sử dụng payload khi đây thực sự là hồ sơ tổng của khách hàng.
+    const isScopedCustomer = Boolean(customer.viewing_branch_code || customer.viewing_pgd_code);
+    if (Array.isArray(customer.branch_details) && !isScopedCustomer) {
       setFullCustomer(customer);
       setProfileLoading(false);
       return;
@@ -872,7 +876,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         <button type="button" className={!profileBranch ? 'is-active is-all' : 'is-all'} onClick={() => { setProfileBranch(null); setLoanBranch(null); }}><span>Toàn bộ quan hệ</span><strong>{branchDetails.length} chi nhánh</strong><small>Tổng hợp toàn khách hàng</small></button>
         {branchDetails.map((item) => {
           const isPrimary = item.branch_code === customerRecord.primary_branch_code;
-          return <button type="button" key={`${item.branch_code}-${item.ma_pgd}`} className={`${profileBranch === item.branch_code ? 'is-active' : ''} ${isPrimary ? 'is-primary' : ''}`} onClick={() => { setProfileBranch(item.branch_code); setLoanBranch(null); }}><span>Chi nhánh {item.branch_code}{isPrimary ? <Tag color="gold">CHÍNH</Tag> : null}</span><strong>{compactMoney(Number(item.so_du_tien_gui || 0) + Number(item.so_du_tgtt_binh_quan || 0) + Number(item.so_du_tien_vay || 0))}</strong><small>{item.ten_can_bo || item.ma_cb || 'Chưa có CBQL'} · {item.ten_pgd || item.ma_pgd || 'Chưa rõ phòng'}</small></button>;
+          return <button type="button" key={`${item.branch_code}-${item.ma_pgd}`} className={`${profileBranch === item.branch_code ? 'is-active' : ''} ${isPrimary ? 'is-primary' : ''}`} onClick={() => { setProfileBranch(item.branch_code); setLoanBranch(null); }}><span>Chi nhánh {item.branch_code}{isPrimary ? <Tag color="gold">CHÍNH</Tag> : null}</span><strong>{compactMoney(Number(item.so_du_tien_gui || 0) + Number(item.so_du_tgtt_binh_quan || 0) + Number(item.so_du_tien_vay || 0))}</strong><small>CBQL: {item.ten_can_bo || item.ma_cb || 'Chưa có'} · Đơn vị TK: {item.ten_pgd || item.ma_pgd || 'Chưa rõ'}</small></button>;
         })}
       </div>
       <Row gutter={[14, 14]} className="demo-quick-metrics c360-profile-metrics">
@@ -890,8 +894,8 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
             { key: 'code', label: 'Mã khách hàng', children: <Text strong copyable={{ text: viewedCustomer.ma_kh }}>{viewedCustomer.ma_kh}</Text> },
             { key: 'type', label: 'Loại khách hàng', children: customerTypeLabel(viewedCustomer.loai_khach_hang) },
             { key: 'branches', label: 'Các chi nhánh', children: branchDetails.length ? <Space size={[4, 4]} wrap>{[...new Set(branchDetails.map((item) => item.branch_code).filter(Boolean))].map((code) => <Tag key={code} color={code === customerRecord.primary_branch_code ? 'gold' : 'default'}>{code}{code === customerRecord.primary_branch_code ? ' · CHÍNH' : ''}</Tag>)}</Space> : (viewedCustomer.branch_codes || 'Chưa có dữ liệu') },
-            { key: 'pgds', label: 'Các phòng/PGD', children: profileBranch
-              ? (selectedBranchDetail?.ten_pgd || 'Chưa xác định phòng/PGD')
+            { key: 'pgds', label: 'Đơn vị phát sinh tài khoản', children: profileBranch
+              ? <Tooltip title="Nguồn DP01/PF14: mã phòng/PGD gắn với tài khoản của khách hàng; không phải phòng công tác của CBQL."><Text>{selectedBranchDetail?.ten_pgd || 'Chưa xác định đơn vị'}</Text></Tooltip>
               : (viewedCustomer.pgd_names || viewedCustomer.primary_pgd_name || 'Chưa có dữ liệu') },
             { key: 'loanType', label: 'Loại vay', children: loanTypeLabel(viewedCustomer.loai_vay) },
             { key: 'hkdAccounts', label: 'Tài khoản hộ kinh doanh', children: viewedCustomer.hkd_tk
@@ -1235,7 +1239,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
               rowClassName={(row) => row.branch_code === customerRecord.primary_branch_code ? 'c360-primary-branch-row' : ''}
               columns={[
                 { title: 'Chi nhánh', dataIndex: 'branch_code', width: 150, fixed: 'left', render: (value) => <Space size={4}><Text strong>{value}</Text>{value === customerRecord.primary_branch_code ? <Tag color="gold">CHÍNH</Tag> : null}</Space> },
-                { title: 'PGD', width: 190, render: (_, row) => <div><Text>{row.ten_pgd || row.ma_pgd || '—'}</Text>{row.ten_pgd && row.ma_pgd ? <><br /><Text type="secondary">{row.ma_pgd}</Text></> : null}</div> },
+                { title: <Tooltip title="Mã đơn vị gắn với tài khoản theo DP01/PF14; không phải phòng công tác của CBQL.">Đơn vị phát sinh</Tooltip>, width: 190, render: (_, row) => <div><Text>{row.ten_pgd || row.ma_pgd || '—'}</Text>{row.ten_pgd && row.ma_pgd ? <><br /><Text type="secondary">Mã {row.ma_pgd}</Text></> : null}</div> },
                 { title: 'Cán bộ quản lý', width: 180, render: (_, row) => row.ten_can_bo || row.ma_cb || '—' },
                 { title: 'Tiền gửi CKH', dataIndex: 'so_du_tien_gui', align: 'right', width: 140, render: compactMoney },
                 { title: 'TGTT bình quân', dataIndex: 'so_du_tgtt_binh_quan', align: 'right', width: 140, render: compactMoney },
