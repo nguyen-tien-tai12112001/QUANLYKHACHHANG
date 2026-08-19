@@ -61,6 +61,7 @@ function emitLoading(delta) {
 }
 
 client.interceptors.request.use((config) => {
+  config.headers = config.headers || {};
   const requestPath = String(config.url || '');
   const usesLocalLoading = LOCAL_LOADING_PATHS.some((path) => requestPath.startsWith(path));
   if (!config.hideGlobalLoading && !usesLocalLoading) {
