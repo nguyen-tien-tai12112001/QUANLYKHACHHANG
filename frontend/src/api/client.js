@@ -62,6 +62,10 @@ function emitLoading(delta) {
 
 client.interceptors.request.use((config) => {
   config.headers = config.headers || {};
+  const setHeader = (name, value) => {
+    if (typeof config.headers.set === 'function') config.headers.set(name, value);
+    else config.headers[name] = value;
+  };
   const requestPath = String(config.url || '');
   const usesLocalLoading = LOCAL_LOADING_PATHS.some((path) => requestPath.startsWith(path));
   if (!config.hideGlobalLoading && !usesLocalLoading) {
@@ -70,15 +74,17 @@ client.interceptors.request.use((config) => {
   }
   const token = getRegisteredAccessToken();
   if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
+    setHeader('Authorization', `Bearer ${token}`);
   }
+  const analysisSession = sessionStorage.getItem('c360_analysis_session');
+  if (analysisSession) setHeader('X-Analysis-Session', analysisSession);
 
   try {
     const raw = localStorage.getItem('c360_user');
     if (raw) {
       const user = JSON.parse(raw);
-      config.headers['X-C360-User'] = user.username || '';
-      config.headers['X-C360-User-Name'] = encodeURIComponent(user.full_name || '');
+      setHeader('X-C360-User', user.username || '');
+      setHeader('X-C360-User-Name', encodeURIComponent(user.full_name || ''));
     }
   } catch {
     // Ignore localStorage parse errors.
@@ -115,10 +121,6 @@ client.get = (url, config = {}) => {
   const ttl = Number(config.cacheTtl ?? DEFAULT_CACHE_TTL);
   if (cached && Date.now() - cached.savedAt < ttl) {
     return Promise.resolve(cached.response);
-  }
-  const analysisSession = sessionStorage.getItem('c360_analysis_session');
-  if (analysisSession) {
-    config.headers['X-Analysis-Session'] = analysisSession;
   }
   if (inflightGets.has(key)) return inflightGets.get(key);
 
