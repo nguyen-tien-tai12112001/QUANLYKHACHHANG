@@ -2611,9 +2611,15 @@ def get_customer_deposit_accounts(
         -float(item["end_balance"] or 0),
         item["account_number"] or "",
     ))
+    # Trả về toàn bộ TKTT đã xếp hạng. Giao diện mặc định chỉ trình bày ba
+    # tài khoản chính, người dùng có thể chủ động mở phần còn lại.
     primary_accounts = [
-        {**item, "display_rank": index, "dictionary_code": f"TKTT{index}"}
-        for index, item in enumerate(primary_accounts[:3], start=1)
+        {
+            **item,
+            "display_rank": index,
+            "dictionary_code": f"TKTT{index}" if index <= 3 else None,
+        }
+        for index, item in enumerate(primary_accounts, start=1)
     ]
     items = dp_items
     total = len(items)

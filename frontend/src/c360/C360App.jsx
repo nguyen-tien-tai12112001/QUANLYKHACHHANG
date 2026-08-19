@@ -570,7 +570,12 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
   const [financialLoading, setFinancialLoading] = useState(false);
   const [fullCustomer, setFullCustomer] = useState(null);
   const [profileLoading, setProfileLoading] = useState(false);
+  const [showAllPaymentAccounts, setShowAllPaymentAccounts] = useState(false);
   const [lineage, setLineage] = useState({ open: false, loading: false, metric: '', items: [], total: 0, record_count: 0 });
+
+  useEffect(() => {
+    setShowAllPaymentAccounts(false);
+  }, [customer?.ma_kh, profileBranch]);
 
   useEffect(() => {
     if (!open || !customer?.ma_kh || !periodKey) return;
@@ -865,6 +870,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
           <Button icon={<BarChartOutlined />} onClick={() => changeProfileTab('history')}>Lịch sử các kỳ</Button>
           <Select
             className="c360-profile-scope"
+            popupMatchSelectWidth={false}
             value={profileBranch || 'all'}
             disabled={!canSwitchCustomerScope}
             onChange={(value) => {
@@ -981,6 +987,27 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
                     );
                   })}
                 </div>
+                {(depositData.primary_accounts || []).length > 3 ? (
+                  <div className="c360-extra-account-toggle">
+                    <Button type="link" onClick={() => setShowAllPaymentAccounts((current) => !current)}>
+                      {showAllPaymentAccounts
+                        ? 'Thu gọn danh sách TKTT'
+                        : `Xem thêm ${(depositData.primary_accounts || []).length - 3} TKTT khác`}
+                    </Button>
+                  </div>
+                ) : null}
+                {showAllPaymentAccounts ? (
+                  <div className="c360-extra-account-list">
+                    {(depositData.primary_accounts || []).slice(3).map((account) => (
+                      <div key={`${account.branch_code}-${account.account_number}`}>
+                        <span><Tag color="blue">TKTT #{account.display_rank}</Tag><Text strong copyable>{account.account_number}</Text></span>
+                        <span><Text type="secondary">CN {account.branch_code || '—'} · {account.deposit_type || 'Tài khoản thanh toán'}</Text></span>
+                        <span><small>Bình quân</small><strong>{fullMoney(account.average_balance)}</strong></span>
+                        <span><small>Cuối kỳ</small><strong>{fullMoney(account.end_balance)}</strong></span>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
               </section>
               <section className="c360-gl02-panel">
                 <div className="c360-pane-heading">
@@ -2051,8 +2078,9 @@ function RealCustomerList({ context, onOpenCustomer }) {
         <Col xs={12} lg={6}><Card><Text type="secondary">Chưa dùng dịch vụ</Text><strong>{Number(summary.no_service_customers || 0).toLocaleString('vi-VN')}</strong><small>Cần xem xét bán chéo</small></Card></Col>
       </Row>
       <Card className="demo-filter-card c360-customer-filters">
-        <div className="c360-filter-search">
-          <Input.Search value={keyword} onChange={(event) => setKeyword(event.target.value)} onSearch={(value) => { setPage(1); setQuery(value.trim()); }} allowClear enterButton={<SearchOutlined />} placeholder="Tên, mã KH, điện thoại hoặc cán bộ..." />
+        <div className="c360-global-filter-note">
+          <FilterOutlined />
+          <span><strong>Đang sử dụng bộ lọc chung của hệ thống</strong><small>Tên/mã khách hàng và cán bộ quản lý được chọn riêng trên thanh bộ lọc phía trên.</small></span>
         </div>
         <Select value={sort} onChange={setSort} options={[
           { value: 'so_du_tien_gui:desc', label: 'Tiền gửi: cao → thấp' },
@@ -2060,17 +2088,6 @@ function RealCustomerList({ context, onOpenCustomer }) {
           { value: 'so_du_tgtt_binh_quan:desc', label: 'TGTT: cao → thấp' },
           { value: 'ten_kh:asc', label: 'Tên khách hàng: A → Z' },
         ]} />
-        <Button
-          type={activeFilterCount ? 'primary' : 'default'}
-          icon={<FilterOutlined />}
-          onClick={() => {
-            setDraftFilters(filters);
-            setFilterDrawerOpen(true);
-          }}
-        >
-          Bộ lọc nâng cao{activeFilterCount ? ` (${activeFilterCount})` : ''}
-        </Button>
-        {activeFilterCount || query ? <Button onClick={resetFilters}>Xóa bộ lọc</Button> : null}
       </Card>
       <div className="c360-list-toolbar">
         <Text type="secondary"><strong>{total.toLocaleString('vi-VN')}</strong> hồ sơ được tìm thấy</Text>
@@ -2108,7 +2125,7 @@ function RealCustomerList({ context, onOpenCustomer }) {
           scroll={{ x: Math.max(1100, columns.reduce((sum, column) => sum + Number(column.width || 140), 0)), y: 560 }}
         />
       </Card>
-      <Drawer
+      {false && <Drawer
         title="Bộ lọc khách hàng nâng cao"
         width={560}
         open={filterDrawerOpen}
@@ -2156,7 +2173,7 @@ function RealCustomerList({ context, onOpenCustomer }) {
           <label className="is-full"><Text strong>Bắt buộc đang sử dụng</Text><Select mode="multiple" allowClear value={draftFilters.service_codes} placeholder="Chọn các sản phẩm khách hàng phải đang sử dụng" options={Object.entries(serviceLabels).map(([value, label]) => ({ value, label }))} onChange={(value) => updateDraftFilter('service_codes', value)} /></label>
           <label className="is-full"><Text strong>Số sản phẩm tối thiểu</Text><InputNumber min={0} max={20} value={draftFilters.min_service_count} placeholder="Ví dụ 2" onChange={(value) => updateDraftFilter('min_service_count', value)} /></label>
         </div>
-      </Drawer>
+      </Drawer>}
     </div>
   );
 }

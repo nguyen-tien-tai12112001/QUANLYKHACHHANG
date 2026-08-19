@@ -370,10 +370,22 @@
 
 .c360-customer-filters .ant-card-body {
   display: grid;
-  grid-template-columns: minmax(300px, 1fr) minmax(210px, 260px) auto auto;
+  grid-template-columns: minmax(360px, 1fr) minmax(220px, 280px);
   gap: 10px;
   padding: 16px;
 }
+
+.c360-global-filter-note {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 11px;
+  color: #7f1738;
+}
+
+.c360-global-filter-note > .anticon { font-size: 19px; }
+.c360-global-filter-note span { display: flex; min-width: 0; flex-direction: column; }
+.c360-global-filter-note small { color: #74656a; white-space: normal; }
 
 .c360-customer-filters {
   border: 1px solid var(--c360-line);
@@ -539,27 +551,24 @@
 }
 
 .c360-insight-strip .ant-typography {
-  overflow: hidden;
+  overflow: visible;
   color: var(--c360-muted);
   font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .c360-insight-strip strong {
-  overflow: hidden;
+  overflow: visible;
   color: var(--c360-ink);
   font-size: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .c360-insight-strip small {
-  overflow: hidden;
+  overflow: visible;
   color: var(--c360-muted);
   font-size: 10px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .c360-insight-strip .is-up { color: var(--c360-success); }
@@ -830,7 +839,7 @@
 }
 
 .c360-profile-scope {
-  width: 180px;
+  width: min(390px, 36vw);
   margin-right: 0;
 }
 
@@ -859,8 +868,8 @@
 
 .c360-profile-metrics .ant-col > div {
   display: grid;
-  min-height: 72px;
-  height: 72px;
+  min-height: 82px;
+  height: auto;
   grid-template-columns: 20px minmax(0, 1fr);
   grid-template-rows: 16px 21px 15px;
   align-content: center;
@@ -902,30 +911,27 @@
 }
 
 .c360-profile-metrics .ant-col > div > .ant-typography {
-  overflow: hidden;
+  overflow: visible;
   font-size: 11px;
   line-height: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .c360-profile-metrics strong {
-  overflow: hidden;
+  overflow: visible;
   font-size: 15px;
   line-height: 20px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .c360-profile-metrics small {
   display: block;
   grid-column: 2;
-  overflow: hidden;
+  overflow: visible;
   color: #6f625d;
   font-size: 10px;
   line-height: 14px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .c360-profile-tabs {
@@ -1051,11 +1057,10 @@
 .c360-domain-metric > div > .ant-typography {
   color: #5e4d46;
   font-weight: 600;
-  overflow: hidden;
+  overflow: visible;
   font-size: 11px;
   line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .c360-domain-metric .ant-tag {
@@ -1070,11 +1075,10 @@
 
 .c360-domain-metric strong {
   color: var(--c360-ink);
-  overflow: hidden;
+  overflow: visible;
   font-size: 15px;
   line-height: 1.15;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .c360-domain-metric.is-pending {
@@ -1718,13 +1722,12 @@
 
 .c360-primary-account-number {
   display: block;
-  overflow: hidden;
+  overflow-wrap: anywhere;
   margin: 8px 0 3px;
   color: #0f172a;
   font-size: 16px;
   font-weight: 800;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .c360-primary-account-card > small { color: #64748b; }
@@ -1740,6 +1743,29 @@
 .c360-primary-account-balances span:last-child { text-align: right; }
 .c360-primary-account-balances small { display: block; color: #64748b; }
 .c360-primary-account-balances strong { display: block; color: #0f172a; font-size: 12px; }
+
+.c360-extra-account-toggle { display: flex; justify-content: center; margin-top: 8px; }
+
+.c360-extra-account-list {
+  display: grid;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+.c360-extra-account-list > div {
+  display: grid;
+  grid-template-columns: minmax(230px, 1.1fr) minmax(210px, 1fr) minmax(150px, .7fr) minmax(150px, .7fr);
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid #dbeafe;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.c360-extra-account-list > div > span { min-width: 0; overflow-wrap: anywhere; }
+.c360-extra-account-list small { display: block; color: #64748b; }
+.c360-extra-account-list strong { display: block; color: #0f172a; font-size: 12px; }
 
 @media (max-width: 900px) {
   .c360-primary-account-grid { grid-template-columns: 1fr; }
@@ -1947,7 +1973,7 @@
 
 .c360-branch-scope-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 10px 0 14px; }
 .c360-branch-scope-cards button { min-width: 0; padding: 11px 13px; text-align: left; background: #fff; border: 1px solid #dde4ee; border-radius: 12px; cursor: pointer; transition: .18s ease; }
-.c360-branch-scope-cards button span, .c360-branch-scope-cards button small { display: flex; align-items: center; gap: 5px; color: #667085; }
+.c360-branch-scope-cards button span, .c360-branch-scope-cards button small { display: flex; align-items: center; gap: 5px; color: #667085; overflow-wrap: anywhere; white-space: normal; }
 .c360-branch-scope-cards button strong { display: block; margin: 6px 0 4px; color: #25324a; font-size: 16px; }
 .c360-branch-scope-cards button.is-primary { border-color: #e5bd58; background: linear-gradient(145deg, #fff9e8, #fff); box-shadow: inset 3px 0 #d39b1f; }
 .c360-branch-scope-cards button.is-active { border-color: #8f1438; box-shadow: 0 0 0 2px rgb(143 20 56 / 12%); transform: translateY(-1px); }
