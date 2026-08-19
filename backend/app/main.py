@@ -13,6 +13,7 @@ from app.database import init_db
 from app.cif_importer import resume_pending_cif_imports
 from app.imports.importer import enqueue_pending_import_files, start_import_workers
 from app.seed_data import seed_initial_data
+from app.analysis_cache import AnalysisSessionCacheMiddleware
 
 
 app = FastAPI(
@@ -29,6 +30,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AnalysisSessionCacheMiddleware)
 
 app.include_router(health_router)
 app.include_router(auth_router)

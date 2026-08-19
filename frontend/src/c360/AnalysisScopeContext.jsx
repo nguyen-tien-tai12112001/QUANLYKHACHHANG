@@ -27,7 +27,10 @@ export function AnalysisScopeProvider({ children, currentUser }) {
   const [orgCatalog, setOrgCatalog] = useState({ branches: [], departments: [] });
 
   useEffect(() => {
-    const clearSession = () => clearApiCache();
+    const clearSession = () => {
+      clearApiCache();
+      sessionStorage.removeItem('c360_analysis_session');
+    };
     window.addEventListener('pagehide', clearSession);
     return () => {
       window.removeEventListener('pagehide', clearSession);
@@ -88,23 +91,30 @@ export function AnalysisScopeProvider({ children, currentUser }) {
     if (!applied?.periodKey) return;
     let active = true;
     const profileParams = scopeToProfileParams(applied);
-    const orgParams = {
-      period_key: applied.periodKey,
-      branch_code: applied.branchCode || undefined,
-      pgd_code: applied.pgdCode || undefined,
-    };
     // Nạp trước các tập tổng hợp dùng chung. Khi chuyển tab, request trùng sẽ lấy
     // từ cache của phiên thay vì truy vấn lại database.
     const previousPeriod = periods[periods.findIndex((item) => item.period_key === applied.periodKey) + 1]?.period_key;
     setSessionLoading(true);
-    Promise.allSettled([
+    const sharedRequests = [
       client.get('/customer-processing/profile-summary', { params: profileParams }),
       client.get('/customer-processing/profiles', { params: { ...profileParams, page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' } }),
-    ]).then((results) => {
+      client.get('/dashboard/insights', { params: profileParams }),
+      client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true } }),
+      client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false } }),
+      client.get('/dashboard/business-analytics', { params: profileParams }),
+      client.get('/dashboard/business-trends', { params: { periods: 12, ...profileParams } }),
+      client.get('/customer-processing/profile-groups', { params: profileParams }),
+      client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' } }),
+      client.get('/customer-processing/reconciliations', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined, latest_job_only: true, page: 1, page_size: 1 } }),
+      client.get('/imports/source-readiness', { params: { period_key: applied.periodKey } }),
+      previousPeriod ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: applied.periodKey, previous_period: previousPeriod } }) : Promise.resolve({ data: null }),
+    ];
+    Promise.allSettled(sharedRequests).then((results) => {
       if (!active) return;
       const failed = results.filter((item) => item.status === 'rejected');
+      const coreFailed = results.slice(0, 2).filter((item) => item.status === 'rejected');
       const summaryResponse = results[0]?.status === 'fulfilled' ? results[0].value?.data : null;
-      if (failed.length) {
+      if (coreFailed.length) {
         notification.warning({ message: 'Phiên dữ liệu tải chưa đầy đủ', description: `${failed.length} khối dữ liệu chưa tải được. Hệ thống sẽ thử lại khi bạn bấm Làm mới.`, placement: 'topRight' });
       } else {
         const summary = { customers: Number(summaryResponse?.total_customers || 0), periodKey: applied.periodKey };
@@ -114,22 +124,15 @@ export function AnalysisScopeProvider({ children, currentUser }) {
           scopeKey: JSON.stringify(profileParams),
           summary: summaryResponse,
           profiles: results[1]?.status === 'fulfilled' ? results[1].value?.data : null,
+          insights: results[2]?.status === 'fulfilled' ? results[2].value?.data : null,
+          topChanges: results[3]?.status === 'fulfilled' ? results[3].value?.data : null,
+          businessAnalytics: results[5]?.status === 'fulfilled' ? results[5].value?.data : null,
+          businessTrends: results[6]?.status === 'fulfilled' ? results[6].value?.data : null,
+          groups: results[7]?.status === 'fulfilled' ? results[7].value?.data : null,
         });
-        notification.success({ message: 'Đã tải phạm vi dữ liệu', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng phù hợp. Phân tích chi tiết đang hoàn tất ở nền.`, placement: 'topRight' });
+        notification.success({ message: 'Đã chuẩn bị xong phiên phân tích', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng. Các trang tổng quan và phân tích đã sẵn sàng.`, placement: 'topRight' });
+        if (failed.length) notification.warning({ message: 'Một số khối phụ chưa sẵn sàng', description: `${failed.length} khối phụ sẽ tự tải lại khi mở trang tương ứng.`, placement: 'topRight' });
       }
-      if (active) setSessionLoading(false);
-      const background = { hideGlobalLoading: true };
-      Promise.allSettled([
-      client.get('/dashboard/insights', { params: profileParams, ...background }),
-        client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true }, ...background }),
-      client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false }, ...background }),
-        client.get('/dashboard/business-trends', { params: { periods: 12, branch_code: orgParams.branch_code, pgd_code: orgParams.pgd_code }, ...background }),
-        client.get('/customer-processing/profile-groups', { params: profileParams, ...background }),
-        client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' }, ...background }),
-        client.get('/customer-processing/reconciliations', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined, latest_job_only: true, page: 1, page_size: 1 }, ...background }),
-        client.get('/imports/source-readiness', { params: { period_key: applied.periodKey }, ...background }),
-        previousPeriod ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: applied.periodKey, previous_period: previousPeriod }, ...background }) : Promise.resolve({ data: null }),
-      ]);
     }).finally(() => { if (active) setSessionLoading(false); });
     return () => { active = false; };
   }, [applied, periods, sessionVersion]);
@@ -145,6 +148,7 @@ export function AnalysisScopeProvider({ children, currentUser }) {
     apply: () => {
       if (!draft.periodKey) return false;
       clearApiCache();
+      sessionStorage.setItem('c360_analysis_session', crypto.randomUUID());
       const next = { ...draft, branchCode: fixedBranchCode || draft.branchCode, advanced: { ...draft.advanced } };
       setApplied(next);
       setSessionData(null);
@@ -156,9 +160,14 @@ export function AnalysisScopeProvider({ children, currentUser }) {
       setApplied(null);
       setSessionSummary(null);
       setSessionData(null);
+      sessionStorage.removeItem('c360_analysis_session');
       clearApiCache();
     },
-    refresh: () => { clearApiCache(); setSessionVersion((value) => value + 1); },
+    refresh: () => {
+      clearApiCache();
+      sessionStorage.setItem('c360_analysis_session', crypto.randomUUID());
+      setSessionVersion((value) => value + 1);
+    },
   }), [applied, draft, fixedBranchCode, metadataLoading, options, periods, sessionData, sessionLoading, sessionSummary, sessionVersion]);
   return <AnalysisScopeContext.Provider value={value}>{children}</AnalysisScopeContext.Provider>;
 }

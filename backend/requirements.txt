@@ -9,3 +9,4 @@ python-multipart
 openpyxl
 xlrd
 polars
+redis

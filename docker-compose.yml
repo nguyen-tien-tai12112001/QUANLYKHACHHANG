@@ -1,4 +1,17 @@
 services:
+  redis:
+    image: redis:7-alpine
+    container_name: qlkh_redis
+    restart: unless-stopped
+    command: ["redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "1gb", "--maxmemory-policy", "allkeys-lru"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks:
+      - qlkh_network
+
   postgres:
     image: postgres:16
     container_name: qlkh_postgres
@@ -34,6 +47,9 @@ services:
       IMPORT_CHUNK_SIZE: ${IMPORT_CHUNK_SIZE:-20000}
       DELETE_UPLOAD_AFTER_SUCCESS: ${DELETE_UPLOAD_AFTER_SUCCESS:-true}
       PROCESSING_WORK_MEM: ${PROCESSING_WORK_MEM:-256MB}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      ANALYSIS_CACHE_TTL: ${ANALYSIS_CACHE_TTL:-900}
+      ANALYSIS_CACHE_MAX_BYTES: ${ANALYSIS_CACHE_MAX_BYTES:-20000000}
     ports:
       - "8000:8000"
     volumes:
@@ -42,6 +58,8 @@ services:
       - ./documents:/documents:ro
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
     healthcheck:

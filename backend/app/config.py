@@ -11,6 +11,9 @@ class Settings(BaseSettings):
     IMPORT_CHUNK_SIZE: int = 20000
     DELETE_UPLOAD_AFTER_SUCCESS: bool = True
     PROCESSING_WORK_MEM: str = "256MB"
+    REDIS_URL: str = "redis://redis:6379/0"
+    ANALYSIS_CACHE_TTL: int = 900
+    ANALYSIS_CACHE_MAX_BYTES: int = 20_000_000
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

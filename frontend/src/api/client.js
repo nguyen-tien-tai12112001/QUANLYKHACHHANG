@@ -115,6 +115,10 @@ client.get = (url, config = {}) => {
   if (cached && Date.now() - cached.savedAt < ttl) {
     return Promise.resolve(cached.response);
   }
+  const analysisSession = sessionStorage.getItem('c360_analysis_session');
+  if (analysisSession) {
+    config.headers['X-Analysis-Session'] = analysisSession;
+  }
   if (inflightGets.has(key)) return inflightGets.get(key);
 
   const request = axiosGet(url, config)
