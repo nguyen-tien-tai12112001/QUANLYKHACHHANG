@@ -371,9 +371,10 @@ def enrich_profile_org_names(db: Session, payloads: list[dict], include_units: b
                        COALESCE(NULLIF(TRIM(ma_pgd), ''), '00') AS unit_code,
                        MAX(NULLIF(TRIM(ten_pgd), '')) AS source_unit_name,
                        COUNT(*) AS account_count,
-                       SUM(COALESCE(current_balance, 0)) AS balance
+                       SUM(CASE WHEN COALESCE(current_balance, 0) > 0 THEN current_balance ELSE 0 END) AS balance
                 FROM dp01_deposit_accounts
                 WHERE period_key=:period_key AND ma_kh=ANY(:customer_codes)
+                  AND COALESCE(current_balance, 0) >= 0
                 GROUP BY period_key, ma_kh, ma_cn, COALESCE(NULLIF(TRIM(ma_pgd), ''), '00')
             ), valid_staff AS (
                 SELECT DISTINCT ON (d.ma_kh, d.ma_cn, COALESCE(NULLIF(TRIM(d.ma_pgd), ''), '00'))
@@ -385,6 +386,7 @@ def enrich_profile_org_names(db: Session, payloads: list[dict], include_units: b
                   AND TRIM(u.employee_code)=TRIM(d.employee_number)
                 JOIN org_branches b ON b.id=u.branch_id AND b.branch_code=TRIM(d.ma_cn)
                 WHERE d.period_key=:period_key AND d.ma_kh=ANY(:customer_codes)
+                  AND COALESCE(d.current_balance, 0) > 0
                 ORDER BY d.ma_kh, d.ma_cn, COALESCE(NULLIF(TRIM(d.ma_pgd), ''), '00'),
                          COALESCE(d.current_balance, 0) DESC, d.id
             )
@@ -2491,11 +2493,13 @@ def get_customer_deposit_accounts(
         DP01DepositAccount.period_key == period_key,
         DP01DepositAccount.ma_kh == ma_kh,
         DP01DepositAccount.so_tai_khoan.isnot(None),
+        DP01DepositAccount.current_balance >= 0,
     )
     dp_previous = db.query(DP01DepositAccount).filter(
         DP01DepositAccount.period_key == previous_period,
         DP01DepositAccount.ma_kh == ma_kh,
         DP01DepositAccount.so_tai_khoan.isnot(None),
+        DP01DepositAccount.current_balance >= 0,
     ) if previous_period else None
     if branch_code:
         dp_current = dp_current.filter(DP01DepositAccount.branch_code == branch_code)

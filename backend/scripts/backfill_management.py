@@ -9,17 +9,34 @@ from app.database import SessionLocal
 
 
 UPDATE_MANAGEMENT_SQL = text("""
+    WITH primary_location AS (
+        SELECT DISTINCT ON (ma_kh)
+            ma_kh, branch_code, ma_pgd, ten_pgd,
+            CASE
+                WHEN GREATEST(COALESCE(so_du_tien_vay,0), COALESCE(du_no_ngan_han,0)+COALESCE(du_no_trung_dai_han,0)+COALESCE(du_no_thau_chi,0)) > 0 THEN 'LOAN_BALANCE'
+                WHEN COALESCE(so_du_tien_gui,0) > 0 THEN 'TERM_DEPOSIT_BALANCE'
+                WHEN COALESCE(so_du_tgtt_binh_quan,0) > 0 THEN 'CASA_AVERAGE_BALANCE'
+                ELSE 'CIF_BRANCH'
+            END source
+        FROM customer_period_branch_details
+        WHERE period_key=:period_key
+        ORDER BY ma_kh,
+            CASE WHEN GREATEST(COALESCE(so_du_tien_vay,0), COALESCE(du_no_ngan_han,0)+COALESCE(du_no_trung_dai_han,0)+COALESCE(du_no_thau_chi,0)) > 0 THEN 1 ELSE 0 END DESC,
+            GREATEST(COALESCE(so_du_tien_vay,0), COALESCE(du_no_ngan_han,0)+COALESCE(du_no_trung_dai_han,0)+COALESCE(du_no_thau_chi,0)) DESC,
+            COALESCE(so_du_tien_gui,0) DESC, COALESCE(so_du_tgtt_binh_quan,0) DESC,
+            branch_code, ma_pgd
+    )
     UPDATE customer_period_profiles p
-    SET management_source=e.management_source,
+    SET management_source=COALESCE(e.management_source, (SELECT location.source FROM primary_location location WHERE location.ma_kh=p.ma_kh)),
         managing_branch_code=e.managing_branch_code,
         managing_department_code=e.managing_department_code,
         managing_department_name=e.managing_department_name,
         ma_cb=e.ma_cb,
         officer_employee_code=e.officer_employee_code,
         ten_can_bo=e.ten_can_bo,
-        primary_branch_code=e.primary_branch_code,
-        primary_pgd_code=e.primary_pgd_code,
-        primary_pgd_name=e.primary_pgd_name
+        primary_branch_code=COALESCE(e.primary_branch_code, (SELECT location.branch_code FROM primary_location location WHERE location.ma_kh=p.ma_kh)),
+        primary_pgd_code=COALESCE(e.primary_pgd_code, (SELECT location.ma_pgd FROM primary_location location WHERE location.ma_kh=p.ma_kh)),
+        primary_pgd_name=COALESCE(e.primary_pgd_name, (SELECT location.ten_pgd FROM primary_location location WHERE location.ma_kh=p.ma_kh))
     FROM tmp_profile_enrichment e
     WHERE p.period_key=:period_key
       AND p.customer_id=e.customer_id
@@ -45,6 +62,7 @@ UPDATE_BRANCH_STAFF_SQL = text("""
           ON branch.id=users.branch_id AND branch.branch_code=TRIM(deposit.ma_cn)
         WHERE deposit.period_key=:period_key
           AND NULLIF(TRIM(deposit.employee_number), '') IS NOT NULL
+          AND COALESCE(deposit.current_balance, 0) > 0
         ORDER BY deposit.ma_kh, deposit.ma_cn,
                  COALESCE(deposit.current_balance, 0) DESC, deposit.id
     )

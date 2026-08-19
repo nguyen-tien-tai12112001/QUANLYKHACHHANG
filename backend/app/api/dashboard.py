@@ -957,8 +957,8 @@ def dashboard_business_analytics(
         "officers": _build_officer_leaderboard(db, period_key, scope.ma_cn, scope.ma_pgd) if include_rankings else [],
         "metric_definitions": {
             "term_deposit": {"source": "PF14", "columns": "MONTHLYENDBALANCE, CCY", "formula": "SUM(MONTHLYENDBALANCE × tỷ giá)", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
-            "deposit": {"source": "PF14/DP01", "columns": "MONTHLYENDBALANCE, AVGBAL/AVERAGEBALANCE", "formula": "Tiền gửi CKH cuối kỳ + TGTT bình quân", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
-            "casa": {"source": "PF14/DP01", "columns": "AVERAGEBALANCE/AVGBAL, CCY", "formula": "SUM(số dư TKTT bình quân × tỷ giá)", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "deposit": {"source": "PF14/DP01", "columns": "MONTHLYENDBALANCE, CURRENT_BALANCE, AVGBAL/AVERAGEBALANCE", "formula": "Tiền gửi CKH cuối kỳ + TGTT bình quân; DP01 CURRENT_BALANCE âm bị loại vì là thấu chi", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "casa": {"source": "PF14/DP01", "columns": "AVERAGEBALANCE/AVGBAL, CURRENT_BALANCE, CCY", "formula": "SUM(số dư TKTT bình quân × tỷ giá); không cộng CURRENT_BALANCE âm", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
             "payment_turnover": {"source": "GL02", "columns": "LOCAC, CRAMOUNT, CUSTOMER", "formula": "SUM(CRAMOUNT), LOCAC = 421101, giao dịch hợp lệ", "currency": "Giá trị đã chuẩn hóa về VNĐ; không dùng tỷ giá nếu nguồn không có ngoại tệ"},
             "loan": {"source": "PF10/LN01", "columns": "EOMBAL, DU_NO, LNTYPE, CCY", "formula": "SUM(dư nợ ngắn hạn + trung dài hạn + thấu chi)", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
             "short_loan": {"source": "PF10/LN01", "columns": "EOMBAL/DU_NO, LNTYPE", "formula": "SUM dư nợ với LNTYPE = 100 hoặc khoản vay ngắn hạn", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
