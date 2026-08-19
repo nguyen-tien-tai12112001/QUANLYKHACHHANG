@@ -251,7 +251,7 @@ def serialize_job(job: CustomerProcessingJob | None) -> dict | None:
     )
 
 
-def enrich_profile_org_names(db: Session, payloads: list[dict]) -> list[dict]:
+def enrich_profile_org_names(db: Session, payloads: list[dict], include_units: bool = False) -> list[dict]:
     registry, _, _ = _load_active_org_department_registry(db)
     staff_rows = (
         db.query(SystemUser, OrgBranch, OrgDepartment)
@@ -356,6 +356,65 @@ def enrich_profile_org_names(db: Session, payloads: list[dict]) -> list[dict]:
                 pgd = str(detail.get("ma_pgd") or "").strip()
                 if branch and pgd:
                     detail["ten_pgd"] = registry.get((branch, pgd), detail.get("ten_pgd"))
+
+    # Một chi nhánh có thể có tài khoản tại nhiều phòng/PGD. Không dùng MAX(ma_pgd)
+    # làm đơn vị đại diện vì mã lớn nhất không mang ý nghĩa nghiệp vụ. Tổng hợp từng
+    # đơn vị và xếp theo số dư; cán bộ tại đơn vị chỉ được công nhận khi khớp user.
+    period_key = next((str(item.get("period_key") or "").strip() for item in payloads if item.get("period_key")), "")
+    customer_codes = list(dict.fromkeys(
+        str(item.get("ma_kh") or "").strip() for item in payloads if str(item.get("ma_kh") or "").strip()
+    ))
+    if include_units and period_key and customer_codes:
+        unit_rows = db.execute(text("""
+            WITH units AS (
+                SELECT period_key, ma_kh, ma_cn AS branch_code,
+                       COALESCE(NULLIF(TRIM(ma_pgd), ''), '00') AS unit_code,
+                       MAX(NULLIF(TRIM(ten_pgd), '')) AS source_unit_name,
+                       COUNT(*) AS account_count,
+                       SUM(COALESCE(current_balance, 0)) AS balance
+                FROM dp01_deposit_accounts
+                WHERE period_key=:period_key AND ma_kh=ANY(:customer_codes)
+                GROUP BY period_key, ma_kh, ma_cn, COALESCE(NULLIF(TRIM(ma_pgd), ''), '00')
+            ), valid_staff AS (
+                SELECT DISTINCT ON (d.ma_kh, d.ma_cn, COALESCE(NULLIF(TRIM(d.ma_pgd), ''), '00'))
+                       d.ma_kh, d.ma_cn AS branch_code,
+                       COALESCE(NULLIF(TRIM(d.ma_pgd), ''), '00') AS unit_code,
+                       u.employee_code, u.full_name
+                FROM dp01_deposit_accounts d
+                JOIN system_users u ON u.is_active=true
+                  AND TRIM(u.employee_code)=TRIM(d.employee_number)
+                JOIN org_branches b ON b.id=u.branch_id AND b.branch_code=TRIM(d.ma_cn)
+                WHERE d.period_key=:period_key AND d.ma_kh=ANY(:customer_codes)
+                ORDER BY d.ma_kh, d.ma_cn, COALESCE(NULLIF(TRIM(d.ma_pgd), ''), '00'),
+                         COALESCE(d.current_balance, 0) DESC, d.id
+            )
+            SELECT units.*, valid_staff.employee_code, valid_staff.full_name
+            FROM units
+            LEFT JOIN valid_staff USING (ma_kh, branch_code, unit_code)
+            ORDER BY units.ma_kh, units.branch_code, units.balance DESC, units.unit_code
+        """), {"period_key": period_key, "customer_codes": customer_codes}).mappings().all()
+        units_by_relation: dict[tuple[str, str], list[dict]] = {}
+        for row in unit_rows:
+            branch = str(row["branch_code"] or "").strip()
+            unit_code = str(row["unit_code"] or "").strip()
+            unit = {
+                "unit_code": unit_code,
+                "unit_name": registry.get((branch, unit_code), row["source_unit_name"] or unit_code),
+                "account_count": int(row["account_count"] or 0),
+                "balance": serialize_value(row["balance"]),
+                "officer_employee_code": row["employee_code"],
+                "officer_name": row["full_name"],
+                "officer_verified": bool(row["employee_code"]),
+            }
+            units_by_relation.setdefault((str(row["ma_kh"]), branch), []).append(unit)
+        for payload in payloads:
+            for detail in payload.get("branch_details") or []:
+                units = units_by_relation.get((str(payload.get("ma_kh") or ""), str(detail.get("branch_code") or "")), [])
+                detail["unit_details"] = units
+                detail["unit_count"] = len(units)
+                if units:
+                    detail["representative_unit_code"] = units[0]["unit_code"]
+                    detail["representative_unit_name"] = units[0]["unit_name"]
     return payloads
 
 
@@ -1561,6 +1620,7 @@ def list_profiles(
     page_size: int = Query(default=100, ge=1, le=500),
     limit: int | None = Query(default=None, ge=1, le=1000),
     include_total: bool = False,
+    include_units: bool = False,
     db: Session = Depends(get_db),
 ):
     query = db.query(CustomerPeriodProfile).filter(CustomerPeriodProfile.period_key == period_key)
@@ -1690,7 +1750,7 @@ def list_profiles(
         pgd_code,
         [serialize_model(item, fields) for item in rows],
     )
-    items = enrich_profile_org_names(db, items)
+    items = enrich_profile_org_names(db, items, include_units=include_units)
     if include_total:
         return {"items": items, "total": total, "page": page, "page_size": effective_page_size}
     return items

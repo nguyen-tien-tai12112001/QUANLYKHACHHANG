@@ -578,7 +578,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     // các chỉ tiêu cấp trên cùng đã được thay bằng số riêng của chi nhánh đó.
     // Chỉ tái sử dụng payload khi đây thực sự là hồ sơ tổng của khách hàng.
     const isScopedCustomer = Boolean(customer.viewing_branch_code || customer.viewing_pgd_code);
-    if (Array.isArray(customer.branch_details) && !isScopedCustomer) {
+    const hasUnitDetails = Array.isArray(customer.branch_details)
+      && customer.branch_details.every((detail) => Array.isArray(detail.unit_details));
+    if (Array.isArray(customer.branch_details) && !isScopedCustomer && hasUnitDetails) {
       setFullCustomer(customer);
       setProfileLoading(false);
       return;
@@ -587,7 +589,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     setFullCustomer(null);
     setProfileLoading(true);
     client.get('/customer-processing/profiles', {
-      params: { period_key: periodKey, keyword: customer.ma_kh, page: 1, page_size: 10 },
+      params: { period_key: periodKey, keyword: customer.ma_kh, page: 1, page_size: 10, include_units: true },
       hideGlobalLoading: true,
     })
       .then(({ data }) => {
@@ -749,6 +751,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
   const selectedBranchDetail = profileBranch
     ? branchDetails.find((item) => item.branch_code === profileBranch)
     : null;
+  const selectedUnits = profileBranch
+    ? (selectedBranchDetail?.unit_details || [])
+    : branchDetails.flatMap((item) => (item.unit_details || []).map((unit) => ({ ...unit, branch_code: item.branch_code })));
   const viewedCustomer = selectedBranchDetail
     ? {
         ...customerRecord,
@@ -876,7 +881,8 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
         <button type="button" className={!profileBranch ? 'is-active is-all' : 'is-all'} onClick={() => { setProfileBranch(null); setLoanBranch(null); }}><span>Toàn bộ quan hệ</span><strong>{branchDetails.length} chi nhánh</strong><small>Tổng hợp toàn khách hàng</small></button>
         {branchDetails.map((item) => {
           const isPrimary = item.branch_code === customerRecord.primary_branch_code;
-          return <button type="button" key={`${item.branch_code}-${item.ma_pgd}`} className={`${profileBranch === item.branch_code ? 'is-active' : ''} ${isPrimary ? 'is-primary' : ''}`} onClick={() => { setProfileBranch(item.branch_code); setLoanBranch(null); }}><span>Chi nhánh {item.branch_code}{isPrimary ? <Tag color="gold">CHÍNH</Tag> : null}</span><strong>{compactMoney(Number(item.so_du_tien_gui || 0) + Number(item.so_du_tgtt_binh_quan || 0) + Number(item.so_du_tien_vay || 0))}</strong><small>CBQL: {item.ten_can_bo || item.ma_cb || 'Chưa có'} · Đơn vị TK: {item.ten_pgd || item.ma_pgd || 'Chưa rõ'}</small></button>;
+          const mainUnit = item.unit_details?.[0];
+          return <button type="button" key={`${item.branch_code}-${item.ma_pgd}`} className={`${profileBranch === item.branch_code ? 'is-active' : ''} ${isPrimary ? 'is-primary' : ''}`} onClick={() => { setProfileBranch(item.branch_code); setLoanBranch(null); }}><span>Chi nhánh {item.branch_code}{isPrimary ? <Tag color="gold">CHÍNH</Tag> : null}</span><strong>{compactMoney(Number(item.so_du_tien_gui || 0) + Number(item.so_du_tgtt_binh_quan || 0) + Number(item.so_du_tien_vay || 0))}</strong><small>CBQL: {item.ten_can_bo || item.ma_cb || 'Chưa xác định'} · {mainUnit ? `${mainUnit.unit_name}${item.unit_details.length > 1 ? ` +${item.unit_details.length - 1} đơn vị` : ''}` : 'Chưa rõ đơn vị'}</small></button>;
         })}
       </div>
       <Row gutter={[14, 14]} className="demo-quick-metrics c360-profile-metrics">
@@ -894,9 +900,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
             { key: 'code', label: 'Mã khách hàng', children: <Text strong copyable={{ text: viewedCustomer.ma_kh }}>{viewedCustomer.ma_kh}</Text> },
             { key: 'type', label: 'Loại khách hàng', children: customerTypeLabel(viewedCustomer.loai_khach_hang) },
             { key: 'branches', label: 'Các chi nhánh', children: branchDetails.length ? <Space size={[4, 4]} wrap>{[...new Set(branchDetails.map((item) => item.branch_code).filter(Boolean))].map((code) => <Tag key={code} color={code === customerRecord.primary_branch_code ? 'gold' : 'default'}>{code}{code === customerRecord.primary_branch_code ? ' · CHÍNH' : ''}</Tag>)}</Space> : (viewedCustomer.branch_codes || 'Chưa có dữ liệu') },
-            { key: 'pgds', label: 'Đơn vị phát sinh tài khoản', children: profileBranch
-              ? <Tooltip title="Nguồn DP01/PF14: mã phòng/PGD gắn với tài khoản của khách hàng; không phải phòng công tác của CBQL."><Text>{selectedBranchDetail?.ten_pgd || 'Chưa xác định đơn vị'}</Text></Tooltip>
-              : (viewedCustomer.pgd_names || viewedCustomer.primary_pgd_name || 'Chưa có dữ liệu') },
+            { key: 'pgds', label: 'Đơn vị phát sinh tài khoản', children: selectedUnits.length
+              ? <Space size={[4, 4]} wrap>{selectedUnits.map((unit) => <Tooltip key={`${unit.branch_code || profileBranch}-${unit.unit_code}`} title={`${unit.account_count} tài khoản · ${fullMoney(unit.balance)} · CB tài khoản: ${unit.officer_name || 'Chưa xác định trong danh sách user'}`}><Tag color={unit === selectedUnits[0] ? 'blue' : 'default'}>{!profileBranch ? `CN ${unit.branch_code} · ` : ''}{unit.unit_name}: {compactMoney(unit.balance)}</Tag></Tooltip>)}</Space>
+              : 'Chưa có dữ liệu' },
             { key: 'loanType', label: 'Loại vay', children: loanTypeLabel(viewedCustomer.loai_vay) },
             { key: 'hkdAccounts', label: 'Tài khoản hộ kinh doanh', children: viewedCustomer.hkd_tk
               ? <Text copyable={{ text: viewedCustomer.hkd_account_numbers || '' }}>{viewedCustomer.hkd_account_numbers || 'Đã xác định CUST_TYPE 570'}</Text>
@@ -1237,9 +1243,24 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
               scroll={{ x: 900 }}
               dataSource={branchDetails}
               rowClassName={(row) => row.branch_code === customerRecord.primary_branch_code ? 'c360-primary-branch-row' : ''}
+              expandable={{
+                rowExpandable: (row) => Boolean(row.unit_details?.length),
+                expandedRowRender: (row) => <Table
+                  size="small"
+                  rowKey="unit_code"
+                  pagination={false}
+                  dataSource={row.unit_details || []}
+                  columns={[
+                    { title: 'Đơn vị phát sinh', dataIndex: 'unit_name', render: (value, unit, index) => <Space><Text strong>{value}</Text>{index === 0 ? <Tag color="blue">GIÁ TRỊ LỚN NHẤT</Tag> : null}</Space> },
+                    { title: 'Số tài khoản', dataIndex: 'account_count', align: 'right', width: 120 },
+                    { title: 'Số dư', dataIndex: 'balance', align: 'right', width: 180, render: fullMoney },
+                    { title: 'CB theo tài khoản', width: 220, render: (_, unit) => unit.officer_verified ? <Text>{unit.officer_name}</Text> : <Text type="secondary">Chưa xác định</Text> },
+                  ]}
+                />,
+              }}
               columns={[
                 { title: 'Chi nhánh', dataIndex: 'branch_code', width: 150, fixed: 'left', render: (value) => <Space size={4}><Text strong>{value}</Text>{value === customerRecord.primary_branch_code ? <Tag color="gold">CHÍNH</Tag> : null}</Space> },
-                { title: <Tooltip title="Mã đơn vị gắn với tài khoản theo DP01/PF14; không phải phòng công tác của CBQL.">Đơn vị phát sinh</Tooltip>, width: 190, render: (_, row) => <div><Text>{row.ten_pgd || row.ma_pgd || '—'}</Text>{row.ten_pgd && row.ma_pgd ? <><br /><Text type="secondary">Mã {row.ma_pgd}</Text></> : null}</div> },
+                { title: <Tooltip title="Các đơn vị được xếp theo tổng số dư DP01, không chọn theo mã lớn nhất.">Đơn vị quan hệ chính</Tooltip>, width: 210, render: (_, row) => <div><Text>{row.representative_unit_name || '—'}</Text>{row.unit_count > 1 ? <><br /><Text type="secondary">+{row.unit_count - 1} đơn vị khác · Bấm mở rộng</Text></> : null}</div> },
                 { title: 'Cán bộ quản lý', width: 180, render: (_, row) => row.ten_can_bo || row.ma_cb || '—' },
                 { title: 'Tiền gửi CKH', dataIndex: 'so_du_tien_gui', align: 'right', width: 140, render: compactMoney },
                 { title: 'TGTT bình quân', dataIndex: 'so_du_tgtt_binh_quan', align: 'right', width: 140, render: compactMoney },
