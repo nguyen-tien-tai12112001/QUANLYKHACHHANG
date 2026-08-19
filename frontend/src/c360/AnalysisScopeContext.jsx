@@ -93,26 +93,15 @@ export function AnalysisScopeProvider({ children, currentUser }) {
     const profileParams = scopeToProfileParams(applied);
     // Nạp trước các tập tổng hợp dùng chung. Khi chuyển tab, request trùng sẽ lấy
     // từ cache của phiên thay vì truy vấn lại database.
-    const previousPeriod = periods[periods.findIndex((item) => item.period_key === applied.periodKey) + 1]?.period_key;
     setSessionLoading(true);
-    const sharedRequests = [
+    const coreRequests = [
       client.get('/customer-processing/profile-summary', { params: profileParams }),
       client.get('/customer-processing/profiles', { params: { ...profileParams, page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' } }),
-      client.get('/dashboard/insights', { params: profileParams }),
-      client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true } }),
-      client.get('/dashboard/business-analytics', { params: { ...profileParams, include_rankings: false } }),
-      client.get('/dashboard/business-analytics', { params: profileParams }),
-      client.get('/dashboard/business-trends', { params: { periods: 12, ...profileParams } }),
-      client.get('/customer-processing/profile-groups', { params: profileParams }),
-      client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' } }),
-      client.get('/customer-processing/reconciliations', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined, latest_job_only: true, page: 1, page_size: 1 } }),
-      client.get('/imports/source-readiness', { params: { period_key: applied.periodKey } }),
-      previousPeriod ? client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: applied.periodKey, previous_period: previousPeriod } }) : Promise.resolve({ data: null }),
     ];
-    Promise.allSettled(sharedRequests).then((results) => {
+    Promise.allSettled(coreRequests).then((results) => {
       if (!active) return;
       const failed = results.filter((item) => item.status === 'rejected');
-      const coreFailed = results.slice(0, 2).filter((item) => item.status === 'rejected');
+      const coreFailed = failed;
       const summaryResponse = results[0]?.status === 'fulfilled' ? results[0].value?.data : null;
       if (coreFailed.length) {
         notification.warning({ message: 'Phiên dữ liệu tải chưa đầy đủ', description: `${failed.length} khối dữ liệu chưa tải được. Hệ thống sẽ thử lại khi bạn bấm Làm mới.`, placement: 'topRight' });
@@ -124,14 +113,26 @@ export function AnalysisScopeProvider({ children, currentUser }) {
           scopeKey: JSON.stringify(profileParams),
           summary: summaryResponse,
           profiles: results[1]?.status === 'fulfilled' ? results[1].value?.data : null,
-          insights: results[2]?.status === 'fulfilled' ? results[2].value?.data : null,
-          topChanges: results[3]?.status === 'fulfilled' ? results[3].value?.data : null,
-          businessAnalytics: results[5]?.status === 'fulfilled' ? results[5].value?.data : null,
-          businessTrends: results[6]?.status === 'fulfilled' ? results[6].value?.data : null,
-          groups: results[7]?.status === 'fulfilled' ? results[7].value?.data : null,
         });
-        notification.success({ message: 'Đã chuẩn bị xong phiên phân tích', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng. Các trang tổng quan và phân tích đã sẵn sàng.`, placement: 'topRight' });
-        if (failed.length) notification.warning({ message: 'Một số khối phụ chưa sẵn sàng', description: `${failed.length} khối phụ sẽ tự tải lại khi mở trang tương ứng.`, placement: 'topRight' });
+        notification.success({ message: 'Đã tải phạm vi dữ liệu', description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng. Các khối phân tích đang được làm ấm có kiểm soát.`, placement: 'topRight' });
+
+        // Không bắn đồng thời các truy vấn tổng hợp lớn: PostgreSQL từng phải
+        // spill ra file tạm và chậm hơn khi 12-16 request tranh tài nguyên.
+        // Dashboard tự nạp các khối đang nhìn thấy; hàng đợi này chỉ làm ấm
+        // những trang còn lại, từng request một, vào cùng Redis session.
+        const background = { hideGlobalLoading: true, timeout: 180_000 };
+        const warmQueue = [
+          () => client.get('/dashboard/business-analytics', { params: profileParams, ...background }),
+          () => client.get('/dashboard/business-trends', { params: { periods: 12, ...profileParams }, ...background }),
+          () => client.get('/customer-processing/profile-groups', { params: profileParams, ...background }),
+          () => client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' }, ...background }),
+        ];
+        (async () => {
+          for (const warm of warmQueue) {
+            if (!active) break;
+            try { await warm(); } catch { /* Trang tương ứng có thể tự tải lại. */ }
+          }
+        })();
       }
     }).finally(() => { if (active) setSessionLoading(false); });
     return () => { active = false; };

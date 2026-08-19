@@ -9,6 +9,7 @@ const client = axios.create({
 
 const responseCache = new Map();
 const inflightGets = new Map();
+let heavyAnalysisTail = Promise.resolve();
 // Một phiên lọc C360 dùng lại kết quả khi chuyển tab; bộ lọc mới/Làm mới sẽ xóa cache.
 const DEFAULT_CACHE_TTL = 5 * 60_000;
 const CACHEABLE_GET_PATHS = [
@@ -36,6 +37,13 @@ const CACHEABLE_GET_PATHS = [
 // Kho dữ liệu đã có progress upload, timeline job và loading cục bộ tại bảng.
 // Không dùng overlay toàn màn hình vì polling trạng thái nền sẽ làm giao diện bị che lặp lại.
 const LOCAL_LOADING_PATHS = ['/imports/', '/cif/'];
+const HEAVY_ANALYSIS_PATHS = [
+  '/dashboard/insights',
+  '/dashboard/business-analytics',
+  '/dashboard/business-trends',
+  '/customer-processing/period-comparison',
+  '/customer-processing/profile-groups',
+];
 
 function stableParams(params = {}) {
   return Object.entries(params)
@@ -124,7 +132,12 @@ client.get = (url, config = {}) => {
   }
   if (inflightGets.has(key)) return inflightGets.get(key);
 
-  const request = axiosGet(url, config)
+  const execute = () => axiosGet(url, config);
+  const isHeavyAnalysis = HEAVY_ANALYSIS_PATHS.some((path) => url.startsWith(path));
+  const transport = isHeavyAnalysis
+    ? (heavyAnalysisTail = heavyAnalysisTail.catch(() => {}).then(execute))
+    : execute();
+  const request = transport
     .then((response) => {
       if (canCache) responseCache.set(key, { savedAt: Date.now(), response });
       return response;
