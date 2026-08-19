@@ -955,6 +955,27 @@ def dashboard_business_analytics(
             "officers": int(row[6] or 0),
         } for row in branch_rows],
         "officers": _build_officer_leaderboard(db, period_key, scope.ma_cn, scope.ma_pgd) if include_rankings else [],
+        "metric_definitions": {
+            "term_deposit": {"source": "PF14", "columns": "MONTHLYENDBALANCE, CCY", "formula": "SUM(MONTHLYENDBALANCE × tỷ giá)", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "deposit": {"source": "PF14/DP01", "columns": "MONTHLYENDBALANCE, AVGBAL/AVERAGEBALANCE", "formula": "Tiền gửi CKH cuối kỳ + TGTT bình quân", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "casa": {"source": "PF14/DP01", "columns": "AVERAGEBALANCE/AVGBAL, CCY", "formula": "SUM(số dư TKTT bình quân × tỷ giá)", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "payment_turnover": {"source": "GL02", "columns": "LOCAC, CRAMOUNT, CUSTOMER", "formula": "SUM(CRAMOUNT), LOCAC = 421101, giao dịch hợp lệ", "currency": "Giá trị đã chuẩn hóa về VNĐ; không dùng tỷ giá nếu nguồn không có ngoại tệ"},
+            "loan": {"source": "PF10/LN01", "columns": "EOMBAL, DU_NO, LNTYPE, CCY", "formula": "SUM(dư nợ ngắn hạn + trung dài hạn + thấu chi)", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "short_loan": {"source": "PF10/LN01", "columns": "EOMBAL/DU_NO, LNTYPE", "formula": "SUM dư nợ với LNTYPE = 100 hoặc khoản vay ngắn hạn", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "medium_long_loan": {"source": "PF10/LN01", "columns": "EOMBAL/DU_NO, LNTYPE", "formula": "SUM dư nợ với LNTYPE IN (110,120)", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "overdraft": {"source": "PF10/LN01", "columns": "EOMBAL/DU_NO, LNTYPE", "formula": "SUM dư nợ với LNTYPE = 241", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+            "provision": {"source": "LN01/BC29", "columns": "DU_NO, NHOM_NO, SO_TRICH_LAP_TRONG_KY", "formula": "DPRR chung lũy kế + DPRR cụ thể lũy kế", "currency": "VNĐ theo dữ liệu nguồn"},
+            "written_off": {"source": "RR01", "columns": "DUNO_GOC_HIENTAI, THU_GOC, THU_LAI", "formula": "SUM(DUNO_GOC_HIENTAI); thu hồi = SUM(THU_GOC + THU_LAI)", "currency": "VNĐ theo dữ liệu nguồn"},
+            "general_provision": {"source": "LN01", "columns": "DU_NO, NHOM_NO", "formula": "Nhóm 1–4: biến động dư nợ × 0,75%; lũy kế = dư nợ cuối kỳ × 0,75%", "currency": "VNĐ theo dữ liệu nguồn"},
+            "specific_provision": {"source": "BC29", "columns": "NHOM_NO, SO_TRICH_LAP_TRONG_KY", "formula": "Nhóm 2–5; trong tháng = kỳ này − kỳ trước, lũy kế = số trích lập cuối kỳ", "currency": "VNĐ theo dữ liệu nguồn"},
+            "principal_due": {"source": "LN01", "columns": "NEXT_REPAYMENT_DATE, NEXT_REPAYMENT_AMOUNT", "formula": "SUM gốc có ngày trả nợ trong tháng kế tiếp", "currency": "VNĐ theo dữ liệu nguồn"},
+            "interest_due": {"source": "LN01", "columns": "NEXT_INTEREST_REPAYMENT_DATE, TOTAL_INTEREST_REPAYMENT_AMOUNT", "formula": "SUM lãi có ngày trả lãi trong tháng kế tiếp", "currency": "VNĐ theo dữ liệu nguồn"},
+            "overdue_interest": {"source": "LN01", "columns": "PASTDUE_INTEREST_AMOUNT", "formula": "SUM lãi quá hạn theo khách hàng trong phạm vi", "currency": "VNĐ theo dữ liệu nguồn"},
+            "fee": {"source": "KH02", "columns": "ACCTCD, CRAMT, DRAMT, CUSTSEQ", "formula": "SUM(CRAMT) − SUM(DRAMT) theo nhóm tài khoản cấu hình", "currency": "VNĐ theo dữ liệu nguồn"},
+            "service": {"source": "CN05/DP01/Bill Payment/KH02", "columns": "Cờ sản phẩm và mã dịch vụ cấu hình", "formula": "Đếm duy nhất khách hàng có ít nhất một sản phẩm hợp lệ", "currency": "Không áp dụng"},
+            "customers": {"source": "Kho CIF + kết quả C360", "columns": "CUSTNO/MA_KH lõi", "formula": "COUNT(DISTINCT mã KH lõi) theo phạm vi", "currency": "Không áp dụng"},
+            "total_scale": {"source": "PF14/DP01/PF10/LN01", "columns": "Tiền gửi CKH, TGTT bình quân, dư nợ", "formula": "Tiền gửi CKH + TGTT bình quân + tổng dư nợ", "currency": "Các nguồn ngoại tệ đã quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
+        },
     }
     _BUSINESS_CACHE[cache_key] = (monotonic(), result)
     return result
@@ -963,20 +984,27 @@ def dashboard_business_analytics(
 @router.get("/business-trends")
 def dashboard_business_trends(
     periods: int = Query(default=6, ge=2, le=24),
+    period_key: str | None = Query(default=None),
+    filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
 ):
-    cache_key = (periods, scope.ma_cn, scope.ma_pgd)
+    filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
+    cache_key = (periods, period_key, scope.ma_cn, scope.ma_pgd, filter_key)
     cached = _BUSINESS_TREND_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
     period_keys = [row[0] for row in (
         db.query(CustomerPeriodProfile.period_key)
+        .filter(CustomerPeriodProfile.period_key <= period_key if period_key else True)
         .distinct().order_by(desc(CustomerPeriodProfile.period_key)).limit(periods).all()
     )]
     period_keys.reverse()
     model = CustomerPeriodBranchDetail if scope.ma_cn else CustomerPeriodProfile
     query = db.query(model).filter(model.period_key.in_(period_keys))
+    if period_key:
+        customer_ids = _matching_customer_ids(db, period_key, scope, filters)
+        query = query.filter(model.ma_kh.in_(customer_ids))
     if scope.ma_cn:
         query = query.filter(CustomerPeriodBranchDetail.branch_code == scope.ma_cn)
     if scope.ma_pgd:
@@ -1354,6 +1382,36 @@ def dashboard_insights(
         func.sum(case((and_(previous.id.isnot(None), current_services < previous_services), 1), else_=0)),
     ).one()
 
+    scoped_change_counts = None
+    if scope.ma_cn and previous_period:
+        current_detail = aliased(CustomerPeriodBranchDetail)
+        previous_detail = aliased(CustomerPeriodBranchDetail)
+        scoped_changes = (
+            db.query(current_detail, previous_detail)
+            .outerjoin(previous_detail, and_(
+                previous_detail.period_key == previous_period,
+                previous_detail.ma_kh == current_detail.ma_kh,
+                previous_detail.branch_code == current_detail.branch_code,
+                func.coalesce(previous_detail.ma_pgd, '') == func.coalesce(current_detail.ma_pgd, ''),
+            ))
+            .filter(
+                current_detail.period_key == period_key,
+                current_detail.branch_code == scope.ma_cn,
+                current_detail.ma_kh.in_(customer_ids),
+            )
+        )
+        if scope.ma_pgd:
+            scoped_changes = scoped_changes.filter(current_detail.ma_pgd == scope.ma_pgd)
+        current_detail_deposit = func.coalesce(current_detail.so_du_tien_gui, 0) + func.coalesce(current_detail.so_du_tgtt_binh_quan, 0)
+        previous_detail_deposit = func.coalesce(previous_detail.so_du_tien_gui, 0) + func.coalesce(previous_detail.so_du_tgtt_binh_quan, 0)
+        current_detail_services = sum(func.coalesce(getattr(current_detail, key), 0) for key in ACTIVE_SERVICE_KEYS)
+        previous_detail_services = sum(func.coalesce(getattr(previous_detail, key), 0) for key in ACTIVE_SERVICE_KEYS)
+        scoped_change_counts = scoped_changes.with_entities(
+            func.sum(case((and_(previous_detail.id.isnot(None), previous_detail_deposit > 0, current_detail_deposit <= previous_detail_deposit * 0.7), 1), else_=0)),
+            func.sum(case((and_(previous_detail.id.isnot(None), func.coalesce(previous_detail.so_du_tien_vay, 0) > 0, func.coalesce(current_detail.so_du_tien_vay, 0) >= func.coalesce(previous_detail.so_du_tien_vay, 0) * 1.3), 1), else_=0)),
+            func.sum(case((and_(previous_detail.id.isnot(None), current_detail_services < previous_detail_services), 1), else_=0)),
+        ).one()
+
     anomaly_condition = or_(
         and_(previous.id.isnot(None), previous_deposit > 0, current_deposit <= previous_deposit * 0.7),
         and_(
@@ -1547,7 +1605,7 @@ def dashboard_insights(
             "change": float((overview[5] or 0) - (overview[6] or 0)),
             "new_accounts": int(new_accounts or 0),
             "closed_accounts": int(closed_accounts or 0),
-            "large_drop_customers": int(overview[9] or 0),
+            "large_drop_customers": int((scoped_change_counts[0] if scoped_change_counts else overview[9]) or 0),
         },
         "credit": {
             "total": float(overview[7] or 0),
@@ -1563,9 +1621,9 @@ def dashboard_insights(
             "total": int(anomaly_total or 0),
             "page": anomaly_page,
             "page_size": anomaly_page_size,
-            "deposit_drop_count": int(overview[9] or 0),
-            "loan_increase_count": int(overview[10] or 0),
-            "service_drop_count": int(overview[11] or 0),
+            "deposit_drop_count": int((scoped_change_counts[0] if scoped_change_counts else overview[9]) or 0),
+            "loan_increase_count": int((scoped_change_counts[1] if scoped_change_counts else overview[10]) or 0),
+            "service_drop_count": int((scoped_change_counts[2] if scoped_change_counts else overview[11]) or 0),
             "items": anomalies,
         },
         "top_changes": {
