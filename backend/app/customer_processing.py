@@ -441,6 +441,16 @@ BRANCH_DETAIL_SQL = text(
         WHERE period_key = :period_key AND ma_kh IS NOT NULL
         GROUP BY ma_kh, ma_cn
     ),
+    kh02 AS (
+        SELECT
+            TRIM(customer_code) AS ma_kh,
+            TRIM(branch_code) AS branch_code
+        FROM kh02_customer_transactions
+        WHERE period_key = :period_key
+          AND NULLIF(TRIM(customer_code), '') IS NOT NULL
+          AND NULLIF(TRIM(branch_code), '') IS NOT NULL
+        GROUP BY TRIM(customer_code), TRIM(branch_code)
+    ),
     keys AS (
         SELECT ma_kh, branch_code FROM cif
         UNION SELECT ma_kh, branch_code FROM dp WHERE EXISTS (SELECT 1 FROM cif WHERE cif.ma_kh=dp.ma_kh)
@@ -448,6 +458,7 @@ BRANCH_DETAIL_SQL = text(
         UNION SELECT ma_kh, branch_code FROM pf WHERE EXISTS (SELECT 1 FROM cif WHERE cif.ma_kh=pf.ma_kh)
         UNION SELECT ma_kh, branch_code FROM cn WHERE EXISTS (SELECT 1 FROM cif WHERE cif.ma_kh=cn.ma_kh)
         UNION SELECT ma_kh, branch_code FROM pf10 WHERE EXISTS (SELECT 1 FROM cif WHERE cif.ma_kh=pf10.ma_kh)
+        UNION SELECT ma_kh, branch_code FROM kh02 WHERE EXISTS (SELECT 1 FROM cif WHERE cif.ma_kh=kh02.ma_kh)
     )
     INSERT INTO customer_period_branch_details (
         period_key,
@@ -1509,24 +1520,43 @@ def update_job(db: Session, job: CustomerProcessingJob, status: str, stage: str,
     db.refresh(job)
 
 
-def create_processing_job(db: Session, period_key: str) -> CustomerProcessingJob:
+def create_processing_job(
+    db: Session,
+    period_key: str,
+    *,
+    allowed_missing_types: set[str] | None = None,
+) -> CustomerProcessingJob:
     summary = get_period_file_summary(db, period_key)
-    if not summary["is_fully_ready"]:
-        missing = summary.get("missing_required_files") or []
+    missing = summary.get("missing_required_files") or []
+    allowed_missing = {str(item).strip().upper() for item in (allowed_missing_types or set())}
+    blocking_missing = [
+        item for item in missing
+        if str(item.get("file_type") or "").strip().upper() not in allowed_missing
+    ]
+    if not summary["is_fully_ready"] and blocking_missing:
         preview = ", ".join(
             f"{item['branch_code']}-{item['file_type']}"
-            for item in missing[:8]
+            for item in blocking_missing[:8]
         )
-        suffix = f" và {len(missing) - 8} nguồn khác" if len(missing) > 8 else ""
+        suffix = f" và {len(blocking_missing) - 8} nguồn khác" if len(blocking_missing) > 8 else ""
         raise ValueError(
             "Kỳ dữ liệu chưa đủ nguồn bắt buộc theo chi nhánh"
             + (f": {preview}{suffix}." if preview else ".")
         )
 
+    skipped_types = sorted({
+        str(item.get("file_type") or "").strip().upper()
+        for item in missing
+        if str(item.get("file_type") or "").strip().upper() in allowed_missing
+    })
+
     job = CustomerProcessingJob(
         period_key=period_key,
         status="queued",
-        stage="Đã tạo job xử lý dữ liệu khách hàng",
+        stage=(
+            f"Đã tạo job xử lý dữ liệu khách hàng; bỏ qua nguồn thiếu: {', '.join(skipped_types)}"
+            if skipped_types else "Đã tạo job xử lý dữ liệu khách hàng"
+        ),
         progress_percent=0,
         required_file_count=summary["required_file_count"],
         available_required_file_count=summary["available_required_file_count"],

@@ -1276,6 +1276,7 @@ def list_exchange_rates(period_key: str = Query(...), db: Session = Depends(get_
 def start_processing_job(
     period_key: str,
     background_tasks: BackgroundTasks,
+    allow_missing_ftpln: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     running = (
@@ -1290,7 +1291,11 @@ def start_processing_job(
         return serialize_job(running)
 
     try:
-        job = create_processing_job(db, period_key)
+        job = create_processing_job(
+            db,
+            period_key,
+            allowed_missing_types={"FTPLN"} if allow_missing_ftpln else None,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
