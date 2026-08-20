@@ -4,6 +4,19 @@ import client, { clearApiCache } from '../api/client';
 
 const AnalysisScopeContext = createContext(null);
 
+function createAnalysisSessionId() {
+  const cryptoApi = globalThis.crypto;
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID();
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16));
+    bytes[6] = (bytes[6] & 0x0f) | 0x40;
+    bytes[8] = (bytes[8] & 0x3f) | 0x80;
+    const hex = [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  }
+  return `analysis-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export const EMPTY_ADVANCED_SCOPE = {
   keyword: '',
   customerTypes: [], loanTypes: [], officerCode: null,
@@ -156,7 +169,7 @@ export function AnalysisScopeProvider({ children, currentUser }) {
     apply: () => {
       if (!draft.periodKey) return false;
       clearApiCache();
-      sessionStorage.setItem('c360_analysis_session', crypto.randomUUID());
+      sessionStorage.setItem('c360_analysis_session', createAnalysisSessionId());
       const next = { ...draft, branchCode: fixedBranchCode || draft.branchCode, advanced: { ...draft.advanced } };
       setApplied(next);
       setSessionData(null);
@@ -173,7 +186,7 @@ export function AnalysisScopeProvider({ children, currentUser }) {
     },
     refresh: () => {
       clearApiCache();
-      sessionStorage.setItem('c360_analysis_session', crypto.randomUUID());
+      sessionStorage.setItem('c360_analysis_session', createAnalysisSessionId());
       setSessionVersion((value) => value + 1);
     },
   }), [applied, draft, fixedBranchCode, metadataLoading, options, periods, sessionData, sessionLoading, sessionSummary, sessionVersion]);
