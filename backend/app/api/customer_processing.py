@@ -1277,6 +1277,7 @@ def start_processing_job(
     period_key: str,
     background_tasks: BackgroundTasks,
     allow_missing_ftpln: bool = Query(default=False),
+    allow_missing_sources: bool = Query(default=False),
     db: Session = Depends(get_db),
 ):
     running = (
@@ -1291,10 +1292,15 @@ def start_processing_job(
         return serialize_job(running)
 
     try:
+        allowed_missing_types = (
+            set(REQUIRED_FILE_TYPES)
+            if allow_missing_sources
+            else ({"FTPLN"} if allow_missing_ftpln else None)
+        )
         job = create_processing_job(
             db,
             period_key,
-            allowed_missing_types={"FTPLN"} if allow_missing_ftpln else None,
+            allowed_missing_types=allowed_missing_types,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
