@@ -12,7 +12,7 @@ from app.models import (
     SystemRolePermission,
     SystemUser,
 )
-from app.security import hash_password
+from app.security import hash_password, verify_password
 
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -39,6 +39,8 @@ PERMISSION_DEFINITIONS = [
     ("customer:credit:view", "Xem tiền vay và rủi ro", "Khách hàng C360"),
     ("customer:income:view", "Xem phí và thu nhập", "Khách hàng C360"),
     ("customer:export", "Xuất dữ liệu khách hàng", "Khách hàng C360"),
+    ("customer:view_sensitive", "Xem đầy đủ dữ liệu định danh nhạy cảm", "Khách hàng C360"),
+    ("customer:view_calculation_trace", "Xem truy vết nguồn và công thức chỉ tiêu", "Khách hàng C360"),
     ("analytics:view", "Xem phân tích nghiệp vụ", "Phân tích nghiệp vụ"),
     ("analytics:export", "Xuất phân tích nghiệp vụ", "Phân tích nghiệp vụ"),
     ("warehouse:view", "Xem kho dữ liệu", "Kho dữ liệu"),
@@ -71,6 +73,7 @@ PERMISSION_DEFINITIONS = [
     ("admin:config:view", "Xem cấu hình nghiệp vụ", "Quản trị hệ thống"),
     ("admin:config:write", "Thêm sửa xóa cấu hình nghiệp vụ", "Quản trị hệ thống"),
     ("admin:audit:view", "Xem nhật ký thao tác", "Quản trị hệ thống"),
+    ("admin:access_test", "Kiểm tra quyền thực tế của người dùng", "Quản trị hệ thống"),
 ]
 
 
@@ -159,11 +162,10 @@ def seed_roles_permissions(db: Session) -> dict[str, SystemRole]:
     }
     for role_code, permission_codes in role_permission_codes.items():
         role = roles[role_code]
-        desired_permission_ids = {permissions[code].id for code in permission_codes}
-        db.query(SystemRolePermission).filter(
-            SystemRolePermission.role_id == role.id,
-            ~SystemRolePermission.permission_id.in_(desired_permission_ids),
-        ).delete(synchronize_session=False)
+        # Chỉ khởi tạo bộ quyền mặc định cho DB mới. Từ lần cấu hình đầu tiên,
+        # DB là nguồn chuẩn để thay đổi trên giao diện không bị ghi đè khi restart.
+        if role.permissions and role_code != "ADMIN":
+            continue
         for permission_code in permission_codes:
             exists = (
                 db.query(SystemRolePermission)
@@ -272,6 +274,7 @@ def seed_organization(db: Session, default_password_hash: str) -> None:
         if not user:
             user = SystemUser(
                 password_hash=default_password_hash,
+                must_change_password=True,
                 role_id=role_user.id if role_user else None,
                 **payload,
             )
@@ -289,6 +292,7 @@ def seed_admin(db: Session, roles: dict[str, SystemRole], default_password_hash:
         admin = SystemUser(
             username="admin",
             password_hash=default_password_hash,
+            must_change_password=True,
             full_name="Quản trị hệ thống C360",
             role_id=roles["ADMIN"].id,
             is_active=True,
@@ -300,7 +304,19 @@ def seed_admin(db: Session, roles: dict[str, SystemRole], default_password_hash:
         admin.role_id = roles["ADMIN"].id
         admin.is_active = True
         admin.is_superuser = True
-        admin.password_hash = default_password_hash
+        # Không bao giờ đặt lại mật khẩu của admin khi backend khởi động.
+
+
+def mark_default_passwords_for_change(db: Session) -> None:
+    """Mật khẩu mặc định chỉ là mật khẩu tạm và không được dùng vào hệ thống nghiệp vụ."""
+
+    users = db.query(SystemUser).filter(
+        SystemUser.password_changed_at.is_(None),
+        SystemUser.must_change_password.is_(False),
+    ).all()
+    for user in users:
+        if verify_password(DEFAULT_PASSWORD, user.password_hash):
+            user.must_change_password = True
 
 
 def seed_initial_data() -> None:
@@ -310,6 +326,7 @@ def seed_initial_data() -> None:
         roles = seed_roles_permissions(db)
         seed_admin(db, roles, default_password_hash)
         seed_organization(db, default_password_hash)
+        mark_default_passwords_for_change(db)
         db.commit()
     except Exception:
         db.rollback()

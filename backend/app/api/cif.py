@@ -44,8 +44,8 @@ MAX_CIF_FILES_PER_UPLOAD = 20
 STUCK_JOB_MINUTES = 20
 
 
-def require_cif_manager(user: CurrentUser) -> None:
-    if "admin" not in user.permissions and "import.manage" not in user.permissions:
+def require_cif_manager(user: CurrentUser, permission: str = "cif:import") -> None:
+    if "admin" not in user.permissions and permission not in user.permissions:
         raise HTTPException(status_code=403, detail="Bạn không có quyền cập nhật kho CIF")
 
 
@@ -216,7 +216,7 @@ def upload_cif(
     file: UploadFile = File(...),
     user: CurrentUser = Depends(get_current_user),
 ):
-    require_cif_manager(user)
+    require_cif_manager(user, "cif:import")
     suffix = Path(file.filename or "").suffix.lower()
     if suffix not in ALLOWED_CIF_SUFFIXES:
         raise HTTPException(status_code=400, detail="Kho CIF chỉ nhận file CSV, XLS hoặc XLSX")
@@ -241,7 +241,7 @@ def upload_cif_bulk(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    require_cif_manager(user)
+    require_cif_manager(user, "cif:import")
     if not files:
         raise HTTPException(status_code=400, detail="Chưa chọn file CIF")
     if len(files) > MAX_CIF_FILES_PER_UPLOAD:
@@ -312,7 +312,7 @@ def recover_cif_import(
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    require_cif_manager(user)
+    require_cif_manager(user, "cif:import")
     item = db.query(CifImportBatch).filter(CifImportBatch.id == batch_id).with_for_update().first()
     if not item:
         raise HTTPException(status_code=404, detail="Không tìm thấy job CIF")
@@ -570,7 +570,7 @@ def apply_cif_change(
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ):
-    require_cif_manager(user)
+    require_cif_manager(user, "cif:override")
     source = db.query(CifSourceRecord).filter(CifSourceRecord.id == source_record_id).first()
     if not source or source.comparison_status != "changed":
         raise HTTPException(status_code=404, detail="Không tìm thấy bản thay đổi CIF")
@@ -629,7 +629,7 @@ def reject_cif_change(
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ):
-    require_cif_manager(user)
+    require_cif_manager(user, "cif:review")
     source = db.query(CifSourceRecord).filter(CifSourceRecord.id == source_record_id).first()
     if not source or source.comparison_status != "changed":
         raise HTTPException(status_code=404, detail="Không tìm thấy bản thay đổi CIF")
@@ -791,7 +791,7 @@ def resolve_cif_conflict(
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ):
-    require_cif_manager(user)
+    require_cif_manager(user, "cif:review")
     item = db.query(CifIdentityConflict).filter(CifIdentityConflict.id == conflict_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Không tìm thấy xung đột CIF")

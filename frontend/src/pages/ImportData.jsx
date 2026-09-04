@@ -40,8 +40,10 @@ import {
   ReloadOutlined,
   SearchOutlined,
 } from '@ant-design/icons';
+import { useRef } from 'react';
 
 import client from '../api/client';
+import DataPageLoading from '../components/DataPageLoading';
 
 const { Dragger } = Upload;
 const { RangePicker } = DatePicker;
@@ -307,6 +309,7 @@ function ImportJobTimeline({ jobs }) {
 
 function ImportData() {
   const [form] = Form.useForm();
+  const initialRefreshRef = useRef(true);
   const [fileList, setFileListState] = useState(warehouseSession.fileList);
   const [files, setFiles] = useState([]);
   const [periods, setPeriods] = useState([]);
@@ -846,10 +849,13 @@ function ImportData() {
   ];
 
   useEffect(() => {
-    refreshAll();
+    refreshAll().finally(() => {
+      initialRefreshRef.current = false;
+    });
   }, []);
 
   useEffect(() => {
+    if (initialRefreshRef.current) return undefined;
     const timer = window.setTimeout(() => {
       loadFiles();
       loadStalledJobs();
@@ -947,6 +953,11 @@ function ImportData() {
 
   return (
     <Space orientation="vertical" size={20} className="page-stack">
+      <DataPageLoading
+        active={loadingFiles || loadingPeriods}
+        title="Đang tải kho dữ liệu"
+        detail="Đang tải danh sách kỳ, file nguồn và trạng thái import. Các job chạy nền vẫn tiếp tục bình thường."
+      />
       <section className="brand-panel warehouse-hero">
         <div>
           <Tag color="gold">Kho dữ liệu theo kỳ</Tag>

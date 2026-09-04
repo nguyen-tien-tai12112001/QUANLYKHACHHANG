@@ -10,6 +10,7 @@ from app.auth.schemas import CurrentUser
 class BranchScope:
     ma_cn: str | None
     ma_pgd: str | None
+    officer_code: str | None = None
 
 
 def resolve_branch_scope(
@@ -25,12 +26,16 @@ def resolve_branch_scope(
     allowed_branches = user.allowed_branches or ([home_cn] if home_cn else [])
     allowed_pgds = user.allowed_pgds or ([home_pgd] if home_pgd else [])
 
-    if user.scope == SCOPES["PGD"]:
+    if user.scope in {SCOPES["PGD"], SCOPES.get("OWN", "own")}:
         if requested_ma_cn and requested_ma_cn != home_cn:
             raise HTTPException(status_code=403, detail="Không có quyền xem chi nhánh này")
         if requested_ma_pgd and requested_ma_pgd != home_pgd:
             raise HTTPException(status_code=403, detail="Không có quyền xem PGD này")
-        return BranchScope(ma_cn=home_cn, ma_pgd=home_pgd)
+        return BranchScope(
+            ma_cn=home_cn,
+            ma_pgd=home_pgd,
+            officer_code=user.employee_code if user.scope == SCOPES.get("OWN", "own") else None,
+        )
 
     if requested_ma_cn and allowed_branches and requested_ma_cn not in allowed_branches:
         raise HTTPException(status_code=403, detail="Không có quyền xem chi nhánh này")

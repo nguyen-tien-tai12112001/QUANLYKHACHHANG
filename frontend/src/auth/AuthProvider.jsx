@@ -2,7 +2,6 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 
 import client from '../api/client';
 import { getRegisteredAccessToken, getRegisteredCurrentUser } from './authBridge';
-import { DEV_USER } from './permissions';
 
 const AuthContext = createContext(null);
 
@@ -35,9 +34,9 @@ export function AuthProvider({ children }) {
       setUser(data);
       return data;
     } catch (err) {
-      setUser(DEV_USER);
+      setUser(null);
       setError(err.response?.data?.detail || err.message);
-      return DEV_USER;
+      return null;
     } finally {
       setLoading(false);
     }
@@ -45,6 +44,15 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     refreshUser();
+  }, [refreshUser]);
+
+  useEffect(() => {
+    const handleUserUpdated = (event) => {
+      if (event.detail) setUser(event.detail);
+      else refreshUser();
+    };
+    window.addEventListener('c360:user-updated', handleUserUpdated);
+    return () => window.removeEventListener('c360:user-updated', handleUserUpdated);
   }, [refreshUser]);
 
   const value = useMemo(

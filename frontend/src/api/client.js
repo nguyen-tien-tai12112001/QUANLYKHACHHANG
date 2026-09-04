@@ -36,7 +36,7 @@ const CACHEABLE_GET_PATHS = [
 
 // Kho dữ liệu đã có progress upload, timeline job và loading cục bộ tại bảng.
 // Không dùng overlay toàn màn hình vì polling trạng thái nền sẽ làm giao diện bị che lặp lại.
-const LOCAL_LOADING_PATHS = ['/imports/', '/cif/'];
+const LOCAL_LOADING_PATHS = ['/imports/', '/cif/', '/admin/'];
 const HEAVY_ANALYSIS_PATHS = [
   '/dashboard/insights',
   '/dashboard/business-analytics',
@@ -60,6 +60,12 @@ function getCacheKey(url, config = {}) {
 
 export function clearApiCache() {
   responseCache.clear();
+}
+
+function clearExpiredSession() {
+  localStorage.removeItem('access_token');
+  localStorage.removeItem('c360_user');
+  sessionStorage.removeItem('c360_analysis_session');
 }
 
 function emitLoading(delta) {
@@ -112,8 +118,16 @@ client.interceptors.response.use(
   },
   (error) => {
     if (error.config?.__tracksGlobalLoading) emitLoading(-1);
-    if (error.response?.status === 401) {
+    const requestUrl = String(error.config?.url || '');
+    if (error.response?.status === 401 && !requestUrl.startsWith('/auth/login')) {
+      clearExpiredSession();
       notifyUnauthorized();
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') window.location.assign('/');
+      else if (typeof window !== 'undefined') window.location.reload();
+    }
+    const detail = error.response?.data?.detail;
+    if (error.response?.status === 403 && detail?.code === 'PASSWORD_CHANGE_REQUIRED' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('c360:password-change-required'));
     }
     return Promise.reject(error);
   },

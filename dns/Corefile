@@ -1,0 +1,15 @@
+.:53 {
+    bind 0.0.0.0
+    errors
+    health :8080
+    ready :8181
+
+    hosts {
+        10.8.0.119 c360.agribank.com.vn
+        fallthrough
+    }
+
+    forward . 10.8.0.1
+    cache 30
+    reload 5s
+}

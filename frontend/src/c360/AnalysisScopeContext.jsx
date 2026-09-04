@@ -19,7 +19,8 @@ function createAnalysisSessionId() {
 
 export const EMPTY_ADVANCED_SCOPE = {
   keyword: '',
-  customerTypes: [], loanTypes: [], officerCode: null,
+  customerTypes: [], loanTypes: [], officerCodes: [],
+  officerStatus: null, primaryBranchStatus: null, newCustomerStatus: null,
   depositStatus: null, loanStatus: null, relationshipStatus: null,
   minDeposit: null, maxDeposit: null, minLoan: null, maxLoan: null,
   minCasa: null, maxCasa: null, contactStatus: null,
@@ -35,6 +36,7 @@ export function AnalysisScopeProvider({ children, currentUser }) {
   const [metadataLoading, setMetadataLoading] = useState(true);
   const [sessionVersion, setSessionVersion] = useState(0);
   const [sessionLoading, setSessionLoading] = useState(false);
+  const [sessionProgress, setSessionProgress] = useState({ completed: 0, total: 0, stage: '' });
   const [sessionSummary, setSessionSummary] = useState(null);
   const [sessionData, setSessionData] = useState(null);
   const [orgCatalog, setOrgCatalog] = useState({ branches: [], departments: [] });
@@ -89,7 +91,11 @@ export function AnalysisScopeProvider({ children, currentUser }) {
       return;
     }
     client.get('/customer-processing/profile-filter-options', {
-      params: { period_key: draft.periodKey, branch_code: draft.branchCode || undefined },
+      params: {
+        period_key: draft.periodKey,
+        branch_code: draft.branchCode || undefined,
+        pgd_code: draft.pgdCode || undefined,
+      },
       cacheTtl: 300000,
       hideGlobalLoading: true,
     }).then(({ data }) => setOptions((current) => ({
@@ -98,68 +104,92 @@ export function AnalysisScopeProvider({ children, currentUser }) {
       customer_types: data?.customer_types || [],
       loan_types: data?.loan_types || [],
     }))).catch(() => {});
-  }, [draft.branchCode, draft.periodKey]);
+  }, [draft.branchCode, draft.periodKey, draft.pgdCode]);
 
   useEffect(() => {
     if (!applied?.periodKey) return;
     let active = true;
     const loadStartedAt = performance.now();
     const profileParams = scopeToProfileParams(applied);
-    // Nạp trước các tập tổng hợp dùng chung. Khi chuyển tab, request trùng sẽ lấy
-    // từ cache của phiên thay vì truy vấn lại database.
     setSessionLoading(true);
-    const coreRequests = [
-      client.get('/customer-processing/profile-summary', { params: profileParams }),
-      client.get('/customer-processing/profiles', { params: { ...profileParams, page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' } }),
-    ];
-    Promise.allSettled(coreRequests).then((results) => {
-      if (!active) return;
-      const failed = results.filter((item) => item.status === 'rejected');
-      const coreFailed = failed;
-      const summaryResponse = results[0]?.status === 'fulfilled' ? results[0].value?.data : null;
-      if (coreFailed.length) {
-        notification.warning({ message: 'Phiên dữ liệu tải chưa đầy đủ', description: `${failed.length} khối dữ liệu chưa tải được. Hệ thống sẽ thử lại khi bạn bấm Làm mới.`, placement: 'topRight' });
-      } else {
-        const summary = { customers: Number(summaryResponse?.total_customers || 0), periodKey: applied.periodKey };
-        setSessionSummary(summary);
-        setSessionData({
-          periodKey: applied.periodKey,
-          scopeKey: JSON.stringify(profileParams),
-          summary: summaryResponse,
-          profiles: results[1]?.status === 'fulfilled' ? results[1].value?.data : null,
-        });
-        const elapsedSeconds = Math.max((performance.now() - loadStartedAt) / 1000, 0.1);
-        notification.success({
-          message: 'Dữ liệu phân tích đã sẵn sàng',
-          description: `Kỳ ${applied.periodKey} · ${summary.customers.toLocaleString('vi-VN')} khách hàng · Hoàn tất trong ${elapsedSeconds.toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} giây. Các phân tích chuyên sâu tiếp tục được chuẩn bị ở chế độ nền.`,
-          placement: 'topRight',
-          duration: 5,
-        });
+    const previousPeriod = periods[periods.findIndex((item) => item.period_key === applied.periodKey) + 1]?.period_key;
+    const totalRequests = previousPeriod ? 12 : 11;
+    let completed = 0;
+    const announce = (stage, isActive = true) => {
+      const progress = { completed, total: totalRequests, stage };
+      if (active) setSessionProgress(progress);
+      window.dispatchEvent(new CustomEvent('c360:preload-state', {
+        detail: { ...progress, active: isActive, startedAt: loadStartedAt },
+      }));
+    };
+    const tracked = async (stage, request) => {
+      announce(stage);
+      try { return await request(); } finally { completed += 1; announce(stage); }
+    };
 
-        // Không bắn đồng thời các truy vấn tổng hợp lớn: PostgreSQL từng phải
-        // spill ra file tạm và chậm hơn khi 12-16 request tranh tài nguyên.
-        // Dashboard tự nạp các khối đang nhìn thấy; hàng đợi này chỉ làm ấm
-        // những trang còn lại, từng request một, vào cùng Redis session.
-        const background = { hideGlobalLoading: true, timeout: 180_000 };
-        const warmQueue = [
-          () => client.get('/dashboard/business-analytics', { params: profileParams, ...background }),
-          () => client.get('/dashboard/business-trends', { params: { periods: 12, ...profileParams }, ...background }),
-          () => client.get('/customer-processing/profile-groups', { params: profileParams, ...background }),
-          () => client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' }, ...background }),
-        ];
-        (async () => {
-          for (const warm of warmQueue) {
-            if (!active) break;
-            try { await warm(); } catch { /* Trang tương ứng có thể tự tải lại. */ }
-          }
-        })();
+    (async () => {
+      const common = { timeout: 240_000 };
+      const core = await Promise.allSettled([
+        tracked('Đang tổng hợp KPI và phạm vi khách hàng', () => client.get('/customer-processing/profile-summary', { params: profileParams, ...common })),
+        tracked('Đang chuẩn bị danh sách khách hàng', () => client.get('/customer-processing/profiles', { params: { ...profileParams, page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' }, ...common })),
+      ]);
+      if (!active) return;
+      const summaryResponse = core[0]?.status === 'fulfilled' ? core[0].value?.data : null;
+      if (!summaryResponse || core[1]?.status !== 'fulfilled') {
+        notification.error({ message: 'Không thể khởi tạo phiên phân tích', description: 'KPI hoặc danh sách khách hàng nền chưa tải được. Vui lòng bấm Làm mới.', placement: 'topRight', duration: 0 });
+        return;
       }
-    }).finally(() => { if (active) setSessionLoading(false); });
-    return () => { active = false; };
+
+      const detailDefinitions = [
+        ['analytics', 'Đang tổng hợp phân tích nghiệp vụ', () => client.get('/dashboard/business-analytics', { params: profileParams, ...common })],
+        ['insights', 'Đang phân tích cảnh báo và biến động', () => client.get('/dashboard/insights', { params: { ...profileParams, include_top_changes: true }, ...common })],
+        ['trends', 'Đang chuẩn bị chuỗi số liệu các kỳ', () => client.get('/dashboard/business-trends', { params: { periods: 12, ...profileParams }, ...common })],
+        ['groups', 'Đang tạo các nhóm khách hàng trọng điểm', () => client.get('/customer-processing/profile-groups', { params: profileParams, ...common })],
+        ['groupProfiles', 'Đang chuẩn bị danh sách cảnh báo mặc định', () => client.get('/customer-processing/profiles', { params: { ...profileParams, group_key: 'large_deposit', page: 1, page_size: 15, include_total: true, sort_by: 'so_du_tien_gui', sort_dir: 'desc' }, ...common })],
+        ['reconciliation', 'Đang kiểm tra đối chiếu CIF', () => client.get('/customer-processing/reconciliations', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined, latest_job_only: true, page: 1, page_size: 1 }, ...common })],
+        ['accountReconciliation', 'Đang đối chiếu tài khoản tiền gửi', () => client.get('/customer-processing/dp01-pf14-reconciliation', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined, page: 1, page_size: 10 }, ...common })],
+        ['quality', 'Đang kiểm tra chất lượng hồ sơ', () => client.get('/customer-processing/profile-quality', { params: { period_key: applied.periodKey, branch_code: applied.branchCode || undefined }, ...common })],
+        ['readiness', 'Đang kiểm tra trạng thái nguồn dữ liệu', () => client.get('/imports/source-readiness', { params: { period_key: applied.periodKey }, ...common })],
+      ];
+      if (previousPeriod) detailDefinitions.push([
+        'comparison', 'Đang so sánh với kỳ trước',
+        () => client.get('/customer-processing/period-comparison', { params: { ...profileParams, period_key: undefined, current_period: applied.periodKey, previous_period: previousPeriod }, ...common }),
+      ]);
+      const details = await Promise.allSettled(detailDefinitions.map(([, stage, request]) => tracked(stage, request)));
+      if (!active) return;
+      const loaded = Object.fromEntries(detailDefinitions.map(([key], index) => [key, details[index]?.status === 'fulfilled' ? details[index].value?.data : null]));
+      const failedCount = details.filter((item) => item.status === 'rejected').length;
+      const summary = { customers: Number(summaryResponse?.total_customers || 0), periodKey: applied.periodKey };
+      setSessionSummary(summary);
+      setSessionData({
+        periodKey: applied.periodKey,
+        scopeKey: JSON.stringify(profileParams),
+        ready: true,
+        loadedAt: new Date().toISOString(),
+        summary: summaryResponse,
+        profiles: core[1].value?.data,
+        ...loaded,
+      });
+      const elapsedSeconds = Math.max((performance.now() - loadStartedAt) / 1000, 0.1);
+      notification[failedCount ? 'warning' : 'success']({
+        message: failedCount ? 'Phiên phân tích đã sẵn sàng một phần' : 'Toàn bộ C360 đã sẵn sàng',
+        description: `${summary.customers.toLocaleString('vi-VN')} khách hàng · ${totalRequests - failedCount}/${totalRequests} khối dữ liệu · ${elapsedSeconds.toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} giây. Chuyển trang sẽ dùng ngay dữ liệu của phiên này.`,
+        placement: 'topRight', duration: failedCount ? 8 : 5,
+      });
+    })().finally(() => {
+      if (active) {
+        setSessionLoading(false);
+        announce('Hoàn tất', false);
+      }
+    });
+    return () => {
+      active = false;
+      window.dispatchEvent(new CustomEvent('c360:preload-state', { detail: { active: false } }));
+    };
   }, [applied, periods, sessionVersion]);
 
   const value = useMemo(() => ({
-    periods, options, draft, applied, metadataLoading, sessionVersion, sessionLoading, sessionSummary, sessionData, fixedBranchCode,
+    periods, options, draft, applied, metadataLoading, sessionVersion, sessionLoading, sessionProgress, sessionSummary, sessionData, fixedBranchCode,
     updateDraft: (patch) => setDraft((current) => ({
       ...current,
       ...patch,
@@ -169,6 +199,8 @@ export function AnalysisScopeProvider({ children, currentUser }) {
     apply: () => {
       if (!draft.periodKey) return false;
       clearApiCache();
+      setSessionLoading(true);
+      setSessionProgress({ completed: 0, total: 0, stage: 'Đang khởi tạo phiên phân tích' });
       sessionStorage.setItem('c360_analysis_session', createAnalysisSessionId());
       const next = { ...draft, branchCode: fixedBranchCode || draft.branchCode, advanced: { ...draft.advanced } };
       setApplied(next);
@@ -186,10 +218,12 @@ export function AnalysisScopeProvider({ children, currentUser }) {
     },
     refresh: () => {
       clearApiCache();
+      setSessionLoading(true);
+      setSessionProgress({ completed: 0, total: 0, stage: 'Đang làm mới toàn bộ dữ liệu' });
       sessionStorage.setItem('c360_analysis_session', createAnalysisSessionId());
       setSessionVersion((value) => value + 1);
     },
-  }), [applied, draft, fixedBranchCode, metadataLoading, options, periods, sessionData, sessionLoading, sessionSummary, sessionVersion]);
+  }), [applied, draft, fixedBranchCode, metadataLoading, options, periods, sessionData, sessionLoading, sessionProgress, sessionSummary, sessionVersion]);
   return <AnalysisScopeContext.Provider value={value}>{children}</AnalysisScopeContext.Provider>;
 }
 
@@ -206,7 +240,7 @@ export function scopeToProfileParams(scope) {
     pgd_code: scope.pgdCode || undefined,
     customer_type: advanced.customerTypes?.join(',') || undefined,
     loan_type: advanced.loanTypes?.join(',') || undefined,
-    officer_code: advanced.officerCode || undefined,
+    officer_code: advanced.officerCodes?.join(',') || undefined,
     multi_branch: advanced.relationshipStatus === 'multi' ? true : advanced.relationshipStatus === 'single' ? false : undefined,
     has_deposit: advanced.depositStatus === 'yes' ? true : advanced.depositStatus === 'no' ? false : undefined,
     has_loan: advanced.loanStatus === 'yes' ? true : advanced.loanStatus === 'no' ? false : undefined,
@@ -217,6 +251,9 @@ export function scopeToProfileParams(scope) {
     min_casa: advanced.minCasa ?? undefined,
     max_casa: advanced.maxCasa ?? undefined,
     missing_phone: advanced.contactStatus === 'missing' ? true : advanced.contactStatus === 'available' ? false : undefined,
+    missing_officer: advanced.officerStatus === 'missing' ? true : advanced.officerStatus === 'assigned' ? false : undefined,
+    unclear_primary_branch: advanced.primaryBranchStatus === 'unclear' ? true : advanced.primaryBranchStatus === 'clear' ? false : undefined,
+    new_in_period: advanced.newCustomerStatus === 'new' ? true : advanced.newCustomerStatus === 'existing' ? false : undefined,
     no_service: advanced.serviceStatus === 'none' || undefined,
     service_codes: advanced.serviceCodes?.join(',') || undefined,
     min_service_count: advanced.minServiceCount ?? undefined,

@@ -33,6 +33,7 @@ import {
 } from '@ant-design/icons';
 
 import client from '../api/client';
+import DataPageLoading from '../components/DataPageLoading';
 
 const { Dragger } = Upload;
 const { Paragraph, Text, Title } = Typography;
@@ -146,6 +147,9 @@ function CustomerProcessing() {
   const [exchangeRates, setExchangeRates] = useState([]);
   const [qualityAudit, setQualityAudit] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [qualityLoading, setQualityLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const [fileList, setFileList] = useState([]);
@@ -158,18 +162,20 @@ function CustomerProcessing() {
   }
 
   async function loadPeriods(nextSelectedPeriod) {
-    const { data } = await client.get('/customer-processing/periods');
+    const { data } = await client.get('/customer-processing/periods', { hideGlobalLoading: true });
     setPeriods(data || []);
     const target = nextSelectedPeriod || selectedPeriod || data?.[0]?.period_key || null;
     if (target) {
       selectPeriod(target, data || []);
     }
+    return target;
   }
 
   async function loadOptionalFiles(periodKey = selectedPeriod) {
     if (!periodKey) return;
     const { data } = await client.get('/customer-processing/optional-files', {
       params: { period_key: periodKey },
+      hideGlobalLoading: true,
     });
     setOptionalFiles(data || []);
   }
@@ -178,23 +184,53 @@ function CustomerProcessing() {
     if (!periodKey) return;
     const { data } = await client.get('/customer-processing/exchange-rates', {
       params: { period_key: periodKey },
+      hideGlobalLoading: true,
     });
     setExchangeRates(data || []);
   }
 
-  async function loadQualityAudit(periodKey = selectedPeriod) {
+  async function loadQualityAudit(periodKey = selectedPeriod, refresh = false) {
     if (!periodKey) return;
     const { data } = await client.get('/customer-processing/quality-audit', {
-      params: { period_key: periodKey },
+      params: { period_key: periodKey, refresh },
+      hideGlobalLoading: true,
+      noCache: refresh,
     });
     setQualityAudit(data || null);
+  }
+
+  async function loadPeriodDetails(periodKey) {
+    if (!periodKey) return;
+    setDetailLoading(true);
+    try {
+      await Promise.all([
+        loadOptionalFiles(periodKey),
+        loadExchangeRates(periodKey),
+        loadQualityAudit(periodKey),
+      ]);
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
+  async function runQualityAudit() {
+    if (!selectedPeriod) return;
+    setQualityLoading(true);
+    try {
+      await loadQualityAudit(selectedPeriod, true);
+      message.success('Đã kiểm định và lưu kết quả chất lượng dữ liệu');
+    } catch (error) {
+      message.error(error.response?.data?.detail || error.message);
+    } finally {
+      setQualityLoading(false);
+    }
   }
 
   async function refreshAll(periodKey = selectedPeriod) {
     setLoading(true);
     try {
-      await loadPeriods(periodKey);
-      await Promise.all([loadOptionalFiles(periodKey), loadExchangeRates(periodKey), loadQualityAudit(periodKey)]);
+      const target = await loadPeriods(periodKey);
+      await loadPeriodDetails(target);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
@@ -203,15 +239,16 @@ function CustomerProcessing() {
   }
 
   useEffect(() => {
-    refreshAll();
+    setInitialLoading(true);
+    loadPeriods()
+      .catch((error) => message.error(error.response?.data?.detail || error.message))
+      .finally(() => setInitialLoading(false));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     if (!selectedPeriod) return;
-    loadOptionalFiles(selectedPeriod);
-    loadExchangeRates(selectedPeriod);
-    loadQualityAudit(selectedPeriod);
+    loadPeriodDetails(selectedPeriod).catch((error) => message.error(error.response?.data?.detail || error.message));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedPeriod]);
 
@@ -389,6 +426,11 @@ function CustomerProcessing() {
 
   return (
     <Space orientation="vertical" size={18} className="page-stack">
+      <DataPageLoading
+        active={initialLoading || detailLoading || qualityLoading}
+        title={qualityLoading ? 'Đang kiểm định chất lượng dữ liệu' : 'Đang tải xử lý dữ liệu khách hàng'}
+        detail={qualityLoading ? 'Hệ thống đang đối chiếu hồ sơ C360 với dữ liệu nguồn. Kết quả sẽ được lưu để lần mở sau hiển thị ngay.' : 'Đang tải kỳ dữ liệu, file bổ sung, tỷ giá và kết quả kiểm định đã lưu.'}
+      />
       <div>
         <Title level={2}>Xử lý dữ liệu khách hàng</Title>
       </div>
@@ -556,7 +598,15 @@ function CustomerProcessing() {
                     )}
                   />
                 ) : null}
-                {qualityAudit ? (
+                {qualityAudit?.status === 'not_calculated' ? (
+                  <Alert
+                    type="info"
+                    showIcon
+                    message="Chưa có kết quả kiểm định được lưu"
+                    description="Kỳ cũ chỉ cần kiểm định một lần. Kết quả sẽ được lưu cùng job để những lần mở sau không phải quét lại toàn bộ dữ liệu."
+                    action={<Button size="small" type="primary" loading={qualityLoading} onClick={runQualityAudit}>Chạy kiểm định</Button>}
+                  />
+                ) : qualityAudit ? (
                   <Alert
                     type={qualityAudit.is_valid ? 'success' : 'error'}
                     showIcon

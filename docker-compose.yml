@@ -1,4 +1,23 @@
 services:
+  dns:
+    image: coredns/coredns@sha256:7efd3c635b03efd68c4e8398fc45f0d993d0e9ab016f72c1cefb0fd6d01aa286
+    container_name: qlkh_dns
+    restart: unless-stopped
+    profiles: ["lan-dns"]
+    command: ["-conf", "/etc/coredns/Corefile"]
+    ports:
+      - "10.8.0.119:53:53/udp"
+      - "10.8.0.119:53:53/tcp"
+    volumes:
+      - ./dns/Corefile:/etc/coredns/Corefile:ro
+    healthcheck:
+      test: ["CMD", "/coredns", "-version"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+    networks:
+      - qlkh_network
+
   redis:
     image: redis:7-alpine
     container_name: qlkh_redis
@@ -50,6 +69,8 @@ services:
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
       ANALYSIS_CACHE_TTL: ${ANALYSIS_CACHE_TTL:-900}
       ANALYSIS_CACHE_MAX_BYTES: ${ANALYSIS_CACHE_MAX_BYTES:-20000000}
+      AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required and must contain at least 32 characters}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-240}
     ports:
       - "8000:8000"
     volumes:

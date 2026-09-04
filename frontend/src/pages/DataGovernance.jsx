@@ -20,7 +20,6 @@ import {
   Progress,
   Row,
   Select,
-  Skeleton,
   Space,
   Switch,
   Table,
@@ -31,6 +30,7 @@ import {
 } from 'antd';
 
 import client from '../api/client';
+import DataPageLoading from '../components/DataPageLoading';
 import {
   fieldDictionary,
   fieldGroups,
@@ -127,8 +127,8 @@ function useGovernanceData() {
     setLoading(true);
     setError('');
     Promise.allSettled([
-      client.get('/customer-processing/periods'),
-      client.get('/customer-processing/jobs'),
+      client.get('/customer-processing/periods', { hideGlobalLoading: true }),
+      client.get('/customer-processing/jobs', { hideGlobalLoading: true }),
     ])
       .then(([periodResult, jobResult]) => {
         if (!active) return;
@@ -159,10 +159,10 @@ function useGovernanceData() {
     let active = true;
     setLoading(true);
     Promise.allSettled([
-      client.get('/imports/report-sources', { params: { period_key: periodKey } }),
-      client.get('/imports/source-readiness', { params: { period_key: periodKey } }),
-      client.get('/imports/files', { params: { period_key: periodKey, compact: true } }),
-      client.get('/imports/jobs/stalled', { params: { period_key: periodKey } }),
+      client.get('/imports/report-sources', { params: { period_key: periodKey }, hideGlobalLoading: true }),
+      client.get('/imports/source-readiness', { params: { period_key: periodKey }, hideGlobalLoading: true }),
+      client.get('/imports/files', { params: { period_key: periodKey, compact: true }, hideGlobalLoading: true }),
+      client.get('/imports/jobs/stalled', { params: { period_key: periodKey }, hideGlobalLoading: true }),
     ])
       .then(([sourceResult, readinessResult, fileResult, stalledResult]) => {
         if (!active) return;
@@ -1049,11 +1049,15 @@ function HistoryPage({ data }) {
 
 export default function DataGovernance({ mode = 'sources' }) {
   const data = useGovernanceData();
-  if (data.loading && !data.periods.length) return <Card><Skeleton active /></Card>;
   if (data.error && !data.periods.length) return <Alert type="error" showIcon message="Không tải được quản trị dữ liệu" description={data.error} />;
 
   return (
     <>
+      <DataPageLoading
+        active={data.loading}
+        title="Đang tải trạng thái quản trị dữ liệu"
+        detail="Đang tổng hợp nguồn, ma trận chi nhánh, file lỗi và tiến độ xử lý của kỳ đã chọn."
+      />
       {data.error ? <Alert closable type="warning" showIcon message={data.error} style={{ marginBottom: 16 }} /> : null}
       {mode === 'quality' ? <QualityPage data={data} />
         : mode === 'mapping' ? <MappingPage data={data} />

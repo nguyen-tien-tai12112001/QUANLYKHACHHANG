@@ -7,12 +7,14 @@ class CurrentUser(BaseModel):
     id: str
     username: str
     display_name: str | None = None
+    employee_code: str | None = None
     scope: str = "province"
     ma_cn: str | None = None
     ma_pgd: str | None = None
     allowed_branches: list[str] = Field(default_factory=list)
     allowed_pgds: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
+    must_change_password: bool = False
 
     @classmethod
     def dev_superuser(cls) -> "CurrentUser":

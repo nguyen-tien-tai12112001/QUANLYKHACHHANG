@@ -1072,6 +1072,7 @@ class CustomerProcessingJob(Base):
     total_customers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     processed_customers: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     error_message: Mapped[str | None] = mapped_column(Text)
+    quality_report: Mapped[dict | None] = mapped_column(JSON)
     started_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
@@ -1464,6 +1465,26 @@ class SystemRole(Base):
 
     users = relationship("SystemUser", back_populates="role")
     permissions = relationship("SystemRolePermission", back_populates="role")
+    scope_policy = relationship(
+        "RoleScopePolicy",
+        back_populates="role",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class RoleScopePolicy(Base):
+    __tablename__ = "role_scope_policies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    role_id: Mapped[int] = mapped_column(ForeignKey("system_roles.id", ondelete="CASCADE"), unique=True, nullable=False)
+    default_scope: Mapped[str] = mapped_column(String(30), default="own", nullable=False)
+    allowed_scopes: Mapped[list] = mapped_column(JSON, nullable=False)
+    warning_level: Mapped[str] = mapped_column(String(20), default="warning", nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    role = relationship("SystemRole", back_populates="scope_policy")
 
 
 class SystemPermission(Base):
@@ -1476,6 +1497,7 @@ class SystemPermission(Base):
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     roles = relationship("SystemRolePermission", back_populates="permission")
+    user_grants = relationship("SystemUserPermission", back_populates="permission")
 
 
 class SystemRolePermission(Base):
@@ -1494,6 +1516,22 @@ class SystemRolePermission(Base):
     )
 
 
+class SystemUserPermission(Base):
+    __tablename__ = "system_user_permissions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("system_users.id", ondelete="CASCADE"), index=True, nullable=False)
+    permission_id: Mapped[int] = mapped_column(ForeignKey("system_permissions.id", ondelete="CASCADE"), index=True, nullable=False)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user = relationship("SystemUser", back_populates="permission_grants")
+    permission = relationship("SystemPermission", back_populates="user_grants")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "permission_id", name="uq_system_user_permissions"),
+    )
+
+
 class SystemUser(Base):
     __tablename__ = "system_users"
 
@@ -1505,12 +1543,19 @@ class SystemUser(Base):
     customer_cif_code: Mapped[str | None] = mapped_column(String(32), unique=True, index=True)
     ipcas_username: Mapped[str | None] = mapped_column(String(80), index=True)
     full_name: Mapped[str] = mapped_column(String(255), index=True, nullable=False)
+    email: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(30))
     branch_id: Mapped[int | None] = mapped_column(ForeignKey("org_branches.id"), index=True)
     department_id: Mapped[int | None] = mapped_column(ForeignKey("org_departments.id"), index=True)
     role_id: Mapped[int | None] = mapped_column(ForeignKey("system_roles.id"), index=True)
     data_scope: Mapped[str] = mapped_column(String(30), default="own", nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     is_superuser: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    auth_version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    must_change_password: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    password_changed_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
+    failed_login_attempts: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    locked_until: Mapped[object | None] = mapped_column(DateTime(timezone=True))
     last_login_at: Mapped[object | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
@@ -1518,6 +1563,7 @@ class SystemUser(Base):
     branch = relationship("OrgBranch", back_populates="users")
     department = relationship("OrgDepartment", back_populates="users", foreign_keys=[department_id])
     role = relationship("SystemRole", back_populates="users")
+    permission_grants = relationship("SystemUserPermission", back_populates="user", cascade="all, delete-orphan")
 
 
 class AuditLog(Base):
@@ -1530,4 +1576,7 @@ class AuditLog(Base):
     entity_type: Mapped[str] = mapped_column(String(80), index=True, nullable=False)
     entity_id: Mapped[str | None] = mapped_column(String(80), index=True)
     description: Mapped[str | None] = mapped_column(Text)
+    before_data: Mapped[dict | None] = mapped_column(JSON)
+    after_data: Mapped[dict | None] = mapped_column(JSON)
+    changed_fields: Mapped[list | None] = mapped_column(JSON)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)

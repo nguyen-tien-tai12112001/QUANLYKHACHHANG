@@ -108,6 +108,36 @@ jobs:
             throw 'Missing production environment file: ${{ env.DEPLOY_DIR }}\.env'
           }
 
+      - name: Validate production authentication settings
+        run: |
+          $envPath = '${{ env.DEPLOY_DIR }}\.env'
+          $values = @{}
+          Get-Content -LiteralPath $envPath | ForEach-Object {
+            $line = $_.Trim()
+            if ($line -and -not $line.StartsWith('#') -and $line.Contains('=')) {
+              $name, $value = $line.Split('=', 2)
+              $values[$name.Trim()] = $value.Trim()
+            }
+          }
+
+          $secret = $values['AUTH_SECRET']
+          $insecureSecrets = @(
+            'c360-offline-change-this-secret',
+            'thay-bang-chuoi-bi-mat-dai-va-rieng-tren-may-chu',
+            'CHANGE_ME_GENERATE_A_RANDOM_SECRET_BEFORE_STARTING',
+            'change-me',
+            'changeme'
+          )
+          if (-not $secret -or $secret.Length -lt 32 -or $insecureSecrets -contains $secret) {
+            throw 'AUTH_SECRET is missing, too short, or still uses an insecure example value.'
+          }
+
+          $expiry = 0
+          if (-not [int]::TryParse($values['ACCESS_TOKEN_EXPIRE_MINUTES'], [ref]$expiry) -or $expiry -lt 15 -or $expiry -gt 1440) {
+            throw 'ACCESS_TOKEN_EXPIRE_MINUTES must be between 15 and 1440.'
+          }
+          Write-Host 'Production authentication settings are valid. Secret value was not printed.'
+
       - name: Pull immutable images
         working-directory: D:\Apps\QUANLYKHACHHANG
         run: |

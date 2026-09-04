@@ -2128,6 +2128,7 @@ def process_customer_period(job_id: int) -> None:
 
         update_job(db, job, "processing", "Kiểm định tính toàn vẹn dữ liệu theo khách hàng", 98)
         quality_report = validate_processed_period(db, job.period_key)
+        job.quality_report = quality_report
         if not quality_report["is_valid"]:
             raise ValueError(f"Kiểm định dữ liệu C360 không đạt: {quality_report}")
 

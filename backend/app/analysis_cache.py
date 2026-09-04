@@ -63,12 +63,16 @@ def get_shared_analysis_cache(namespace: str, key_parts) -> dict | None:
         return None
 
 
-def set_shared_analysis_cache(namespace: str, key_parts, payload: dict) -> None:
+def set_shared_analysis_cache(namespace: str, key_parts, payload: dict, ttl_seconds: int | None = None) -> None:
     digest = hashlib.sha256(repr(key_parts).encode()).hexdigest()
     try:
         raw = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()
         if len(raw) <= settings.ANALYSIS_CACHE_MAX_BYTES:
-            _redis().setex(f"c360:shared:{namespace}:{digest}", settings.ANALYSIS_CACHE_TTL, raw)
+            _redis().setex(
+                f"c360:shared:{namespace}:{digest}",
+                ttl_seconds or settings.ANALYSIS_CACHE_TTL,
+                raw,
+            )
     except Exception as exc:
         logger.debug("Shared analysis cache write skipped: %s", exc)
 

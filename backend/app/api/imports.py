@@ -13,7 +13,8 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session
 
 from app.auth.branch_scope import BranchScope
-from app.auth.dependencies import get_branch_scope
+from app.auth.dependencies import get_branch_scope, require_any_permission
+from app.analysis_cache import get_shared_analysis_cache, set_shared_analysis_cache
 from app.config import settings
 from app.database import get_db
 from app.imports.importer import (
@@ -262,7 +263,7 @@ def delete_period_data(db: Session, period_key: str) -> dict:
     return {"deleted_file_count": deleted_file_count}
 
 
-@router.post("/upload")
+@router.post("/upload", dependencies=[Depends(require_any_permission("warehouse:import"))])
 def upload_import_file(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
@@ -302,7 +303,7 @@ def upload_import_file(
     }
 
 
-@router.get("/files")
+@router.get("/files", dependencies=[Depends(require_any_permission("warehouse:view"))])
 def list_import_files(
     period_key: str | None = None,
     file_type: str | None = None,
@@ -382,7 +383,7 @@ def list_import_files(
     ]
 
 
-@router.get("/periods")
+@router.get("/periods", dependencies=[Depends(require_any_permission("warehouse:view", "dashboard:view"))])
 def list_periods(db: Session = Depends(get_db)):
     periods = db.query(ImportBatch).order_by(desc(ImportBatch.period_key)).all()
     files = db.query(
@@ -501,7 +502,7 @@ def list_periods(db: Session = Depends(get_db)):
     return result
 
 
-@router.delete("/files/{file_id}")
+@router.delete("/files/{file_id}", dependencies=[Depends(require_any_permission("warehouse:delete"))])
 def delete_import_file(
     file_id: int,
     payload: DeleteDataPayload,
@@ -542,7 +543,7 @@ def delete_import_file(
     }
 
 
-@router.delete("/periods/{period_key}")
+@router.delete("/periods/{period_key}", dependencies=[Depends(require_any_permission("warehouse:delete"))])
 def delete_period(
     period_key: str,
     payload: DeleteDataPayload,
@@ -582,13 +583,13 @@ def delete_period(
         "backup_path": backup_path,
     }
 
-@router.post("/summarize/{period_key}")
+@router.post("/summarize/{period_key}", dependencies=[Depends(require_any_permission("warehouse:summarize"))])
 def summarize(period_key: str, db: Session = Depends(get_db)):
     count = summarize_period(db, period_key)
     return {"period_key": period_key, "summary_rows": count}
 
 
-@router.post("/jobs/recover")
+@router.post("/jobs/recover", dependencies=[Depends(require_any_permission("processing:recover"))])
 def recover_jobs(period_key: str | None = Query(default=None)):
     queued_count = recover_import_jobs(period_key=period_key)
     return {
@@ -599,7 +600,7 @@ def recover_jobs(period_key: str | None = Query(default=None)):
     }
 
 
-@router.get("/jobs/stalled")
+@router.get("/jobs/stalled", dependencies=[Depends(require_any_permission("processing:view"))])
 def list_stalled_jobs(
     period_key: str | None = Query(default=None),
     stale_minutes: int = Query(default=15, ge=5, le=1440),
@@ -636,7 +637,7 @@ def list_stalled_jobs(
     ]
 
 
-@router.get("/source-readiness")
+@router.get("/source-readiness", dependencies=[Depends(require_any_permission("warehouse:view", "dashboard:view"))])
 def source_readiness(period_key: str = Query(...), db: Session = Depends(get_db)):
     batch = db.query(ImportBatch).filter(ImportBatch.period_key == period_key).first()
     if not batch:
@@ -650,6 +651,22 @@ def source_readiness(period_key: str = Query(...), db: Session = Depends(get_db)
         )
         .all()
     )
+    cache_key = (
+        period_key,
+        tuple(sorted(
+            (
+                item.id,
+                item.status,
+                int(item.success_rows or 0),
+                int(item.error_rows or 0),
+                item.finished_at.isoformat() if item.finished_at else None,
+            )
+            for item in files
+        )),
+    )
+    cached = get_shared_analysis_cache("source-readiness", cache_key)
+    if cached is not None:
+        return cached
     source_rows = []
     for source_code in ("DP01", "LN01", "CN05", "PF10", "PF14", "BC06", "BC29", "KH02", "RR01", "GL02"):
         source_files = [item for item in files if item.file_type == source_code]
@@ -793,10 +810,14 @@ def source_readiness(period_key: str = Query(...), db: Session = Depends(get_db)
         }),
         "branch_readiness": branch_readiness,
     })
-    return {"period_key": period_key, "sources": source_rows}
+    payload = {"period_key": period_key, "sources": source_rows}
+    # The key contains the complete import-file version, so this remains valid
+    # until a file/status changes and can safely outlive the generic UI cache.
+    set_shared_analysis_cache("source-readiness", cache_key, payload, ttl_seconds=24 * 60 * 60)
+    return payload
 
 
-@router.get("/report-sources")
+@router.get("/report-sources", dependencies=[Depends(require_any_permission("warehouse:view"))])
 def list_report_sources(period_key: str = Query(...), db: Session = Depends(get_db)):
     rows = (
         db.query(ReportSourceStatus)
@@ -835,7 +856,7 @@ def list_report_sources(period_key: str = Query(...), db: Session = Depends(get_
     return [serialize_model(item, fields) for item in rows]
 
 
-@router.get("/summary")
+@router.get("/summary", dependencies=[Depends(require_any_permission("warehouse:view"))])
 def list_summary(
     period_key: str = Query(...),
     limit: int = Query(default=100, ge=1, le=1000),

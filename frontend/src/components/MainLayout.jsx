@@ -21,6 +21,7 @@ import logoUrl from '../../favicon.jpg';
 import client from '../api/client';
 import { PAGE_NAVIGATION } from '../constants/navigation';
 import GlobalAnalysisFilter from './GlobalAnalysisFilter';
+import PersonalProfileDrawer from './PersonalProfileDrawer';
 import { useAnalysisScope } from '../c360/AnalysisScopeContext';
 
 const { Header, Sider, Content } = Layout;
@@ -104,10 +105,11 @@ export const PAGE_PERMISSIONS = {
   'admin-audit-logs': ['admin:audit:view'],
 };
 
-function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout }) {
+function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout, onUserUpdated }) {
   const analysisScope = useAnalysisScope();
   const [collapsed, setCollapsed] = useState(false);
   const [sourceIssueCount, setSourceIssueCount] = useState(0);
+  const [profileOpen, setProfileOpen] = useState(false);
   const pageMeta = PAGE_NAVIGATION[activeMenu] || PAGE_NAVIGATION['c360-dashboard'];
   const [openKeys, setOpenKeys] = useState(() => {
     try {
@@ -234,13 +236,15 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
             </Typography.Title>
           </Space>
           <Space className="app-user" size={12}>
-            <Avatar className="app-user-avatar">{currentUser?.full_name?.charAt(0) || 'C'}</Avatar>
-            <span className="app-user-identity">
-              <Typography.Text strong>{currentUser?.full_name}</Typography.Text>
-              <Typography.Text type="secondary" className="app-user-subtitle">
-                {[currentUser?.branch_code, currentUser?.role_name || 'Người dùng'].filter(Boolean).join(' · ')}
-              </Typography.Text>
-            </span>
+            <button type="button" className="app-user-profile-trigger" onClick={() => setProfileOpen(true)} title="Mở thông tin cá nhân">
+              <Avatar className="app-user-avatar">{currentUser?.full_name?.charAt(0) || 'C'}</Avatar>
+              <span className="app-user-identity">
+                <Typography.Text strong>{currentUser?.full_name}</Typography.Text>
+                <Typography.Text type="secondary" className="app-user-subtitle">
+                  {[currentUser?.branch_code, currentUser?.role_name || 'Người dùng'].filter(Boolean).join(' · ')}
+                </Typography.Text>
+              </span>
+            </button>
             <Button icon={<LogoutOutlined />} onClick={onLogout}>
               Đăng xuất
             </Button>
@@ -258,6 +262,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout 
           {children}
         </Content>
       </Layout>
+      <PersonalProfileDrawer open={profileOpen} onClose={() => setProfileOpen(false)} currentUser={currentUser} onUpdated={onUserUpdated} />
     </Layout>
   );
 }
