@@ -326,8 +326,20 @@ const implemented = {
   PHI_TTQT: {
     profileField: 'phi_ttqt',
     actualSource: 'KH02',
-    calculation: 'ACCTCD từ 711002 đến 711014 hoặc bắt đầu 711096: SUM(CRAMT) - SUM(DRAMT), theo KH lõi và chi nhánh.',
-    reconciliation: 'Mã 711002 giao với phạm vi phí chuyển tiền; không cộng chồng hai chỉ tiêu khi lập tổng phí nếu báo cáo yêu cầu loại trừ trùng.',
+    calculation: 'ACCTCD từ 711003 đến 711014 hoặc bắt đầu 711096: SUM(CRAMT) - SUM(DRAMT), theo KH lõi và chi nhánh.',
+    reconciliation: 'Mã 711002 chỉ thuộc PHI_CHUYENTIEN; mỗi giao dịch được cộng vào đúng một nhóm phí chính.',
+  },
+  PHI_THE: {
+    profileField: 'phi_the',
+    actualSource: 'KH02',
+    calculation: 'ACCTCD bắt đầu 711015, 711016, 711022-711028, 711051, 711052 hoặc 711059: SUM(CRAMT) - SUM(DRAMT), theo CUSTSEQ và chi nhánh.',
+    reconciliation: 'Đối chiếu tổng phát sinh Có/Nợ từng đầu tài khoản với KH02; giữ nguyên khoản âm do hoàn/điều chỉnh phí.',
+  },
+  PHI_KHAC: {
+    profileField: 'phi_khac',
+    actualSource: 'KH02',
+    calculation: 'ACCTCD bắt đầu 711031, 711035, 711042, 711044 hoặc 711098: SUM(CRAMT) - SUM(DRAMT), theo CUSTSEQ và chi nhánh.',
+    reconciliation: 'Không lấy 711037, 711039 và 711096 vì các mã này đã thuộc PHI_NHDT/PHI_TTQT; một mã chỉ thuộc một nhóm phí chính.',
   },
   TTQT: {
     profileField: 'ttqt',

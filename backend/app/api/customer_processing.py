@@ -23,6 +23,7 @@ from app.customer_processing import (
     validate_processed_period,
 )
 from app.database import get_db
+from app.fee_rules import FEE_CATEGORY_PREFIXES
 from app.models import (
     BC06CustomerClassification,
     BC29CustomerCreditRisk,
@@ -100,6 +101,8 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "PHI_KDNT": "phi_kdnt",
     "PHI_LC": "phi_lc",
     "PHI_TTQT": "phi_ttqt",
+    "PHI_THE": "phi_the",
+    "PHI_KHAC": "phi_khac",
     "TTQT": "ttqt",
     "DPRR_CHUNG_TT": "dprr_chung_tt",
     "DPRR_CHUNG_LK": "dprr_chung_lk",
@@ -642,6 +645,8 @@ def profile_brief_fields() -> list[str]:
         "phi_kdnt",
         "phi_lc",
         "phi_ttqt",
+        "phi_the",
+        "phi_khac",
         "dprr_chung_tt",
         "dprr_chung_lk",
         "dprr_cuthe_tt",
@@ -1239,7 +1244,7 @@ def get_value_lineage(
         )
         if branch_code:
             query = query.filter(KH02CustomerTransaction.branch_code == branch_code)
-        fee_prefixes = ("7040", "711001", "711002", "711036", "711037", "711039", "714", "721001", "709002", "711003", "711004", "711005", "711006", "711007", "711008", "711009", "711010", "711011", "711012", "711013", "711014", "711096")
+        fee_prefixes = tuple(prefix for prefixes in FEE_CATEGORY_PREFIXES.values() for prefix in prefixes)
         for row, source_file in query.order_by(KH02CustomerTransaction.branch_code, KH02CustomerTransaction.id).limit(2000):
             code = str(row.account_code or "").strip()
             if not any(code.startswith(prefix) for prefix in fee_prefixes):
@@ -2075,7 +2080,7 @@ def get_customer_financial_metrics(
 ):
     branch_code = _enforce_customer_data_scope(db, user, ma_kh, period_key, branch_code)
     metric_fields = [
-        "phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt",
+        "phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt", "phi_the", "phi_khac",
         "dprr_chung_tt", "dprr_chung_lk", "dprr_cuthe_tt", "dprr_cuthe_lk",
     ]
     query = db.query(CustomerPeriodBranchDetail).filter(
@@ -3814,7 +3819,7 @@ def get_profile_history(
             "du_no_trung_dai_han_bq", "du_no_thau_chi", "du_no_thau_chi_bq",
             "pf10_lds_count", "pf10_interest", "so_du_tgtt_binh_quan",
             "doanh_so_chuyen_tien_ve_tk", "phi_bao_lanh", "phi_chuyen_tien",
-            "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt", "dprr_chung_tt", "dprr_chung_lk",
+            "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt", "phi_the", "phi_khac", "dprr_chung_tt", "dprr_chung_lk",
             "dprr_cuthe_tt", "dprr_cuthe_lk", "du_no_xlrr", "ds_thu_no_xlrr",
             *sorted(PROFILE_SERVICE_FIELDS),
         ]
@@ -3982,6 +3987,8 @@ def get_configuration_catalog(db: Session = Depends(get_db)):
         {"code": "PHI_CHUYENTIEN", "source": "KH02", "condition": "ACCTCD bắt đầu 711001 hoặc 711002", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
         {"code": "PHI_NHDT", "source": "KH02", "condition": "ACCTCD bắt đầu 711036, 711037, 711039", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
         {"code": "ABIC_BATD", "source": "KH02", "condition": "ACCTCD LIKE 714%", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
+        {"code": "PHI_THE", "source": "KH02", "condition": "ACCTCD bắt đầu 711015, 711016, 711022-711028, 711051, 711052, 711059", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
+        {"code": "PHI_KHAC", "source": "KH02", "condition": "ACCTCD bắt đầu 711031, 711035, 711042, 711044, 711098; loại mã đã thuộc nhóm phí khác", "formula": "SUM(CRAMT) - SUM(DRAMT)", "status": "code_config"},
         {"code": "DPRR_CHUNG", "source": "LN01", "condition": "Nhóm nợ 1–4", "formula": "Dư nợ × 0,75%", "status": "code_config"},
     ]
     catalogs = [

@@ -3,7 +3,7 @@ from decimal import Decimal
 from io import BytesIO
 from time import monotonic
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -13,8 +13,10 @@ from sqlalchemy.orm import Query as OrmQuery, Session
 from sqlalchemy.orm import aliased
 
 from app.auth.branch_scope import BranchScope
-from app.auth.dependencies import get_branch_scope, require_any_permission
+from app.auth.dependencies import get_branch_scope, get_current_user, require_any_permission
+from app.auth.schemas import CurrentUser
 from app.database import get_db
+from app.fee_rules import FEE_CANDIDATE_PREFIXES, FEE_CATEGORY_LABELS, FEE_CATEGORY_PREFIXES, FEE_FIELDS
 from app.analysis_cache import get_shared_analysis_cache, set_shared_analysis_cache
 from app.models import (
     CN05CustomerService,
@@ -22,6 +24,8 @@ from app.models import (
     CustomerPeriodBranchDetail,
     CustomerPeriodProfile,
     CustomerProcessingJob,
+    ImportFile,
+    KH02CustomerTransaction,
     LN01Loan,
     OrgBranch,
     OrgDepartment,
@@ -55,7 +59,86 @@ ACTIVE_SERVICE_KEYS = [
     "ttqt",
     "thuho_dt",
 ]
-FEE_FIELDS = ("phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt")
+
+
+def _account_prefix_condition(column, prefixes):
+    normalized = func.trim(func.coalesce(column, ""))
+    return or_(*(normalized.like(f"{prefix}%") for prefix in prefixes))
+
+
+def _fee_category_condition(column, category: str):
+    prefixes = FEE_CATEGORY_PREFIXES.get(category)
+    return _account_prefix_condition(column, prefixes) if prefixes else None
+
+
+def _all_classified_fee_condition(column):
+    return or_(*(
+        _fee_category_condition(column, category)
+        for category in FEE_CATEGORY_PREFIXES
+    ))
+
+
+def _fee_category_expression(column):
+    return case(*(
+        (_fee_category_condition(column, category), category)
+        for category in FEE_CATEGORY_PREFIXES
+    ), else_="unclassified")
+
+
+def _fee_reconciliation(db: Session, period_key: str, scope: BranchScope, customer_ids, profile_total: float) -> dict:
+    """Reconcile KH02 fee candidates once, without counting an account code twice."""
+    candidate = _account_prefix_condition(KH02CustomerTransaction.account_code, FEE_CANDIDATE_PREFIXES)
+    classified = _all_classified_fee_condition(KH02CustomerTransaction.account_code)
+    eligible_customers = customer_ids
+    if eligible_customers is None:
+        eligible_customers = db.query(CustomerPeriodProfile.ma_kh).filter(
+            CustomerPeriodProfile.period_key == period_key
+        ).distinct().subquery()
+    query = db.query(KH02CustomerTransaction).filter(
+        KH02CustomerTransaction.period_key == period_key,
+        candidate,
+        func.trim(KH02CustomerTransaction.customer_code).in_(select(eligible_customers.c.ma_kh)),
+    )
+    if scope.ma_cn:
+        query = query.filter(func.trim(KH02CustomerTransaction.branch_code) == scope.ma_cn)
+    credit = func.coalesce(KH02CustomerTransaction.credit_amount, 0)
+    debit = func.coalesce(KH02CustomerTransaction.debit_amount, 0)
+    net = credit - debit
+    row = query.with_entities(
+        func.count(KH02CustomerTransaction.id),
+        func.count(func.distinct(func.trim(KH02CustomerTransaction.customer_code))),
+        func.coalesce(func.sum(credit), 0),
+        func.coalesce(func.sum(debit), 0),
+        func.coalesce(func.sum(net), 0),
+        func.coalesce(func.sum(case((classified, credit), else_=0)), 0),
+        func.coalesce(func.sum(case((classified, debit), else_=0)), 0),
+        func.coalesce(func.sum(case((classified, net), else_=0)), 0),
+        func.sum(case((classified, 1), else_=0)),
+        func.count(func.distinct(case((classified, func.trim(KH02CustomerTransaction.customer_code)), else_=None))),
+        func.coalesce(func.sum(case((~classified, credit), else_=0)), 0),
+        func.coalesce(func.sum(case((~classified, debit), else_=0)), 0),
+        func.coalesce(func.sum(case((~classified, net), else_=0)), 0),
+        func.sum(case((~classified, 1), else_=0)),
+        func.count(func.distinct(case((~classified, func.trim(KH02CustomerTransaction.customer_code)), else_=None))),
+    ).one()
+    source_net = float(row[4] or 0)
+    classified_net = float(row[7] or 0)
+    unclassified_net = float(row[12] or 0)
+    total_records = int(row[0] or 0)
+    classified_records = int(row[8] or 0)
+    balance_difference = source_net - classified_net - unclassified_net
+    return {
+        "candidate_prefixes": list(FEE_CANDIDATE_PREFIXES),
+        "source": {"records": total_records, "customers": int(row[1] or 0), "credit": float(row[2] or 0), "debit": float(row[3] or 0), "net": source_net},
+        "classified": {"records": classified_records, "customers": int(row[9] or 0), "credit": float(row[5] or 0), "debit": float(row[6] or 0), "net": classified_net},
+        "unclassified": {"records": int(row[13] or 0), "customers": int(row[14] or 0), "credit": float(row[10] or 0), "debit": float(row[11] or 0), "net": unclassified_net},
+        "record_coverage_pct": round(classified_records * 100 / total_records, 2) if total_records else 0,
+        "balance_difference": balance_difference,
+        "is_balanced": abs(balance_difference) <= 0.01,
+        "profile_total": float(profile_total or 0),
+        "profile_difference": float(profile_total or 0) - classified_net,
+        "profile_is_balanced": abs(float(profile_total or 0) - classified_net) <= 0.01,
+    }
 
 
 def _advanced_filters(
@@ -401,6 +484,7 @@ def _build_officer_leaderboard(
     ma_cn: str | None,
     ma_pgd: str | None,
     customer_ids=None,
+    previous_period: str | None = None,
 ) -> list[dict]:
     """Top cán bộ theo dư nợ. Có CN → branch_details; chọn tất cả → profiles toàn tỉnh (không trùng KH)."""
     if ma_cn:
@@ -448,10 +532,79 @@ def _build_officer_leaderboard(
         .all()
     )
 
+    previous_by_officer: dict[str, dict] = {}
+    new_customers_by_officer: dict[str, int] = {}
+    transferred_customers_by_officer: dict[str, int] = {}
+    current_assignments = source_query.filter(
+        model.ma_cb.isnot(None),
+        or_(model.ma_cb.in_(credit_codes | employee_codes), emp_code_expr.in_(employee_codes)),
+    ).with_entities(
+        model.ma_cb.label("officer_code"), model.ma_kh.label("customer_code"),
+    ).distinct().subquery()
+
+    if previous_period:
+        if ma_cn:
+            previous_query = _branch_detail_query(db, previous_period, ma_cn, ma_pgd)
+            previous_model = CustomerPeriodBranchDetail
+            previous_count_expr = func.count(func.distinct(previous_model.ma_kh))
+        else:
+            previous_query = _base_query(db, previous_period, None, ma_pgd)
+            previous_model = CustomerPeriodProfile
+            previous_count_expr = func.count(previous_model.ma_kh)
+        previous_query = _restrict_to_matching_customers(previous_query, previous_model, customer_ids)
+        previous_employee_expr = getattr(previous_model, "officer_employee_code", previous_model.ma_cb)
+        previous_valid_condition = or_(
+            previous_model.ma_cb.in_(credit_codes | employee_codes),
+            previous_employee_expr.in_(employee_codes),
+        )
+        previous_rows = previous_query.filter(
+            previous_model.ma_cb.isnot(None), previous_valid_condition,
+        ).with_entities(
+            previous_model.ma_cb,
+            previous_count_expr,
+            func.coalesce(func.sum(previous_model.so_du_tien_gui), 0),
+            func.coalesce(func.sum(previous_model.so_du_tgtt_binh_quan), 0),
+            func.coalesce(func.sum(previous_model.so_du_tien_vay), 0),
+        ).group_by(previous_model.ma_cb).all()
+        previous_by_officer = {
+            str(code): {
+                "custCount": int(customer_count or 0),
+                "totalDeposit": float(term_deposit or 0),
+                "totalCASA": float(casa or 0),
+                "totalLoan": float(loan or 0),
+            }
+            for code, customer_count, term_deposit, casa, loan in previous_rows
+        }
+        previous_assignments = previous_query.filter(
+            previous_model.ma_cb.isnot(None), previous_valid_condition,
+        ).with_entities(
+            previous_model.ma_cb.label("officer_code"), previous_model.ma_kh.label("customer_code"),
+        ).distinct().subquery()
+        same_assignment = and_(
+            previous_assignments.c.officer_code == current_assignments.c.officer_code,
+            previous_assignments.c.customer_code == current_assignments.c.customer_code,
+        )
+        new_rows = db.query(
+            current_assignments.c.officer_code, func.count(),
+        ).outerjoin(previous_assignments, same_assignment).filter(
+            previous_assignments.c.customer_code.is_(None),
+        ).group_by(current_assignments.c.officer_code).all()
+        transferred_rows = db.query(
+            previous_assignments.c.officer_code, func.count(),
+        ).outerjoin(current_assignments, same_assignment).filter(
+            current_assignments.c.customer_code.is_(None),
+        ).group_by(previous_assignments.c.officer_code).all()
+        new_customers_by_officer = {str(code): int(count or 0) for code, count in new_rows}
+        transferred_customers_by_officer = {str(code): int(count or 0) for code, count in transferred_rows}
+
     officer_leaderboard = []
     for row in officer_rows:
         ma_cb, ten_can_bo, officer_employee_code, cust_count, total_loan_amt, total_deposit, total_casa, total_fee = row[:8]
         used_services_total = sum(float(value or 0) for value in row[8:])
+        officer_key = str(ma_cb)
+        previous = previous_by_officer.get(officer_key, {})
+        current_funding = float(total_deposit or 0) + float(total_casa or 0)
+        previous_funding = float(previous.get("totalDeposit", 0)) + float(previous.get("totalCASA", 0))
         officer_leaderboard.append({
             "code": ma_cb,
             "employeeCode": officer_employee_code,
@@ -462,6 +615,12 @@ def _build_officer_leaderboard(
             "totalCASA": float(total_casa or 0),
             "totalFee": float(total_fee or 0),
             "avgCrossSell": round(used_services_total / cust_count, 1) if cust_count else 0,
+            "previousPeriod": previous_period,
+            "previousCustCount": int(previous.get("custCount", 0)),
+            "newCustomers": new_customers_by_officer.get(officer_key, 0),
+            "transferredCustomers": transferred_customers_by_officer.get(officer_key, 0),
+            "depositChange": current_funding - previous_funding,
+            "loanChange": float(total_loan_amt or 0) - float(previous.get("totalLoan", 0)),
         })
     officer_leaderboard.sort(key=lambda item: item["totalLoan"], reverse=True)
     return officer_leaderboard
@@ -1040,7 +1199,7 @@ def dashboard_business_analytics(
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 2"))
     filters = _scope_filters(scope, filters)
     filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
-    cache_key = (period_key, scope.ma_cn, f"v4:{scope.ma_pgd or ''}:{int(include_rankings)}:{filter_key}")
+    cache_key = (period_key, scope.ma_cn, f"v6-fee-rules:{scope.ma_pgd or ''}:{int(include_rankings)}:{filter_key}")
     cached = _BUSINESS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
@@ -1093,13 +1252,7 @@ def dashboard_business_analytics(
         func.coalesce(func.sum(model.dprr_cuthe_lk), 0),
         func.coalesce(func.sum(getattr(model, "du_no_xlrr", 0)), 0) if model is CustomerPeriodProfile else 0,
         func.coalesce(func.sum(getattr(model, "ds_thu_no_xlrr", 0)), 0) if model is CustomerPeriodProfile else 0,
-        func.coalesce(func.sum(model.phi_bao_lanh), 0),
-        func.coalesce(func.sum(model.phi_chuyen_tien), 0),
-        func.coalesce(func.sum(model.phi_nhdt), 0),
-        func.coalesce(func.sum(model.abic_batd), 0),
-        func.coalesce(func.sum(model.phi_kdnt), 0),
-        func.coalesce(func.sum(model.phi_lc), 0),
-        func.coalesce(func.sum(model.phi_ttqt), 0),
+        *(func.coalesce(func.sum(getattr(model, field)), 0) for field in FEE_FIELDS),
         func.sum(case((service_expr > 0, 1), else_=0)),
         func.sum(case((func.coalesce(model.so_du_tien_gui, 0) + func.coalesce(model.so_du_tgtt_binh_quan, 0) > 0, 1), else_=0)),
         func.sum(case((func.coalesce(model.so_du_tien_vay, 0) > 0, 1), else_=0)),
@@ -1152,15 +1305,21 @@ def dashboard_business_analytics(
     previous_rr_recovery = _rr01_recovery(db, previous_period, scope.ma_cn, source_customer_ids)
     provision_after_reversal = float((totals[9] or 0) + (totals[11] or 0))
 
-    fee_count_start = 25 + len(ACTIVE_SERVICE_KEYS)
+    fee_value_start = 14
+    service_any_index = fee_value_start + len(FEE_FIELDS)
+    with_deposit_index = service_any_index + 1
+    with_loan_index = service_any_index + 2
+    service_count_start = service_any_index + 3
+    plus_base_index = service_count_start + len(ACTIVE_SERVICE_KEYS)
+    fee_count_start = plus_base_index + 1
     fee_rows = [
-        {"key": "phi_bao_lanh", "label": "Phí bảo lãnh", "value": float(totals[14] or 0), "customers": int(totals[fee_count_start] or 0)},
-        {"key": "phi_chuyen_tien", "label": "Phí chuyển tiền", "value": float(totals[15] or 0), "customers": int(totals[fee_count_start + 1] or 0)},
-        {"key": "phi_nhdt", "label": "Phí ngân hàng điện tử", "value": float(totals[16] or 0), "customers": int(totals[fee_count_start + 2] or 0)},
-        {"key": "abic_batd", "label": "Phí ABIC/BATĐ", "value": float(totals[17] or 0), "customers": int(totals[fee_count_start + 3] or 0)},
-        {"key": "phi_kdnt", "label": "Phí kinh doanh ngoại tệ", "value": float(totals[18] or 0), "customers": int(totals[fee_count_start + 4] or 0)},
-        {"key": "phi_lc", "label": "Phí LC", "value": float(totals[19] or 0), "customers": int(totals[fee_count_start + 5] or 0)},
-        {"key": "phi_ttqt", "label": "Phí thanh toán quốc tế", "value": float(totals[20] or 0), "customers": int(totals[fee_count_start + 6] or 0)},
+        {
+            "key": field,
+            "label": FEE_CATEGORY_LABELS[field],
+            "value": float(totals[fee_value_start + index] or 0),
+            "customers": int(totals[fee_count_start + index] or 0),
+        }
+        for index, field in enumerate(FEE_FIELDS)
     ]
     for item in fee_rows:
         item["average"] = item["value"] / item["customers"] if item["customers"] else 0
@@ -1184,15 +1343,10 @@ def dashboard_business_analytics(
         func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_gui), 0),
         func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tgtt_binh_quan), 0),
         func.coalesce(func.sum(CustomerPeriodBranchDetail.so_du_tien_vay), 0),
-        func.coalesce(func.sum(
-            func.coalesce(CustomerPeriodBranchDetail.phi_bao_lanh, 0)
-            + func.coalesce(CustomerPeriodBranchDetail.phi_chuyen_tien, 0)
-            + func.coalesce(CustomerPeriodBranchDetail.phi_nhdt, 0)
-            + func.coalesce(CustomerPeriodBranchDetail.abic_batd, 0)
-            + func.coalesce(CustomerPeriodBranchDetail.phi_kdnt, 0)
-            + func.coalesce(CustomerPeriodBranchDetail.phi_lc, 0)
-            + func.coalesce(CustomerPeriodBranchDetail.phi_ttqt, 0)
-        ), 0),
+        func.coalesce(func.sum(sum(
+            func.coalesce(getattr(CustomerPeriodBranchDetail, field), 0)
+            for field in FEE_FIELDS
+        )), 0),
         func.count(func.distinct(case(
             (CustomerPeriodBranchDetail.ma_cb.in_(configured_officer_codes), CustomerPeriodBranchDetail.ma_cb),
             else_=None,
@@ -1221,13 +1375,15 @@ def dashboard_business_analytics(
         .all()
     )
 
-    service_counts = {key: int(totals[24 + index] or 0) for index, key in enumerate(ACTIVE_SERVICE_KEYS)}
+    service_counts = {key: int(totals[service_count_start + index] or 0) for index, key in enumerate(ACTIVE_SERVICE_KEYS)}
+    profile_fee_total = float(sum(item["value"] for item in fee_rows))
+    fee_reconciliation = _fee_reconciliation(db, period_key, scope, customer_ids, profile_fee_total)
     result = {
         "period_key": period_key,
         "scope": {"branch_code": scope.ma_cn, "pgd_code": scope.ma_pgd},
         "customer": {
-            "total": int(totals[0] or 0), "with_deposit": int(totals[22] or 0),
-            "with_loan": int(totals[23] or 0), "with_service": int(totals[21] or 0),
+            "total": int(totals[0] or 0), "with_deposit": int(totals[with_deposit_index] or 0),
+            "with_loan": int(totals[with_loan_index] or 0), "with_service": int(totals[service_any_index] or 0),
         },
         "funding": {
             **funding,
@@ -1270,13 +1426,14 @@ def dashboard_business_analytics(
             "debt_groups": [{"group": str(group or "Chưa xác định"), "customers": int(count or 0), "balance": float(balance or 0)} for group, count, balance in loan_group_rows],
         },
         "income": {
-            "total_fee": float(sum(item["value"] for item in fee_rows)),
+            "total_fee": profile_fee_total,
             "composition_total": float(fee_composition_total),
             "fees": fee_rows,
+            "reconciliation": fee_reconciliation,
         },
         "services": _build_service_penetration_rows(
             count_fn=lambda key, _base_kind: service_counts[key],
-            loan_base=int(totals[23] or 0), plus_base=int(totals[24 + len(ACTIVE_SERVICE_KEYS)] or 0),
+            loan_base=int(totals[with_loan_index] or 0), plus_base=int(totals[plus_base_index] or 0),
             total_customers=int(totals[0] or 0),
         ),
         "branches": [{
@@ -1285,7 +1442,7 @@ def dashboard_business_analytics(
             "officers": int(row[6] or 0),
         } for row in branch_rows],
         "officers": _build_officer_leaderboard(
-            db, period_key, scope.ma_cn, scope.ma_pgd, source_customer_ids
+            db, period_key, scope.ma_cn, scope.ma_pgd, source_customer_ids, previous_period
         ) if include_rankings else [],
         "metric_definitions": {
             "term_deposit": {"source": "PF14", "columns": "MONTHLYENDBALANCE, CCY", "formula": "SUM(MONTHLYENDBALANCE × tỷ giá)", "currency": "Quy đổi VNĐ bằng tỷ giá DP01 của kỳ"},
@@ -1326,7 +1483,7 @@ def dashboard_business_trends(
 ):
     filters = _scope_filters(scope, filters)
     filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
-    cache_key = ("v3-business-charts", periods, period_key, scope.ma_cn, scope.ma_pgd, filter_key)
+    cache_key = ("v4-business-charts-fees", periods, period_key, scope.ma_cn, scope.ma_pgd, filter_key)
     cached = _BUSINESS_TREND_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
@@ -1370,13 +1527,7 @@ def dashboard_business_trends(
         func.coalesce(func.sum(model.so_du_tien_gui), 0),
         func.coalesce(func.sum(model.so_du_tgtt_binh_quan), 0),
         func.coalesce(func.sum(model.so_du_tien_vay), 0),
-        func.coalesce(func.sum(model.phi_bao_lanh), 0),
-        func.coalesce(func.sum(model.phi_chuyen_tien), 0),
-        func.coalesce(func.sum(model.phi_nhdt), 0),
-        func.coalesce(func.sum(model.abic_batd), 0),
-        func.coalesce(func.sum(model.phi_kdnt), 0),
-        func.coalesce(func.sum(model.phi_lc), 0),
-        func.coalesce(func.sum(model.phi_ttqt), 0),
+        *(func.coalesce(func.sum(getattr(model, field)), 0) for field in FEE_FIELDS),
         func.coalesce(func.sum(model.dprr_chung_lk), 0),
         func.coalesce(func.sum(model.dprr_cuthe_lk), 0),
         func.count(func.distinct(case((valid_officer, model.ma_cb), else_=None))),
@@ -1398,23 +1549,30 @@ def dashboard_business_trends(
         values = values_by_period.get(key)
         if not values:
             continue
-        officer_count = int(values[14] or 0)
-        managed_customers = int(values[15] or 0)
+        trend_fee_start = 5
+        trend_provision_start = trend_fee_start + len(FEE_FIELDS)
+        trend_officer_start = trend_provision_start + 2
+        trend_loan_start = trend_officer_start + 2
+        officer_count = int(values[trend_officer_start] or 0)
+        managed_customers = int(values[trend_officer_start + 1] or 0)
         total_scale = float((values[2] or 0) + (values[3] or 0) + (values[4] or 0))
-        total_fee = float(sum(float(value or 0) for value in values[5:12]))
+        total_fee = float(sum(float(value or 0) for value in values[trend_fee_start:trend_provision_start]))
+        trend_fees = {field: float(values[trend_fee_start + index] or 0) for index, field in enumerate(FEE_FIELDS)}
         rows.append({
             "period_key": key, "customers": int(values[1] or 0),
             "deposit": float(values[2] or 0), "casa": float(values[3] or 0),
             "loan": float(values[4] or 0),
             "fee": total_fee,
-            "fee_guarantee": float(values[5] or 0),
-            "fee_transfer": float(values[6] or 0),
-            "fee_digital": float(values[7] or 0),
-            "fee_abic": float(values[8] or 0),
-            "fee_fx": float(values[9] or 0),
-            "fee_lc": float(values[10] or 0),
-            "fee_international": float(values[11] or 0),
-            "provision": float((values[12] or 0) + (values[13] or 0)),
+            "fee_guarantee": trend_fees["phi_bao_lanh"],
+            "fee_transfer": trend_fees["phi_chuyen_tien"],
+            "fee_digital": trend_fees["phi_nhdt"],
+            "fee_abic": trend_fees["abic_batd"],
+            "fee_fx": trend_fees["phi_kdnt"],
+            "fee_lc": trend_fees["phi_lc"],
+            "fee_international": trend_fees["phi_ttqt"],
+            "fee_card": trend_fees["phi_the"],
+            "fee_other": trend_fees["phi_khac"],
+            "provision": float((values[trend_provision_start] or 0) + (values[trend_provision_start + 1] or 0)),
             "officers": officer_count,
             "managed_customers": managed_customers,
             "customers_per_officer": managed_customers / officer_count if officer_count else 0,
@@ -1422,9 +1580,9 @@ def dashboard_business_trends(
             "deposit_per_officer": float((values[2] or 0) + (values[3] or 0)) / officer_count if officer_count else 0,
             "loan_per_officer": float(values[4] or 0) / officer_count if officer_count else 0,
             "fee_per_officer": total_fee / officer_count if officer_count else 0,
-            "short_loan": float(values[16] or 0),
-            "medium_long_loan": float(values[17] or 0),
-            "overdraft": float(values[18] or 0),
+            "short_loan": float(values[trend_loan_start] or 0),
+            "medium_long_loan": float(values[trend_loan_start + 1] or 0),
+            "overdraft": float(values[trend_loan_start + 2] or 0),
             "availability": {
                 "deposit": "PF14" in ready_sources.get(key, set()),
                 "casa": "PF14" in ready_sources.get(key, set()),
@@ -1478,6 +1636,8 @@ BUSINESS_DRILLDOWN_LABELS = {
     "fx_fee": "Khách hàng phát sinh phí kinh doanh ngoại tệ",
     "lc_fee": "Khách hàng phát sinh phí LC",
     "international_fee": "Khách hàng phát sinh phí thanh toán quốc tế",
+    "card_fee": "Khách hàng phát sinh phí thẻ",
+    "other_fee": "Khách hàng phát sinh phí khác",
     "service": "Khách hàng sử dụng sản phẩm",
     "multi_branch": "Khách hàng có quan hệ đa chi nhánh",
     "no_service": "Khách hàng chưa sử dụng sản phẩm",
@@ -1518,6 +1678,8 @@ def _business_drilldown_condition(model, metric: str, db: Session | None = None,
         "fx_fee": func.coalesce(model.phi_kdnt, 0) != 0,
         "lc_fee": func.coalesce(model.phi_lc, 0) != 0,
         "international_fee": func.coalesce(model.phi_ttqt, 0) != 0,
+        "card_fee": func.coalesce(model.phi_the, 0) != 0,
+        "other_fee": func.coalesce(model.phi_khac, 0) != 0,
         "service": services > 0,
         "no_service": services == 0,
         "risk": (func.abs(func.coalesce(model.dprr_chung_lk, 0)) + func.abs(func.coalesce(model.dprr_cuthe_lk, 0))) > 0,
@@ -1791,6 +1953,10 @@ def dashboard_business_drilldown(
     detail_branch_code: str | None = Query(default=None),
     detail_customer_type: str | None = Query(default=None),
     detail_officer: str | None = Query(default=None),
+    detail_has_deposit: bool | None = Query(default=None),
+    detail_has_loan: bool | None = Query(default=None),
+    detail_has_fee: bool | None = Query(default=None),
+    detail_multi_branch: bool | None = Query(default=None),
     sort_by: str | None = Query(default=None),
     sort_dir: str = Query(default="desc", pattern="^(asc|desc)$"),
     page: int = Query(default=1, ge=1),
@@ -1847,6 +2013,23 @@ def dashboard_business_drilldown(
                 )
             ))
         query = query.filter(or_(*officer_conditions))
+    deposit_expr = func.coalesce(model.so_du_tien_gui, 0) + func.coalesce(model.so_du_tgtt_binh_quan, 0)
+    detail_fee_expr = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
+    if detail_has_deposit is not None:
+        query = query.filter(deposit_expr > 0 if detail_has_deposit else deposit_expr <= 0)
+    if detail_has_loan is not None:
+        query = query.filter(func.coalesce(model.so_du_tien_vay, 0) > 0 if detail_has_loan else func.coalesce(model.so_du_tien_vay, 0) <= 0)
+    if detail_has_fee is not None:
+        query = query.filter(detail_fee_expr != 0 if detail_has_fee else detail_fee_expr == 0)
+    if detail_multi_branch is not None:
+        if model is CustomerPeriodProfile:
+            query = query.filter(func.coalesce(model.branch_count, 0) > 1 if detail_multi_branch else func.coalesce(model.branch_count, 0) <= 1)
+        else:
+            relationship_query = db.query(CustomerPeriodProfile.ma_kh).filter(
+                CustomerPeriodProfile.period_key == period_key,
+                CustomerPeriodProfile.branch_count > 1 if detail_multi_branch else CustomerPeriodProfile.branch_count <= 1,
+            )
+            query = query.filter(model.ma_kh.in_(relationship_query))
     total = query.with_entities(func.count(func.distinct(model.ma_kh))).scalar() or 0
     fee_expr = sum(func.coalesce(getattr(model, field), 0) for field in FEE_FIELDS)
     risk_expr = func.coalesce(model.dprr_chung_lk, 0) + func.coalesce(model.dprr_cuthe_lk, 0)
@@ -1871,6 +2054,8 @@ def dashboard_business_drilldown(
         "fx_fee": model.phi_kdnt,
         "lc_fee": model.phi_lc,
         "international_fee": model.phi_ttqt,
+        "card_fee": model.phi_the,
+        "other_fee": model.phi_khac,
         "written_off": getattr(model, "du_no_xlrr", model.so_du_tien_vay),
         "general_provision_period": model.dprr_chung_tt,
         "specific_provision_period": model.dprr_cuthe_tt,
@@ -1997,6 +2182,139 @@ def dashboard_business_drilldown(
         "metric": metric, "label": label, "total": int(total),
         "total_value": float(total_value), "page": page, "page_size": page_size,
         "scope": {"branch_code": scope.ma_cn, "pgd_code": scope.ma_pgd},
+        "items": items,
+    }
+
+
+@router.get("/fee-drilldown", dependencies=[Depends(require_any_permission("analytics:view", "customer:profile:view"))])
+def dashboard_fee_drilldown(
+    period_key: str = Query(...),
+    level: str = Query(default="account", pattern="^(account|customer|transaction)$"),
+    category: str | None = Query(default=None),
+    account_code: str | None = Query(default=None),
+    customer_code: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=20, ge=1, le=200),
+    filters: dict = Depends(_advanced_filters),
+    scope: BranchScope = Depends(get_branch_scope),
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Trace a fee from category to account, customer and (admin-only) KH02 row."""
+    if level == "transaction" and "admin" not in set(user.permissions or []):
+        raise HTTPException(status_code=403, detail="Chỉ quản trị viên được xem bút toán KH02 gốc")
+    if category and category not in {"classified", "unclassified"} and category not in FEE_CATEGORY_PREFIXES:
+        raise HTTPException(status_code=400, detail="Nhóm phí không hợp lệ")
+
+    filters = _scope_filters(scope, filters)
+    customer_ids = _matching_customer_ids(db, period_key, scope, filters)
+    candidate = _account_prefix_condition(KH02CustomerTransaction.account_code, FEE_CANDIDATE_PREFIXES)
+    classified = _all_classified_fee_condition(KH02CustomerTransaction.account_code)
+    category_expr = _fee_category_expression(KH02CustomerTransaction.account_code)
+    normalized_account = func.substring(func.trim(func.coalesce(KH02CustomerTransaction.account_code, "")), 1, 6)
+    normalized_customer = func.trim(func.coalesce(KH02CustomerTransaction.customer_code, ""))
+    credit = func.coalesce(KH02CustomerTransaction.credit_amount, 0)
+    debit = func.coalesce(KH02CustomerTransaction.debit_amount, 0)
+    net = credit - debit
+
+    query = db.query(KH02CustomerTransaction).filter(
+        KH02CustomerTransaction.period_key == period_key,
+        candidate,
+        normalized_customer.in_(select(customer_ids.c.ma_kh)),
+    )
+    if scope.ma_cn:
+        query = query.filter(func.trim(KH02CustomerTransaction.branch_code) == scope.ma_cn)
+    if category == "classified":
+        query = query.filter(classified)
+    elif category == "unclassified":
+        query = query.filter(~classified)
+    elif category:
+        query = query.filter(_fee_category_condition(KH02CustomerTransaction.account_code, category))
+    if account_code:
+        query = query.filter(normalized_account == str(account_code).strip()[:6])
+    if customer_code:
+        query = query.filter(normalized_customer == str(customer_code).strip())
+
+    summary = query.with_entities(
+        func.count(KH02CustomerTransaction.id),
+        func.count(func.distinct(normalized_customer)),
+        func.coalesce(func.sum(credit), 0),
+        func.coalesce(func.sum(debit), 0),
+        func.coalesce(func.sum(net), 0),
+    ).one()
+    items = []
+    total = 0
+    if level == "account":
+        grouped = query.with_entities(
+            normalized_account.label("account_code"),
+            category_expr.label("category"),
+            func.count(KH02CustomerTransaction.id).label("records"),
+            func.count(func.distinct(normalized_customer)).label("customers"),
+            func.count(func.distinct(func.trim(KH02CustomerTransaction.branch_code))).label("branches"),
+            func.coalesce(func.sum(credit), 0).label("credit"),
+            func.coalesce(func.sum(debit), 0).label("debit"),
+            func.coalesce(func.sum(net), 0).label("net"),
+        ).group_by(normalized_account, category_expr).subquery()
+        total = int(db.query(func.count()).select_from(grouped).scalar() or 0)
+        rows = db.query(grouped).order_by(desc(func.abs(grouped.c.net)), grouped.c.account_code).offset((page - 1) * page_size).limit(page_size).all()
+        items = [{
+            "account_code": row.account_code,
+            "category": row.category,
+            "category_label": FEE_CATEGORY_LABELS.get(row.category, "Chưa phân loại"),
+            "records": int(row.records or 0), "customers": int(row.customers or 0), "branches": int(row.branches or 0),
+            "credit": float(row.credit or 0), "debit": float(row.debit or 0), "net": float(row.net or 0),
+        } for row in rows]
+    elif level == "customer":
+        grouped = query.with_entities(
+            normalized_customer.label("customer_code"),
+            func.trim(KH02CustomerTransaction.branch_code).label("branch_code"),
+            func.max(KH02CustomerTransaction.customer_name).label("customer_name"),
+            func.count(KH02CustomerTransaction.id).label("records"),
+            func.coalesce(func.sum(credit), 0).label("credit"),
+            func.coalesce(func.sum(debit), 0).label("debit"),
+            func.coalesce(func.sum(net), 0).label("net"),
+        ).group_by(normalized_customer, func.trim(KH02CustomerTransaction.branch_code)).subquery()
+        total = int(db.query(func.count()).select_from(grouped).scalar() or 0)
+        rows = db.query(grouped).order_by(desc(func.abs(grouped.c.net)), grouped.c.customer_code).offset((page - 1) * page_size).limit(page_size).all()
+        items = [{
+            "customer_code": row.customer_code, "customer_name": row.customer_name, "branch_code": row.branch_code,
+            "records": int(row.records or 0), "credit": float(row.credit or 0), "debit": float(row.debit or 0), "net": float(row.net or 0),
+        } for row in rows]
+    else:
+        total = int(summary[0] or 0)
+        rows = query.join(ImportFile, ImportFile.id == KH02CustomerTransaction.import_file_id).with_entities(
+            KH02CustomerTransaction.id,
+            KH02CustomerTransaction.transaction_date,
+            KH02CustomerTransaction.branch_code,
+            KH02CustomerTransaction.customer_code,
+            KH02CustomerTransaction.customer_name,
+            KH02CustomerTransaction.account_code,
+            KH02CustomerTransaction.business_code,
+            KH02CustomerTransaction.transaction_code,
+            KH02CustomerTransaction.transaction_sequence,
+            KH02CustomerTransaction.debit_amount,
+            KH02CustomerTransaction.credit_amount,
+            ImportFile.original_filename,
+        ).order_by(desc(KH02CustomerTransaction.transaction_date), desc(KH02CustomerTransaction.id)).offset((page - 1) * page_size).limit(page_size).all()
+        items = [{
+            "id": row[0], "transaction_date": row[1].isoformat() if row[1] else None,
+            "branch_code": row[2], "customer_code": row[3], "customer_name": row[4], "account_code": row[5],
+            "business_code": row[6], "transaction_code": row[7], "transaction_sequence": row[8],
+            "debit": float(row[9] or 0), "credit": float(row[10] or 0), "net": float((row[10] or 0) - (row[9] or 0)),
+            "source_file": row[11],
+        } for row in rows]
+
+    return {
+        "period_key": period_key, "level": level, "category": category,
+        "category_label": FEE_CATEGORY_LABELS.get(
+            category,
+            "Phí đã phân loại" if category == "classified" else
+            "Phí chưa phân loại" if category == "unclassified" else "Tất cả nhóm phí",
+        ),
+        "account_code": account_code, "customer_code": customer_code,
+        "total": total, "page": page, "page_size": page_size,
+        "summary": {"records": int(summary[0] or 0), "customers": int(summary[1] or 0), "credit": float(summary[2] or 0), "debit": float(summary[3] or 0), "net": float(summary[4] or 0)},
+        "can_view_transactions": "admin" in set(user.permissions or []),
         "items": items,
     }
 
@@ -2175,7 +2493,7 @@ def dashboard_insights(
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 2"))
     filters = _scope_filters(scope, filters)
     filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
-    cache_key = (period_key, scope.ma_cn, f"{scope.ma_pgd or ''}:top={int(include_top_changes)}:alerts_only={int(anomalies_only)}:{anomaly_page}:{anomaly_page_size}:total={int(anomaly_include_total)}:q={anomaly_keyword or ''}:type={anomaly_type or ''}:{filter_key}")
+    cache_key = (period_key, scope.ma_cn, f"fee-v2:{scope.ma_pgd or ''}:top={int(include_top_changes)}:alerts_only={int(anomalies_only)}:{anomaly_page}:{anomaly_page_size}:total={int(anomaly_include_total)}:q={anomaly_keyword or ''}:type={anomaly_type or ''}:{filter_key}")
     cached = _INSIGHTS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]

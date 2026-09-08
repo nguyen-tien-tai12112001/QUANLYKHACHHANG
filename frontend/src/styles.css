@@ -1,4 +1,5 @@
 :root {
+  --app-font: "Segoe UI", Arial, sans-serif;
   --agri-red: #8f1438;
   --agri-red-dark: #6f102c;
   --agri-red-soft: #fff2f5;
@@ -21,7 +22,30 @@ body,
 body {
   background: var(--page);
   color: var(--ink);
-  font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  font-family: var(--app-font);
+}
+
+body,
+button,
+input,
+textarea,
+select,
+#root,
+.ant-app,
+.ant-typography,
+.ant-btn,
+.ant-input,
+.ant-input-number,
+.ant-select,
+.ant-menu,
+.ant-table,
+.ant-form,
+.ant-modal,
+.ant-drawer,
+.ant-tooltip,
+.ant-notification,
+.ant-message {
+  font-family: var(--app-font) !important;
 }
 
 .app-shell {
@@ -1601,7 +1625,7 @@ body {
 .role-matrix-permission { display: flex; min-width: 0; flex-direction: column; gap: 3px; }
 .role-matrix-permission > span { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .role-matrix-permission > span .ant-typography { overflow: hidden; color: #263b52; text-overflow: ellipsis; white-space: nowrap; }
-.role-matrix-permission > .ant-typography { overflow: hidden; color: #7b899b; font-family: Consolas, monospace; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.role-matrix-permission > .ant-typography { overflow: hidden; color: #7b899b; font-family: var(--app-font); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .role-matrix-permission small { color: #9a6a16; font-size: 9px; }
 .role-matrix-role-head { display: flex; width: 100%; min-width: 0; flex-direction: column; align-items: center; gap: 3px; padding: 4px; color: #27415f; background: transparent; border: 0; cursor: pointer; }
 .role-matrix-role-head > span { max-width: 100%; overflow: hidden; font-size: 11px; font-weight: 800; text-overflow: ellipsis; white-space: nowrap; }

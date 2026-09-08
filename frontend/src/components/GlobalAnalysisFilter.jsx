@@ -47,6 +47,9 @@ export default function GlobalAnalysisFilter({ activeMenu }) {
   if (!C360_PAGES.has(activeMenu) || !scope) return null;
   const { draft, applied, options, periods, metadataLoading, fixedBranchCode } = scope;
   const advancedCount = Object.values(draft.advanced || {}).filter((value) => Array.isArray(value) ? value.length : value != null && value !== '').length;
+  const progressPercent = scope.sessionProgress?.total
+    ? Math.min(100, Math.round((Number(scope.sessionProgress.completed || 0) / Number(scope.sessionProgress.total)) * 100))
+    : 0;
   const apply = () => {
     const invalidRange = [['Tiền gửi', draft.advanced.minDeposit, draft.advanced.maxDeposit], ['Tiền vay', draft.advanced.minLoan, draft.advanced.maxLoan], ['CASA', draft.advanced.minCasa, draft.advanced.maxCasa]].find(([, min, max]) => min != null && max != null && max < min);
     if (invalidRange) return message.error(`Giá trị Đến của ${invalidRange[0]} phải lớn hơn hoặc bằng giá trị Từ`);
@@ -59,7 +62,7 @@ export default function GlobalAnalysisFilter({ activeMenu }) {
       <div className="global-scope-heading">
         <div><span className="global-scope-heading__icon"><FilterOutlined /></span><span><strong>Phạm vi phân tích</strong><small>Áp dụng đồng bộ cho toàn bộ C360</small></span></div>
         {applied
-          ? <span className={`global-scope-status ${scope.sessionLoading ? 'is-loading' : 'is-ready'}`}><i />{scope.sessionLoading ? `Đang chuẩn bị ${scope.sessionProgress?.completed || 0}/${scope.sessionProgress?.total || '…'} khối` : `Kỳ ${applied.periodKey}${applied.branchCode ? ` · CN ${applied.branchCode}` : ' · Toàn hệ thống'}`}</span>
+          ? <span className={`global-scope-status ${scope.sessionLoading ? 'is-loading' : 'is-ready'}`}><i />{scope.sessionLoading ? `Đang chuẩn bị dữ liệu · ${progressPercent}%` : `Kỳ ${applied.periodKey}${applied.branchCode ? ` · CN ${applied.branchCode}` : ' · Toàn hệ thống'}`}</span>
           : <span className="global-scope-status"><i />Chưa tải dữ liệu</span>}
       </div>
       <div className="global-scope-controls">

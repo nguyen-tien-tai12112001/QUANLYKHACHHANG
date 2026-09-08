@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { BarChartOutlined, CheckCircleFilled, DatabaseOutlined, LockOutlined, SafetyCertificateOutlined, UserOutlined } from '@ant-design/icons';
+import { BarChartOutlined, CheckCircleFilled, DatabaseOutlined, EyeInvisibleOutlined, EyeOutlined, LoadingOutlined, LockOutlined, SafetyCertificateOutlined, UserOutlined, WarningOutlined } from '@ant-design/icons';
 import { Alert, Button, Form, Input, Typography, message } from 'antd';
 
 import client from '../api/client';
@@ -40,7 +40,7 @@ export default function LoginProduction({ onLogin }) {
           <div><Title level={1}>C360</Title><Text>NỀN TẢNG DỮ LIỆU KHÁCH HÀNG</Text></div>
         </div>
         <Text className="login-kicker"><span /> Hệ thống quản lý khách hàng tập trung</Text>
-        <Title level={2} className="login-headline">Một góc nhìn thống nhất cho mọi quan hệ khách hàng</Title>
+        <Title level={2} className="login-headline">Toàn cảnh khách hàng, thống nhất dữ liệu, hỗ trợ quyết định</Title>
         <Paragraph>Tập trung dữ liệu, phân tích nghiệp vụ và hỗ trợ điều hành trên cùng một nền tảng an toàn trong mạng nội bộ.</Paragraph>
         <div className="login-feature-grid">
           <div><DatabaseOutlined /><span>Kho dữ liệu hợp nhất</span><small>CIF và nguồn nghiệp vụ</small></div>
@@ -69,16 +69,17 @@ export default function LoginProduction({ onLogin }) {
               style={{ marginBottom: 16 }}
             />
           ) : null}
-          <Form layout="vertical" onFinish={handleSubmit} className="login-form" requiredMark={false}>
+          <Form layout="vertical" onFinish={handleSubmit} onValuesChange={() => loginError && setLoginError('')} className="login-form" requiredMark={false}>
             <Form.Item label="Mã nhân viên / Tài khoản" name="username" rules={[{ required: true, message: 'Nhập mã nhân viên hoặc tài khoản' }]}>
               <Input size="large" prefix={<UserOutlined />} placeholder="Nhập mã nhân viên hoặc tài khoản" autoFocus autoComplete="username" />
             </Form.Item>
             <Form.Item label="Mật khẩu" name="password" rules={[{ required: true, message: 'Nhập mật khẩu' }]}>
-              <Input.Password size="large" prefix={<LockOutlined />} placeholder="Nhập mật khẩu" autoComplete="current-password" onKeyDown={(event) => setCapsLock(event.getModifierState?.('CapsLock'))} onKeyUp={(event) => setCapsLock(event.getModifierState?.('CapsLock'))} onBlur={() => setCapsLock(false)} />
+              <Input.Password size="large" prefix={<LockOutlined />} placeholder="Nhập mật khẩu" autoComplete="current-password" iconRender={(visible) => visible ? <EyeOutlined title="Ẩn mật khẩu" /> : <EyeInvisibleOutlined title="Hiện mật khẩu" />} onKeyDown={(event) => setCapsLock(event.getModifierState?.('CapsLock'))} onKeyUp={(event) => setCapsLock(event.getModifierState?.('CapsLock'))} onBlur={() => setCapsLock(false)} />
             </Form.Item>
-            {capsLock ? <div className="login-caps-warning">Caps Lock đang bật</div> : null}
+            {capsLock ? <div className="login-caps-warning" role="status"><WarningOutlined /> Caps Lock đang bật; mật khẩu có phân biệt chữ hoa và chữ thường.</div> : null}
+            {submitting ? <div className="login-submit-status" role="status" aria-live="polite"><LoadingOutlined spin /><span><strong>Đang đăng nhập</strong><small>Hệ thống đang xác thực tài khoản và phạm vi truy cập…</small></span></div> : null}
             <Button type="primary" htmlType="submit" size="large" block loading={submitting} icon={!submitting ? <SafetyCertificateOutlined /> : null}>
-              {submitting ? 'Đang xác thực...' : 'Đăng nhập an toàn'}
+              {submitting ? 'Đang đăng nhập...' : 'Đăng nhập'}
             </Button>
           </Form>
           <div className="login-security-note"><SafetyCertificateOutlined /><span><strong>Kết nối được bảo vệ</strong><small>Không chia sẻ mật khẩu và luôn đăng xuất khi rời máy.</small></span></div>

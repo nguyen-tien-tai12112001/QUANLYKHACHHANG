@@ -107,7 +107,7 @@
 }
 
 .personal-profile-tabs .ant-tabs-tabpane {
-  padding: 30px 34px 44px !important;
+  padding: 34px 40px 48px !important;
 }
 
 .personal-profile-content {
@@ -158,7 +158,7 @@
   display: grid !important;
   grid-template-columns: repeat(2, minmax(0,1fr));
   gap: 14px !important;
-  margin: -8px 0 2px;
+  margin: 0 0 4px;
 }
 
 .personal-profile-value {
@@ -211,7 +211,7 @@
 
 .personal-profile-form,
 .personal-password-form {
-  margin: -8px 0 0 !important;
+  margin: 0 !important;
   padding: 22px 24px 24px !important;
   background: #fff !important;
   border: 1px solid #e0e6ed !important;
@@ -248,7 +248,7 @@
 .personal-permission-summary small { font-size: 10px !important; }
 .personal-permission-summary strong { font-size: 23px !important; }
 
-.personal-permission-groups { margin-top: -8px; }
+.personal-permission-groups { margin-top: 0; }
 .personal-permission-groups .ant-collapse-item {
   margin-bottom: 10px !important;
   border-color: #e0e6ed !important;

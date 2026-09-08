@@ -67,7 +67,7 @@ export default function GlobalApiLoading() {
         <LoadingOutlined spin className="global-api-loading__spinner" />
         <strong>{preload.active ? 'Đang chuẩn bị toàn bộ phiên C360' : 'Đang tải dữ liệu'}</strong>
         <span>{preload.active ? preload.stage : 'Hệ thống đang truy vấn và tổng hợp dữ liệu, vui lòng chờ…'}</span>
-        {preload.active ? <div className="global-api-loading__progress"><i style={{ width: `${percent}%` }} /><small>{preload.completed}/{preload.total || '…'} khối · {percent}% · {preload.elapsed.toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} giây</small></div> : null}
+        {preload.active ? <div className="global-api-loading__progress"><i style={{ width: `${percent}%` }} /><small>{percent}% · {preload.elapsed.toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} giây</small></div> : null}
       </div>
     </div>
   );

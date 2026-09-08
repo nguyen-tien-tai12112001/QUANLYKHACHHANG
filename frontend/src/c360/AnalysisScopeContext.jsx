@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { notification } from 'antd';
 import client, { clearApiCache } from '../api/client';
 
@@ -40,6 +40,7 @@ export function AnalysisScopeProvider({ children, currentUser }) {
   const [sessionSummary, setSessionSummary] = useState(null);
   const [sessionData, setSessionData] = useState(null);
   const [orgCatalog, setOrgCatalog] = useState({ branches: [], departments: [] });
+  const filterOptionsRequestRef = useRef(0);
 
   useEffect(() => {
     const clearSession = () => {
@@ -86,10 +87,12 @@ export function AnalysisScopeProvider({ children, currentUser }) {
   }, []);
 
   useEffect(() => {
+    const requestId = ++filterOptionsRequestRef.current;
     if (!draft.periodKey) {
       setOptions((current) => ({ ...current, officers: [], customer_types: [], loan_types: [] }));
       return;
     }
+    setOptions((current) => ({ ...current, officers: [], customer_types: [], loan_types: [] }));
     client.get('/customer-processing/profile-filter-options', {
       params: {
         period_key: draft.periodKey,
@@ -98,12 +101,16 @@ export function AnalysisScopeProvider({ children, currentUser }) {
       },
       cacheTtl: 300000,
       hideGlobalLoading: true,
-    }).then(({ data }) => setOptions((current) => ({
-      ...current,
-      officers: data?.officers || [],
-      customer_types: data?.customer_types || [],
-      loan_types: data?.loan_types || [],
-    }))).catch(() => {});
+    }).then(({ data }) => {
+      if (requestId !== filterOptionsRequestRef.current) return;
+      setOptions((current) => ({
+        ...current,
+        officers: (data?.officers || []).filter((item) => (!draft.branchCode || item.branch_code === draft.branchCode)
+          && (!draft.pgdCode || item.department_code === draft.pgdCode)),
+        customer_types: data?.customer_types || [],
+        loan_types: data?.loan_types || [],
+      }));
+    }).catch(() => {});
   }, [draft.branchCode, draft.periodKey, draft.pgdCode]);
 
   useEffect(() => {
@@ -171,9 +178,10 @@ export function AnalysisScopeProvider({ children, currentUser }) {
         ...loaded,
       });
       const elapsedSeconds = Math.max((performance.now() - loadStartedAt) / 1000, 0.1);
+      const completionPercent = Math.round(((totalRequests - failedCount) / Math.max(1, totalRequests)) * 100);
       notification[failedCount ? 'warning' : 'success']({
         message: failedCount ? 'Phiên phân tích đã sẵn sàng một phần' : 'Toàn bộ C360 đã sẵn sàng',
-        description: `${summary.customers.toLocaleString('vi-VN')} khách hàng · ${totalRequests - failedCount}/${totalRequests} khối dữ liệu · ${elapsedSeconds.toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} giây. Chuyển trang sẽ dùng ngay dữ liệu của phiên này.`,
+        description: `${summary.customers.toLocaleString('vi-VN')} khách hàng · hoàn thành ${completionPercent}% · ${elapsedSeconds.toLocaleString('vi-VN', { minimumFractionDigits: 1, maximumFractionDigits: 1 })} giây. Chuyển trang sẽ dùng ngay dữ liệu của phiên này.`,
         placement: 'topRight', duration: failedCount ? 8 : 5,
       });
     })().finally(() => {

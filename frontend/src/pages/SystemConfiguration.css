@@ -15,5 +15,5 @@
 .system-config-values { display:grid; gap:8px; }
 .system-config-values > div { display:grid; grid-template-columns:110px minmax(0,1fr); align-items:center; gap:10px; padding:8px 10px; border-radius:8px; background:#faf7f5; }
 .system-config-json { display:block; max-width:310px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.system-config-json-editor { font-family:Consolas, 'Courier New', monospace; font-size:12px; }
+.system-config-json-editor { font-family:var(--app-font); font-size:12px; }
 @media (max-width: 850px) { .system-config-catalogs { grid-template-columns:1fr; } .system-config-header { flex-direction:column; } }

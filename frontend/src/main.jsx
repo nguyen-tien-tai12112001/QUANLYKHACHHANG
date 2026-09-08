@@ -19,7 +19,7 @@ createRoot(document.getElementById('root')).render(
           colorBgLayout: '#f7f3ef',
           colorText: '#25171b',
           borderRadius: 6,
-          fontFamily: 'Inter, Arial, sans-serif',
+          fontFamily: '"Segoe UI", Arial, sans-serif',
         },
         components: {
           Layout: {
@@ -45,4 +45,3 @@ createRoot(document.getElementById('root')).render(
     </ConfigProvider>
   </React.StrictMode>,
 );
-

@@ -11,6 +11,7 @@ from openpyxl import load_workbook
 
 from app.config import settings
 from app.database import SessionLocal
+from app.fee_rules import FEE_FIELDS, fee_aggregate_select_sql
 from app.models import (
     CustomerPeriodBranchDetail,
     CustomerPeriodExchangeRate,
@@ -999,8 +1000,23 @@ def validate_processed_period(db: Session, period_key: str) -> dict:
     """), {"period_key": period_key}).mappings().one()
     report = {key: int(value or 0) for key, value in row.items()}
     report["duplicate_customer_codes"] = report["profile_count"] - report["unique_customer_count"]
-    totals = db.execute(text("""
-        WITH expected AS (
+    validation_fee_select = fee_aggregate_select_sql(
+        account_column="trim(k.account_code)",
+        amount_sql="coalesce(k.credit_amount,0)-coalesce(k.debit_amount,0)",
+    )
+    expected_fee_columns = ",\n".join(
+        f"COALESCE(f.{field},0) AS {field}" for field in FEE_FIELDS
+    )
+    actual_fee_columns = ",\n".join(
+        f"COALESCE(sum({field}),0) AS {field}" for field in FEE_FIELDS
+    )
+    totals = db.execute(text(f"""
+        WITH fee_expected AS (
+          SELECT {validation_fee_select}
+          FROM kh02_customer_transactions k
+          JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code)
+          WHERE k.period_key=:period_key
+        ), expected AS (
           SELECT
             (SELECT COALESCE(sum(l.du_no),0) FROM ln01_loans l JOIN cif_customers c ON c.customer_core_code=TRIM(l.custseq) WHERE l.period_key=:period_key) AS so_du_tien_vay,
             (SELECT COALESCE(sum(customer_amount),0) FROM (
@@ -1015,25 +1031,18 @@ def validate_processed_period(db: Session, period_key: str) -> dict:
                LEFT JOIN customer_period_exchange_rates r ON r.period_key=p.period_key AND r.ccy=UPPER(TRIM(COALESCE(p.ccy,'VND')))
                WHERE p.period_key=:period_key GROUP BY c.customer_core_code
              ) customer_totals) AS so_du_tgtt_binh_quan,
-            (SELECT COALESCE(sum(CASE WHEN TRIM(k.account_code) LIKE '7040%%' THEN COALESCE(k.credit_amount,0)-COALESCE(k.debit_amount,0) ELSE 0 END),0)
-               FROM kh02_customer_transactions k JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code) WHERE k.period_key=:period_key) AS phi_bao_lanh,
-            (SELECT COALESCE(sum(CASE WHEN TRIM(k.account_code) LIKE '721001%%' THEN COALESCE(k.credit_amount,0)-COALESCE(k.debit_amount,0) ELSE 0 END),0)
-               FROM kh02_customer_transactions k JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code) WHERE k.period_key=:period_key) AS phi_kdnt,
-            (SELECT COALESCE(sum(CASE WHEN TRIM(k.account_code) LIKE '709002%%' THEN COALESCE(k.credit_amount,0)-COALESCE(k.debit_amount,0) ELSE 0 END),0)
-               FROM kh02_customer_transactions k JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code) WHERE k.period_key=:period_key) AS phi_lc,
-            (SELECT COALESCE(sum(CASE WHEN substring(TRIM(k.account_code),1,6) BETWEEN '711002' AND '711014' OR TRIM(k.account_code) LIKE '711096%%' THEN COALESCE(k.credit_amount,0)-COALESCE(k.debit_amount,0) ELSE 0 END),0)
-               FROM kh02_customer_transactions k JOIN cif_customers c ON c.customer_core_code=TRIM(k.customer_code) WHERE k.period_key=:period_key) AS phi_ttqt,
+            {expected_fee_columns},
             (SELECT COALESCE(sum(r.current_principal),0) FROM rr01_handled_risk_loans r JOIN cif_customers c ON c.customer_core_code=TRIM(r.customer_code) WHERE r.period_key=:period_key) AS du_no_xlrr,
             (SELECT COALESCE(sum(COALESCE(r.recovered_principal_period,0)+COALESCE(r.recovered_interest_period,0)),0) FROM rr01_handled_risk_loans r JOIN cif_customers c ON c.customer_core_code=TRIM(r.customer_code) WHERE r.period_key=:period_key) AS ds_thu_no_xlrr,
             (SELECT COALESCE(sum(g.credit_amount),0) FROM gl02_ledger_transactions g JOIN cif_customers c ON c.customer_core_code=TRIM(g.customer_code)
                WHERE g.period_key=:period_key AND g.account_code='421101' AND COALESCE(g.transaction_type,'Normal')='Normal' AND g.customer_code<>'000000000') AS doanh_so_chuyen_tien_ve_tk
+          FROM fee_expected f
         ), actual AS (
           SELECT COALESCE(sum(so_du_tien_vay),0) so_du_tien_vay,
                  COALESCE(sum(so_du_tien_gui),0) so_du_tien_gui,
                  COALESCE(sum(so_du_tgtt_binh_quan),0) so_du_tgtt_binh_quan,
-                 COALESCE(sum(phi_bao_lanh),0) phi_bao_lanh,
-                 COALESCE(sum(phi_kdnt),0) phi_kdnt, COALESCE(sum(phi_lc),0) phi_lc,
-                 COALESCE(sum(phi_ttqt),0) phi_ttqt, COALESCE(sum(du_no_xlrr),0) du_no_xlrr,
+                 {actual_fee_columns},
+                 COALESCE(sum(du_no_xlrr),0) du_no_xlrr,
                  COALESCE(sum(ds_thu_no_xlrr),0) ds_thu_no_xlrr,
                  COALESCE(sum(doanh_so_chuyen_tien_ve_tk),0) doanh_so_chuyen_tien_ve_tk
           FROM customer_period_profiles WHERE period_key=:period_key
@@ -1570,9 +1579,11 @@ def create_processing_job(
 
 
 FINANCIAL_METRIC_COLUMNS = (
-    "phi_bao_lanh", "phi_chuyen_tien", "phi_nhdt", "abic_batd", "phi_kdnt", "phi_lc", "phi_ttqt",
+    *FEE_FIELDS,
     "dprr_chung_tt", "dprr_chung_lk", "dprr_cuthe_tt", "dprr_cuthe_lk",
 )
+
+KH02_FEE_AGGREGATE_SELECT_SQL = fee_aggregate_select_sql()
 
 
 BILLPAYMENT_BRANCH_UPDATE_SQL = text(
@@ -1945,22 +1956,7 @@ def apply_customer_financial_metrics(db: Session, period_key: str) -> None:
     db.execute(text(f"""
         WITH {canonical_cte} fees AS (
             SELECT trim(customer_code) ma_kh, trim(branch_code) branch_code,
-              sum(CASE WHEN trim(account_code) LIKE '7040%%'
-                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_bao_lanh,
-              sum(CASE WHEN trim(account_code) LIKE '711001%%' OR trim(account_code) LIKE '711002%%'
-                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_chuyen_tien,
-              sum(CASE WHEN trim(account_code) LIKE '711036%%' OR trim(account_code) LIKE '711037%%'
-                             OR trim(account_code) LIKE '711039%%'
-                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_nhdt,
-              sum(CASE WHEN trim(account_code) LIKE '714%%'
-                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) abic_batd,
-              sum(CASE WHEN trim(account_code) LIKE '721001%%'
-                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_kdnt,
-              sum(CASE WHEN trim(account_code) LIKE '709002%%'
-                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_lc,
-              sum(CASE WHEN (substring(trim(account_code),1,6) BETWEEN '711002' AND '711014')
-                               OR trim(account_code) LIKE '711096%%'
-                  THEN coalesce(credit_amount,0)-coalesce(debit_amount,0) ELSE 0 END) phi_ttqt
+              {KH02_FEE_AGGREGATE_SELECT_SQL}
             FROM kh02_customer_transactions
             WHERE period_key=:period_key AND nullif(trim(customer_code),'') IS NOT NULL
               AND nullif(trim(branch_code),'') IS NOT NULL
@@ -1970,6 +1966,7 @@ def apply_customer_financial_metrics(db: Session, period_key: str) -> None:
         SET phi_bao_lanh=f.phi_bao_lanh, phi_chuyen_tien=f.phi_chuyen_tien,
             phi_nhdt=f.phi_nhdt, abic_batd=f.abic_batd,
             phi_kdnt=f.phi_kdnt, phi_lc=f.phi_lc, phi_ttqt=f.phi_ttqt,
+            phi_the=f.phi_the, phi_khac=f.phi_khac,
             ttqt=CASE WHEN f.phi_kdnt<>0 OR f.phi_lc<>0 OR f.phi_ttqt<>0 THEN 1 ELSE 0 END
         FROM fees f
         WHERE d.period_key=:period_key AND d.ma_kh=f.ma_kh AND d.branch_code=f.branch_code

@@ -24,6 +24,7 @@ import {
   Avatar,
   Button,
   Card,
+  Checkbox,
   Col,
   Descriptions,
   Divider,
@@ -159,12 +160,12 @@ const feeFields = [
   { key: 'phi_bao_lanh', label: 'Phí bảo lãnh', source: 'KH02', money: true },
   { key: 'phi_chuyen_tien', label: 'Phí chuyển tiền', source: 'KH02', money: true },
   { key: 'phi_kdnt', label: 'Phí kinh doanh ngoại tệ', source: 'KH02 · 721001', money: true },
-  { key: 'phi_ttqt', label: 'Phí thanh toán quốc tế', source: 'KH02 · 711002–711014, 711096', money: true },
+  { key: 'phi_ttqt', label: 'Phí thanh toán quốc tế', source: 'KH02 · 711003–711014, 711096', money: true },
   { key: 'phi_lc', label: 'Phí LC', source: 'KH02 · 709002', money: true },
   { key: 'phi_nhdt', label: 'Phí ngân hàng điện tử', source: 'KH02', money: true },
-  { key: 'phi_the', label: 'Phí dịch vụ thẻ', source: 'Nguồn thẻ', money: true },
+  { key: 'phi_the', label: 'Phí dịch vụ thẻ', source: 'KH02 · 12 đầu mã thẻ', money: true },
   { key: 'phi_pos', label: 'Phí đơn vị chấp nhận thẻ', source: 'Nguồn thẻ', money: true },
-  { key: 'phi_khac', label: 'Phí dịch vụ khác', source: 'KH02', money: true },
+  { key: 'phi_khac', label: 'Phí dịch vụ khác', source: 'KH02 · 5 đầu mã còn lại', money: true },
 ];
 
 const productGroups = [
@@ -625,7 +626,7 @@ function CustomerEventTimeline({ history, moneyFormatter = compactMoney }) {
       const pct = before ? difference / Math.abs(before) * 100 : (after ? 100 : 0);
       if (difference !== 0 && (Math.abs(pct) >= 10 || key === 'du_no_xlrr')) events.push({ period: current.period_key, type: difference > 0 ? 'added' : 'removed', category, label: `${label} ${difference > 0 ? 'tăng' : 'giảm'} ${moneyFormatter(Math.abs(difference))}`, detail: `${moneyFormatter(before)} → ${moneyFormatter(after)} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%)` });
     });
-    const feeFields = ['phi_bao_lanh', 'phi_chuyen_tien', 'phi_nhdt', 'abic_batd', 'phi_kdnt', 'phi_lc', 'phi_ttqt'];
+    const feeFields = ['phi_bao_lanh', 'phi_chuyen_tien', 'phi_nhdt', 'abic_batd', 'phi_kdnt', 'phi_lc', 'phi_ttqt', 'phi_the', 'phi_khac'];
     const beforeFee = feeFields.reduce((sum, key) => sum + Number(previous[key] || 0), 0);
     const afterFee = feeFields.reduce((sum, key) => sum + Number(current[key] || 0), 0);
     if (beforeFee !== afterFee) events.push({ period: current.period_key, type: afterFee > beforeFee ? 'added' : 'removed', category: 'fee', label: `Thu phí ${afterFee > beforeFee ? 'tăng' : 'giảm'} ${moneyFormatter(Math.abs(afterFee - beforeFee))}`, detail: `${moneyFormatter(beforeFee)} → ${moneyFormatter(afterFee)}` });
@@ -770,6 +771,8 @@ function CustomerRelationshipMap({ data, selectedBranch, onSelectBranch, loading
 
 function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams, currentUser, open, onClose }) {
   const modalAnchorRef = useRef(null);
+  const profileScrollRef = useRef(null);
+  const preservedScrollTopRef = useRef(0);
   const [history, setHistory] = useState([]);
   const [historyError, setHistoryError] = useState('');
   const [scopedHistory, setScopedHistory] = useState([]);
@@ -1066,12 +1069,11 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
   }, [comparisonPeriod, history, open, profileBranch, scopedHistory, viewPeriodKey]);
 
   const changeProfileTab = (nextTab) => {
+    const scrollElement = profileScrollRef.current;
+    preservedScrollTopRef.current = scrollElement?.scrollTop || 0;
     setActiveTab(nextTab);
     window.requestAnimationFrame(() => {
-      const modal = modalAnchorRef.current?.closest('.ant-modal');
-      modalAnchorRef.current?.closest('.c360-profile-scroll')?.scrollTo({ top: 0, left: 0 });
-      modal?.closest('.ant-modal-wrap')?.scrollTo({ top: 0, left: 0 });
-      modal?.querySelector('.c360-profile-tabs > .ant-tabs-content-holder')?.scrollTo({ top: 0, left: 0 });
+      profileScrollRef.current?.scrollTo({ top: preservedScrollTopRef.current, left: 0, behavior: 'auto' });
     });
   };
 
@@ -1233,7 +1235,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
       destroyOnHidden
       className="c360-real-profile-modal"
     >
-      <div className="c360-profile-scroll">
+      <div ref={profileScrollRef} className="c360-profile-scroll">
       <div ref={modalAnchorRef} className="demo-quick-header c360-profile-hero">
         <Avatar size={48} className="demo-profile-avatar">{viewedCustomer.ten_kh?.charAt(0) || 'K'}</Avatar>
         <div>
@@ -1640,12 +1642,18 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
                 rowKey="branch_code"
                 pagination={false}
                 dataSource={financialMetrics.branches || []}
+                scroll={{ x: 1560 }}
                 columns={[
-                  { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100 },
+                  { title: 'Chi nhánh', dataIndex: 'branch_code', width: 100, fixed: 'left' },
                   { title: 'Phí bảo lãnh', dataIndex: 'phi_bao_lanh', align: 'right', render: displayMoney },
                   { title: 'Phí chuyển tiền', dataIndex: 'phi_chuyen_tien', align: 'right', render: displayMoney },
                   { title: 'Phí NHĐT', dataIndex: 'phi_nhdt', align: 'right', render: displayMoney },
                   { title: 'Phí BATD', dataIndex: 'abic_batd', align: 'right', render: displayMoney },
+                  { title: 'Phí KDNT', dataIndex: 'phi_kdnt', align: 'right', render: displayMoney },
+                  { title: 'Phí LC', dataIndex: 'phi_lc', align: 'right', render: displayMoney },
+                  { title: 'Phí TTQT', dataIndex: 'phi_ttqt', align: 'right', render: displayMoney },
+                  { title: 'Phí thẻ', dataIndex: 'phi_the', align: 'right', render: displayMoney },
+                  { title: 'Phí khác', dataIndex: 'phi_khac', align: 'right', render: displayMoney },
                 ]}
               />
             </div>
@@ -2337,7 +2345,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
   };
   return (
     <div className="demo-page c360-customer-page c360-executive-dashboard">
-      <div className="c360-dashboard-context"><Space><span className="is-live" /><Text strong>Kỳ {periodLabel(periodKey)}</Text><Text type="secondary">Dữ liệu trực tiếp từ database</Text>{loading ? <Tag color="processing">Đang tính KPI chính…</Tag> : detailLoading ? <Tag color="processing">Đang hoàn thiện các khối phân tích…</Tag> : <Tag color="success">Dữ liệu đã sẵn sàng</Tag>}</Space></div>
+      <div className="c360-dashboard-context"><Space><span className="is-live" /><Text strong>Kỳ {periodLabel(periodKey)}</Text>{loading ? <Tag color="processing">Đang tính KPI chính…</Tag> : detailLoading ? <Tag color="processing">Đang hoàn thiện các khối phân tích…</Tag> : <Tag color="success">Dữ liệu đã sẵn sàng</Tag>}</Space></div>
       <AppliedScopeBanner params={profileParams} total={kpis.total_customers} />
       <Row gutter={[16, 16]} className={loading ? 'c360-kpi-row is-loading' : 'c360-kpi-row'}>
         <Col xs={24} sm={12} xl={6}><RealMetric loading={loading} title="Tổng khách hàng" value={Number(kpis.total_customers || 0).toLocaleString('vi-VN')} current={compare.customers?.current ?? kpis.total_customers} previous={compare.customers?.previous} icon={<TeamOutlined />} tone="blue" note={`${Number(comparison?.new_customers || 0).toLocaleString('vi-VN')} khách hàng mới trong kỳ`} onClick={() => openKpiDrilldown('all')} explanation={{ formula: 'Đếm duy nhất mã KH lõi trong tập CIF đã xử lý', source: 'Kho CIF và kết quả xử lý C360', unit: 'Khách hàng' }} /></Col>
@@ -2966,40 +2974,34 @@ function BusinessTrendPeriods({ rows, render }) {
 }
 
 function DepositBusinessTrendChart({ trends = [] }) {
-  const rows = trends.slice(-4);
+  const rows = trends.slice(-6);
   if (!rows.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dữ liệu xu hướng tiền gửi" />;
-  const width = 900; const height = 330; const left = 62; const right = 62; const top = 34; const bottom = 48;
+  const width = 900; const height = 330; const left = 68; const right = 28; const top = 34; const bottom = 48;
   const chartWidth = width - left - right; const chartHeight = height - top - bottom;
-  const depositValues = rows.map((row) => Math.max(0, Number(row.deposit || 0)));
-  const casaValues = rows.map((row) => Math.max(0, Number(row.casa || 0)));
-  const totalValues = rows.map((_, index) => depositValues[index] + casaValues[index]);
-  const casaRatios = totalValues.map((total, index) => total ? casaValues[index] / total * 100 : 0);
-  const maximum = Math.max(1, ...totalValues) * 1.08;
-  const ratioMaximum = Math.max(10, Math.ceil(Math.max(...casaRatios, 0) / 10) * 10);
-  const groupWidth = chartWidth / rows.length;
-  const barWidth = Math.min(104, groupWidth * .48);
-  const xAt = (index) => left + (index + 0.5) * groupWidth;
+  const series = [
+    { key: 'total', label: 'Tổng tiền gửi', color: businessTrendPalette.total, values: rows.map((row) => Math.max(0, Number(row.deposit || 0) + Number(row.casa || 0))) },
+    { key: 'deposit', label: 'Tiền gửi có kỳ hạn', color: businessTrendPalette.deposit, values: rows.map((row) => Math.max(0, Number(row.deposit || 0))) },
+    { key: 'casa', label: 'TGTT bình quân', color: businessTrendPalette.casa, values: rows.map((row) => Math.max(0, Number(row.casa || 0))) },
+  ];
+  const maximum = Math.max(1, ...series[0].values) * 1.12;
+  const xAt = (index) => left + index * chartWidth / Math.max(1, rows.length - 1);
   const yAt = (value) => top + chartHeight - value / maximum * chartHeight;
-  const ratioY = (value) => top + chartHeight - value / ratioMaximum * chartHeight;
-  const ratioPoints = casaRatios.map((value, index) => `${xAt(index)},${ratioY(value)}`).join(' ');
+  const points = (values) => values.map((value, index) => `${xAt(index)},${yAt(value)}`).join(' ');
+  const totalArea = `${left},${top + chartHeight} ${points(series[0].values)} ${left + chartWidth},${top + chartHeight}`;
   return <div className="c360-business-trend-chart is-deposit">
-    <BusinessTrendLegend items={[{ label: 'Tiền gửi có kỳ hạn', color: businessTrendPalette.deposit }, { label: 'TGTT bình quân', color: businessTrendPalette.casa }, { label: 'Tỷ trọng TGTT', color: businessTrendPalette.total }]} />
-    <div className="c360-business-trend-stage"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Quy mô tiền gửi và tỷ trọng tiền gửi thanh toán qua bốn kỳ">
-      {[0, .25, .5, .75, 1].map((ratio) => <g key={ratio}><line x1={left} x2={width - right} y1={top + chartHeight * ratio} y2={top + chartHeight * ratio} className="grid" /><text x={left - 10} y={top + chartHeight * ratio + 4} textAnchor="end">{compactMoney(maximum * (1 - ratio))}</text><text x={width - right + 10} y={top + chartHeight * ratio + 4}>{(ratioMaximum * (1 - ratio)).toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%</text></g>)}
-      {rows.map((row, index) => {
-        const depositHeight = depositValues[index] / maximum * chartHeight;
-        const casaHeight = casaValues[index] / maximum * chartHeight;
-        return <g key={row.period_key}>
-          <rect x={xAt(index) - barWidth / 2} y={yAt(depositValues[index])} width={barWidth} height={depositHeight} fill={businessTrendPalette.deposit} rx="7"><title>{`${periodLabel(row.period_key)} · Tiền gửi CKH ${fullMoney(depositValues[index])}`}</title></rect>
-          <rect x={xAt(index) - barWidth / 2} y={yAt(totalValues[index])} width={barWidth} height={casaHeight} fill={businessTrendPalette.casa} rx="7"><title>{`${periodLabel(row.period_key)} · TGTT bình quân ${fullMoney(casaValues[index])}`}</title></rect>
-          <text x={xAt(index)} y={Math.max(18, yAt(totalValues[index]) - 9)} textAnchor="middle" className="value">{compactMoney(totalValues[index])}</text>
-          <text x={xAt(index)} y={height - 16} textAnchor="middle" className="period">{periodLabel(row.period_key)}</text>
-        </g>;
-      })}
-      <polyline points={ratioPoints} fill="none" stroke={businessTrendPalette.total} strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round" />
-      {rows.map((row, index) => <g key={`ratio-${row.period_key}`}><circle cx={xAt(index)} cy={ratioY(casaRatios[index])} r="5" fill="#fff" stroke={businessTrendPalette.total} strokeWidth="3"><title>{`${periodLabel(row.period_key)} · Tỷ trọng TGTT ${casaRatios[index].toLocaleString('vi-VN', { maximumFractionDigits: 2 })}%`}</title></circle><text x={xAt(index) + 9} y={ratioY(casaRatios[index]) - 8} className="ratio-value">{casaRatios[index].toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%</text></g>)}
+    <BusinessTrendLegend items={series.map(({ label, color }) => ({ label, color }))} />
+    <div className="c360-business-trend-stage"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Xu hướng tổng tiền gửi, tiền gửi có kỳ hạn và tiền gửi thanh toán bình quân qua các kỳ">
+      <defs><linearGradient id="depositTotalArea" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stopColor={businessTrendPalette.total} stopOpacity=".18" /><stop offset="1" stopColor={businessTrendPalette.total} stopOpacity=".02" /></linearGradient></defs>
+      {[0, .25, .5, .75, 1].map((ratio) => <g key={ratio}><line x1={left} x2={width - right} y1={top + chartHeight * ratio} y2={top + chartHeight * ratio} className="grid" /><text x={left - 10} y={top + chartHeight * ratio + 4} textAnchor="end">{compactMoney(maximum * (1 - ratio))}</text></g>)}
+      <polygon points={totalArea} fill="url(#depositTotalArea)" />
+      {series.map((item) => <polyline key={item.key} points={points(item.values)} fill="none" stroke={item.color} strokeWidth={item.key === 'total' ? 4 : 3} strokeLinecap="round" strokeLinejoin="round" />)}
+      {rows.map((row, index) => <g key={row.period_key}>
+        {series.map((item) => <circle key={item.key} cx={xAt(index)} cy={yAt(item.values[index])} r={item.key === 'total' ? 5.5 : 4} fill="#fff" stroke={item.color} strokeWidth="2.8"><title>{`${periodLabel(row.period_key)} · ${item.label}: ${fullMoney(item.values[index])}`}</title></circle>)}
+        <text x={xAt(index)} y={Math.max(17, yAt(series[0].values[index]) - 11)} textAnchor="middle" className="value">{compactMoney(series[0].values[index])}</text>
+        <text x={xAt(index)} y={height - 16} textAnchor="middle" className="period">{periodLabel(row.period_key)}</text>
+      </g>)}
     </svg></div>
-    <BusinessTrendPeriods rows={rows} render={(row) => { const total = Number(row.deposit || 0) + Number(row.casa || 0); return <><b>{compactMoney(total)}</b><span>CKH {compactMoney(row.deposit)} · TGTT {compactMoney(row.casa)} · {total ? (Number(row.casa || 0) / total * 100).toLocaleString('vi-VN', { maximumFractionDigits: 1 }) : 0}%</span></>; }} />
+    <BusinessTrendPeriods rows={rows} render={(row) => { const total = Number(row.deposit || 0) + Number(row.casa || 0); return <><b>{compactMoney(total)}</b><span>CKH {compactMoney(row.deposit)} · TGTT {compactMoney(row.casa)} · tỷ trọng TGTT {total ? (Number(row.casa || 0) / total * 100).toLocaleString('vi-VN', { maximumFractionDigits: 1 }) : 0}%</span></>; }} />
   </div>;
 }
 
@@ -3043,6 +3045,7 @@ function IncomeBusinessTrendChart({ trends = [] }) {
     { label: 'NHĐT', color: businessTrendPalette.digital, value: (row) => Number(row.fee_digital || 0) },
     { label: 'ABIC', color: businessTrendPalette.abic, value: (row) => Number(row.fee_abic || 0) },
     { label: 'KDNT, LC & TTQT', color: businessTrendPalette.other, value: (row) => Number(row.fee_fx || 0) + Number(row.fee_lc || 0) + Number(row.fee_international || 0) },
+    { label: 'Thẻ & phí khác', color: '#db5d83', value: (row) => Number(row.fee_card || 0) + Number(row.fee_other || 0) },
   ];
   const width = 900; const height = 320; const left = 58; const right = 22; const top = 24; const bottom = 48;
   const chartWidth = width - left - right; const chartHeight = height - top - bottom;
@@ -3061,27 +3064,27 @@ function IncomeBusinessTrendChart({ trends = [] }) {
 }
 
 function OfficerBusinessTrendChart({ trends = [] }) {
-  const rows = trends.slice(-4);
+  const rows = trends.slice(-6);
   if (!rows.length) return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="Chưa có dữ liệu xu hướng cán bộ" />;
   const width = 900; const height = 320; const left = 58; const right = 62; const top = 24; const bottom = 48;
   const chartWidth = width - left - right; const chartHeight = height - top - bottom;
-  const scaleValues = rows.map((row) => Math.max(0, Number(row.scale_per_officer || 0)));
-  const customerValues = rows.map((row) => Math.max(0, Number(row.customers_per_officer || 0)));
-  const scaleMaximum = Math.max(1, ...scaleValues) * 1.12; const customerMaximum = Math.max(1, ...customerValues) * 1.18;
+  const officerValues = rows.map((row) => Math.max(0, Number(row.officers || 0)));
+  const coverageValues = rows.map((row) => Number(row.customers || 0) ? Math.min(100, Number(row.managed_customers || 0) / Number(row.customers) * 100) : 0);
+  const officerMaximum = Math.max(1, ...officerValues) * 1.15;
   const groupWidth = chartWidth / rows.length; const barWidth = Math.min(92, groupWidth * .42);
   const xAt = (index) => left + (index + .5) * groupWidth;
-  const scaleY = (value) => top + chartHeight - value / scaleMaximum * chartHeight;
-  const customerY = (value) => top + chartHeight - value / customerMaximum * chartHeight;
-  const points = customerValues.map((value, index) => `${xAt(index)},${customerY(value)}`).join(' ');
+  const officerY = (value) => top + chartHeight - value / officerMaximum * chartHeight;
+  const coverageY = (value) => top + chartHeight - value / 100 * chartHeight;
+  const points = coverageValues.map((value, index) => `${xAt(index)},${coverageY(value)}`).join(' ');
   return <div className="c360-business-trend-chart is-officer">
-    <BusinessTrendLegend items={[{ label: 'Quy mô bình quân/cán bộ', color: businessTrendPalette.scale }, { label: 'Khách hàng bình quân/cán bộ', color: businessTrendPalette.customers }]} />
-    <div className="c360-business-trend-stage"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Năng suất danh mục cán bộ qua bốn kỳ">
-      {[0, .25, .5, .75, 1].map((ratio) => <g key={ratio}><line x1={left} x2={width - right} y1={top + chartHeight * ratio} y2={top + chartHeight * ratio} className="grid" /><text x={left - 10} y={top + chartHeight * ratio + 4} textAnchor="end">{compactMoney(scaleMaximum * (1 - ratio))}</text><text x={width - right + 10} y={top + chartHeight * ratio + 4}>{(customerMaximum * (1 - ratio)).toLocaleString('vi-VN', { maximumFractionDigits: 1 })}</text></g>)}
-      {rows.map((row, index) => <g key={row.period_key}><rect x={xAt(index) - barWidth / 2} y={scaleY(scaleValues[index])} width={barWidth} height={top + chartHeight - scaleY(scaleValues[index])} rx="7" fill={businessTrendPalette.scale} fillOpacity=".82"><title>{`${periodLabel(row.period_key)} · Quy mô/CB ${fullMoney(scaleValues[index])}`}</title></rect><text x={xAt(index)} y={height - 16} textAnchor="middle" className="period">{periodLabel(row.period_key)}</text></g>)}
+    <BusinessTrendLegend items={[{ label: 'Cán bộ có danh mục', color: businessTrendPalette.scale }, { label: 'Tỷ lệ KH đã có CBQL', color: businessTrendPalette.customers }]} />
+    <div className="c360-business-trend-stage"><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Mức độ bao phủ cán bộ quản lý qua các kỳ">
+      {[0, .25, .5, .75, 1].map((ratio) => <g key={ratio}><line x1={left} x2={width - right} y1={top + chartHeight * ratio} y2={top + chartHeight * ratio} className="grid" /><text x={left - 10} y={top + chartHeight * ratio + 4} textAnchor="end">{Math.round(officerMaximum * (1 - ratio))}</text><text x={width - right + 10} y={top + chartHeight * ratio + 4}>{Math.round(100 * (1 - ratio))}%</text></g>)}
+      {rows.map((row, index) => <g key={row.period_key}><rect x={xAt(index) - barWidth / 2} y={officerY(officerValues[index])} width={barWidth} height={top + chartHeight - officerY(officerValues[index])} rx="7" fill={businessTrendPalette.scale} fillOpacity=".82"><title>{`${periodLabel(row.period_key)} · ${officerValues[index].toLocaleString('vi-VN')} cán bộ có danh mục`}</title></rect><text x={xAt(index)} y={height - 16} textAnchor="middle" className="period">{periodLabel(row.period_key)}</text></g>)}
       <polyline points={points} fill="none" stroke={businessTrendPalette.customers} strokeWidth="4" strokeLinecap="round" strokeLinejoin="round" />
-      {rows.map((row, index) => <circle key={row.period_key} cx={xAt(index)} cy={customerY(customerValues[index])} r="5.5" fill="#fff" stroke={businessTrendPalette.customers} strokeWidth="3"><title>{`${periodLabel(row.period_key)} · ${customerValues[index].toLocaleString('vi-VN', { maximumFractionDigits: 1 })} KH/CB · ${Number(row.officers || 0).toLocaleString('vi-VN')} cán bộ`}</title></circle>)}
+      {rows.map((row, index) => <g key={row.period_key}><circle cx={xAt(index)} cy={coverageY(coverageValues[index])} r="5.5" fill="#fff" stroke={businessTrendPalette.customers} strokeWidth="3"><title>{`${periodLabel(row.period_key)} · ${coverageValues[index].toLocaleString('vi-VN', { maximumFractionDigits: 2 })}% KH đã có cán bộ quản lý`}</title></circle><text x={xAt(index) + 9} y={coverageY(coverageValues[index]) - 9} className="ratio-value">{coverageValues[index].toLocaleString('vi-VN', { maximumFractionDigits: 1 })}%</text></g>)}
     </svg></div>
-    <BusinessTrendPeriods rows={rows} render={(row) => <><b>{Number(row.officers || 0).toLocaleString('vi-VN')} cán bộ</b><span>{Number(row.managed_customers || 0).toLocaleString('vi-VN')} KH · {compactMoney(row.scale_per_officer)}/CB</span></>} />
+    <BusinessTrendPeriods rows={rows} render={(row) => <><b>{Number(row.officers || 0).toLocaleString('vi-VN')} cán bộ</b><span>{Number(row.managed_customers || 0).toLocaleString('vi-VN')}/{Number(row.customers || 0).toLocaleString('vi-VN')} KH đã gán · {Number(row.customers || 0) ? (Number(row.managed_customers || 0) / Number(row.customers) * 100).toLocaleString('vi-VN', { maximumFractionDigits: 1 }) : 0}%</span></>} />
   </div>;
 }
 
@@ -3157,6 +3160,9 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
   const [drilldown, setDrilldown] = useState({ open: false, metric: '', label: '', items: [], total: 0, page: 1 });
   const [drillLoading, setDrillLoading] = useState(false);
   const [drillKeyword, setDrillKeyword] = useState('');
+  const [feeTrace, setFeeTrace] = useState({ open: false, level: 'account', category: null, accountCode: null, customerCode: null, items: [], total: 0, page: 1, summary: {} });
+  const [feeTraceLoading, setFeeTraceLoading] = useState(false);
+  const [officerDrill, setOfficerDrill] = useState({ row: null, filters: { hasDeposit: false, hasLoan: false, hasFee: false, multiBranch: false } });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [comparisonPeriod, setComparisonPeriod] = useState(() => new URLSearchParams(window.location.search).get('compare') || '');
@@ -3213,6 +3219,7 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
   const credit = data?.credit || {};
   const risk = data?.risk || {};
   const income = data?.income || {};
+  const feeReconciliation = income.reconciliation || {};
   const customer = data?.customer || {};
   const officerRows = data?.officers || [];
   const officerCount = officerRows.length;
@@ -3253,8 +3260,8 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
     : mode === 'analysis-income'
       ? { title: 'Cơ cấu nguồn thu phí qua các kỳ', extra: 'Theo dõi phần đóng góp của từng nhóm nghiệp vụ', chart: <IncomeBusinessTrendChart trends={trends} /> }
       : mode === 'analysis-unit'
-        ? { title: 'Năng suất danh mục cán bộ qua các kỳ', extra: 'Cột: quy mô/CB · Đường: số khách hàng/CB', chart: <OfficerBusinessTrendChart trends={trends} /> }
-        : { title: 'Quy mô tiền gửi và chất lượng nguồn vốn qua các kỳ', extra: 'Cột xếp chồng: CKH + TGTT bình quân · Đường: tỷ trọng TGTT', chart: <DepositBusinessTrendChart trends={trends} /> };
+        ? { title: 'Mức độ bao phủ cán bộ quản lý qua các kỳ', extra: 'Cột: cán bộ có danh mục · Đường: tỷ lệ khách hàng đã có CBQL', chart: <OfficerBusinessTrendChart trends={trends} /> }
+        : { title: 'Xu hướng tiền gửi và cơ cấu theo kỳ', extra: 'Cùng một trục tiền tệ: tổng tiền gửi, tiền gửi CKH và TGTT bình quân', chart: <DepositBusinessTrendChart trends={trends} /> };
   const comparisonFields = mode === 'analysis-deposit'
     ? [['Tổng quan hệ tiền gửi', 'total_funding', 'money'], ['Tiền gửi CKH', 'deposit', 'money'], ['TGTT bình quân', 'casa', 'money'], ['Khách hàng trong phạm vi', 'customers', 'count']]
     : mode === 'analysis-credit'
@@ -3270,6 +3277,36 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
     } catch (requestError) { message.error(requestError.response?.data?.detail || requestError.message); }
     finally { setDrillLoading(false); }
   }, [drillKeyword, profileParams]);
+  const loadOfficerCustomers = useCallback(async (row, filters = officerDrill.filters, nextPage = 1, keyword = drillKeyword) => {
+    if (!row) return;
+    setDrillLoading(true);
+    setOfficerDrill({ row, filters });
+    try {
+      const officerCodes = [...new Set([row.code, row.employeeCode].filter(Boolean))];
+      const { data: response } = await client.get('/dashboard/business-drilldown', { params: {
+        ...profileParams,
+        metric: 'all',
+        detail_keyword: keyword || undefined,
+        detail_officer: officerCodes.join(','),
+        detail_has_deposit: filters.hasDeposit || undefined,
+        detail_has_loan: filters.hasLoan || undefined,
+        detail_has_fee: filters.hasFee || undefined,
+        detail_multi_branch: filters.multiBranch || undefined,
+        page: nextPage,
+        page_size: 20,
+      } });
+      setDrilldown({
+        open: true,
+        metric: 'officer_customers',
+        label: `Khách hàng do ${row.name || row.code} quản lý`,
+        items: response?.items || [],
+        total: Number(response?.total || 0),
+        totalValue: 0,
+        page: nextPage,
+      });
+    } catch (requestError) { message.error(requestError.response?.data?.detail || requestError.message || 'Không tải được danh mục khách hàng của cán bộ'); }
+    finally { setDrillLoading(false); }
+  }, [drillKeyword, officerDrill.filters, profileParams]);
   const loadReconciliations = useCallback(async (nextPage = 1, keyword = reconciliationKeyword, source = reconciliationSource) => {
     setReconciliationLoading(true);
     try {
@@ -3278,6 +3315,29 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
     } catch (requestError) { message.error(requestError.response?.data?.detail || requestError.message || 'Không tải được danh sách đối chiếu CIF'); }
     finally { setReconciliationLoading(false); }
   }, [branchCode, periodKey, reconciliationKeyword, reconciliationSource]);
+  const loadFeeTrace = useCallback(async ({ level = 'account', category = null, accountCode = null, customerCode = null, page = 1 } = {}) => {
+    setFeeTraceLoading(true);
+    setFeeTrace((current) => ({ ...current, open: true, level, category, accountCode, customerCode, page }));
+    try {
+      const { data: response } = await client.get('/dashboard/fee-drilldown', { params: {
+        ...profileParams,
+        level,
+        category: category || undefined,
+        account_code: accountCode || undefined,
+        customer_code: customerCode || undefined,
+        page,
+        page_size: 20,
+      } });
+      setFeeTrace({
+        open: true, level, category, accountCode, customerCode,
+        items: response?.items || [], total: Number(response?.total || 0), page,
+        summary: response?.summary || {}, categoryLabel: response?.category_label,
+        canViewTransactions: Boolean(response?.can_view_transactions),
+      });
+    } catch (requestError) {
+      message.error(requestError.response?.data?.detail || requestError.message || 'Không tải được truy vết phí KH02');
+    } finally { setFeeTraceLoading(false); }
+  }, [profileParams]);
   if (loading) return <DataLoadingState message="Đang tải phân tích nghiệp vụ…" detail="Đang tổng hợp dữ liệu theo kỳ và phạm vi tổ chức được phép truy cập." />;
   if (error) return <ErrorState error={error} onRetry={load} />;
   const exportMetric = async () => {
@@ -3322,6 +3382,8 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
   const drillIsDeposit = ['deposit', 'term_deposit', 'casa', 'payment_turnover'].includes(drilldown.metric);
   const drillIsAccountMovement = ['new_deposit_account', 'closed_deposit_account'].includes(drilldown.metric);
   const drillIsDepositDrop = drilldown.metric === 'deposit_drop';
+  const drillIsOfficer = drilldown.metric === 'officer_customers';
+  const officerQuickValues = Object.entries(officerDrill.filters || {}).filter(([, enabled]) => enabled).map(([key]) => key);
   const analysisCustomerColumn = {
     title: 'Khách hàng', fixed: 'left', width: 250,
     render: (_, row) => <div><Text strong>{row.ten_kh || 'Chưa có tên'}</Text><br /><Text copyable>{row.ma_kh}</Text></div>,
@@ -3391,7 +3453,16 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
     </Row>}
 
     {mode === 'analysis-income' && <Row gutter={[16, 16]} className="demo-section">
-      <Col span={24}><Card className="demo-panel" title="Cơ cấu thu phí" extra={<Text type="secondary">Tỷ trọng tính trên tổng các khoản thu phí dương</Text>}><div className="c360-analysis-bars is-fee-composition">{(income.fees || []).map((item, index) => <div key={item.key} className={Number(item.value || 0) === 0 ? 'is-zero' : Number(item.value || 0) < 0 ? 'is-negative' : ''}><span><Text>{item.label}</Text><MetricDefinitionTooltip definition={metricDefinition('fee')} periodKey={periodKey}><Text strong type={Number(item.value || 0) < 0 ? 'danger' : undefined}>{fullMoney(item.value)}</Text></MetricDefinitionTooltip></span><small>{Number(item.customers || 0).toLocaleString('vi-VN')} KH · bình quân {fullMoney(item.average)} · tỷ trọng {formatPercent(item.pct)}</small><Progress percent={Number(item.pct || 0)} format={formatPercent} status={Number(item.value || 0) < 0 ? 'exception' : 'normal'} strokeColor={['#16a34a', '#1677ff', '#7c3aed', '#f59e0b'][index % 4]} /></div>)}</div></Card></Col>
+      <Col span={24}><Card className="demo-panel c360-fee-reconciliation" title="Đối soát phân loại phí KH02" extra={<Tag color={feeReconciliation.is_balanced && feeReconciliation.profile_is_balanced ? 'success' : 'warning'}>{feeReconciliation.is_balanced && feeReconciliation.profile_is_balanced ? 'ĐÃ CÂN ĐỐI' : 'CẦN RÀ SOÁT'}</Tag>}>
+        <Alert showIcon type={feeReconciliation.is_balanced ? 'success' : 'error'} message="Phương trình kiểm soát" description={`Phí ứng viên KH02 = phí đã phân loại + phí chưa phân loại. Chênh lệch kiểm tra: ${fullMoney(feeReconciliation.balance_difference)}.`} />
+        <div className="c360-fee-reconciliation-grid">
+          <button type="button" onClick={() => loadFeeTrace({ level: 'account' })}><span>Tổng phí ứng viên KH02</span><strong>{fullMoney(feeReconciliation.source?.net)}</strong><small>Có {fullMoney(feeReconciliation.source?.credit)} · Nợ {fullMoney(feeReconciliation.source?.debit)}</small></button>
+          <button type="button" className="is-classified" onClick={() => loadFeeTrace({ level: 'account', category: 'classified' })}><span>Đã phân loại</span><strong>{fullMoney(feeReconciliation.classified?.net)}</strong><small>{Number(feeReconciliation.classified?.records || 0).toLocaleString('vi-VN')} dòng · phủ {formatPercent(feeReconciliation.record_coverage_pct)}</small></button>
+          <button type="button" className="is-unclassified" onClick={() => loadFeeTrace({ level: 'account', category: 'unclassified' })}><span>Chưa phân loại</span><strong>{fullMoney(feeReconciliation.unclassified?.net)}</strong><small>{Number(feeReconciliation.unclassified?.records || 0).toLocaleString('vi-VN')} dòng cần rà soát</small></button>
+          <button type="button" className={feeReconciliation.profile_is_balanced ? 'is-profile-ok' : 'is-profile-warning'} onClick={() => loadFeeTrace({ level: 'account' })}><span>Đồng bộ hồ sơ C360</span><strong>{fullMoney(feeReconciliation.profile_total)}</strong><small>Chênh nguồn đã phân loại {fullMoney(feeReconciliation.profile_difference)}</small></button>
+        </div>
+      </Card></Col>
+      <Col span={24}><Card className="demo-panel" title="Cơ cấu thu phí" extra={<Text type="secondary">Bấm từng nhóm để xem mã tài khoản cấu thành</Text>}><div className="c360-analysis-bars is-fee-composition">{(income.fees || []).map((item, index) => <div key={item.key} role="button" tabIndex={0} onClick={() => loadFeeTrace({ level: 'account', category: item.key })} onKeyDown={(event) => { if (event.key === 'Enter') loadFeeTrace({ level: 'account', category: item.key }); }} className={`is-clickable ${Number(item.value || 0) === 0 ? 'is-zero' : Number(item.value || 0) < 0 ? 'is-negative' : ''}`}><span><Text>{item.label}</Text><MetricDefinitionTooltip definition={metricDefinition('fee')} periodKey={periodKey}><Text strong type={Number(item.value || 0) < 0 ? 'danger' : undefined}>{fullMoney(item.value)}</Text></MetricDefinitionTooltip></span><small>{Number(item.customers || 0).toLocaleString('vi-VN')} KH · bình quân {fullMoney(item.average)} · tỷ trọng {formatPercent(item.pct)}</small><Progress percent={Number(item.pct || 0)} format={formatPercent} status={Number(item.value || 0) < 0 ? 'exception' : 'normal'} strokeColor={['#16a34a', '#1677ff', '#7c3aed', '#f59e0b'][index % 4]} /></div>)}</div></Card></Col>
       <Col span={24}><Card className="demo-panel" title="Độ phủ và khoảng trống sản phẩm" extra={<Select size="small" value={serviceView} onChange={setServiceView} style={{ width: 180 }} options={[{ value: 'all', label: 'Tất cả sản phẩm' }, { value: 'used', label: 'Có khách sử dụng' }, { value: 'gap', label: 'Còn khoảng trống' }]} />}><div className="c360-analysis-service-grid">{(data?.services || []).filter((item) => serviceView === 'all' || (serviceView === 'used' ? Number(item.count || 0) > 0 : Number(item.base || 0) > Number(item.count || 0))).map((item) => <MetricDefinitionTooltip key={item.key} definition={metricDefinition('service')} periodKey={periodKey}><div><span><Text strong>{item.label || serviceLabels[item.key] || item.key}</Text><Text type="secondary">{Number(item.count || 0).toLocaleString('vi-VN')} / {Number(item.base || 0).toLocaleString('vi-VN')} {item.base_label} · {formatPercent(item.pct)}</Text></span><Progress percent={Number(item.pct || 0)} format={formatPercent} strokeColor={Number(item.pct || 0) === maxService ? '#16a34a' : '#1677ff'} /><button type="button" className="c360-service-gap" onClick={() => loadDrilldown(`no_service:${item.key}`)}>Còn {Math.max(0, Number(item.base || 0) - Number(item.count || 0)).toLocaleString('vi-VN')} KH chưa dùng</button></div></MetricDefinitionTooltip>)}</div></Card></Col>
     </Row>}
 
@@ -3400,10 +3471,13 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
       <Row gutter={[16, 16]} className="demo-section c360-officer-visuals">
         <Col span={24}><Card className="demo-panel" title="Xếp hạng cán bộ" extra={<Space><Text type="secondary">Hiển thị Top 10 cùng giá trị thực tế</Text><Select size="small" value={officerMetric} onChange={setOfficerMetric} style={{ width: 190 }} options={officerMetricOptions.map(({ value, label }) => ({ value, label }))} /></Space>}><OfficerRankingChart rows={officerRows} metric={officerMetric} /></Card></Col>
       </Row>
-      <Card className="demo-panel demo-section c360-officer-table" title="Danh mục hiệu quả theo cán bộ" extra={<Space><Tag color="blue">{officerCount.toLocaleString('vi-VN')} cán bộ</Tag><Text type="secondary">Bấm tiêu đề cột để xếp hạng</Text></Space>}><Table size="small" sticky rowKey={(row) => `${row.code}-${row.employeeCode || ''}`} dataSource={officerRows} pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50], showTotal: (value) => `${value.toLocaleString('vi-VN')} cán bộ` }} scroll={{ x: 1580, y: 520 }} columns={[
+      <Card className="demo-panel demo-section c360-officer-table" title="Danh mục hiệu quả theo cán bộ" extra={<Space><Tag color="blue">{officerCount.toLocaleString('vi-VN')} cán bộ</Tag><Text type="secondary">Bấm một cán bộ để xem đúng danh mục khách hàng</Text></Space>}><Table size="small" sticky rowKey={(row) => `${row.code}-${row.employeeCode || ''}`} dataSource={officerRows} onRow={(row) => ({ onClick: () => { setDrillKeyword(''); loadOfficerCustomers(row, { hasDeposit: false, hasLoan: false, hasFee: false, multiBranch: false }, 1, ''); } })} rowClassName="demo-clickable-row" pagination={{ pageSize: 10, showSizeChanger: true, pageSizeOptions: [10, 20, 50], showTotal: (value) => `${value.toLocaleString('vi-VN')} cán bộ` }} scroll={{ x: 1900, y: 520 }} columns={[
         { title: 'Cán bộ quản lý', fixed: 'left', width: 250, render: (_, row) => <div className="c360-officer-cell"><Avatar>{row.name?.charAt(0) || 'C'}</Avatar><span><Text strong>{row.name || row.code}</Text><Text type="secondary">{row.employeeCode || row.code}</Text></span></div> },
         { title: 'Khách hàng', dataIndex: 'custCount', align: 'right', width: 115, sorter: (a, b) => Number(a.custCount || 0) - Number(b.custCount || 0), render: (value) => Number(value || 0).toLocaleString('vi-VN') },
-        { title: 'Tải quản lý', align: 'center', width: 125, sorter: (a, b) => Number(a.custCount || 0) - Number(b.custCount || 0), render: (_, row) => { const average = managedCustomers / Math.max(1, officerCount); const count = Number(row.custCount || 0); const tone = count > average * 1.5 ? 'error' : count > average ? 'warning' : count >= average * .5 ? 'success' : 'processing'; const label = count > average * 1.5 ? 'Rất cao' : count > average ? 'Cao' : count >= average * .5 ? 'Cân bằng' : 'Thấp'; return <Tag color={tone}>{label}</Tag>; } },
+        { title: 'KH mới nhận', dataIndex: 'newCustomers', align: 'right', width: 120, sorter: (a, b) => Number(a.newCustomers || 0) - Number(b.newCustomers || 0), render: (value, row) => row.previousPeriod ? <Tag color={Number(value || 0) ? 'success' : 'default'}>+{Number(value || 0).toLocaleString('vi-VN')}</Tag> : '—' },
+        { title: 'KH chuyển đi', dataIndex: 'transferredCustomers', align: 'right', width: 125, sorter: (a, b) => Number(a.transferredCustomers || 0) - Number(b.transferredCustomers || 0), render: (value, row) => row.previousPeriod ? <Tag color={Number(value || 0) ? 'warning' : 'default'}>-{Number(value || 0).toLocaleString('vi-VN')}</Tag> : '—' },
+        { title: 'Biến động tiền gửi', dataIndex: 'depositChange', align: 'right', width: 175, sorter: (a, b) => Number(a.depositChange || 0) - Number(b.depositChange || 0), render: (value, row) => row.previousPeriod ? <Text className={Number(value || 0) >= 0 ? 'c360-value-up' : 'c360-value-down'}>{Number(value || 0) >= 0 ? '+' : ''}{compactMoney(value)}</Text> : '—' },
+        { title: 'Biến động dư nợ', dataIndex: 'loanChange', align: 'right', width: 170, sorter: (a, b) => Number(a.loanChange || 0) - Number(b.loanChange || 0), render: (value, row) => row.previousPeriod ? <Text className={Number(value || 0) >= 0 ? 'c360-value-up' : 'c360-value-down'}>{Number(value || 0) >= 0 ? '+' : ''}{compactMoney(value)}</Text> : '—' },
         { title: 'Tổng quy mô', align: 'right', width: 175, sorter: (a, b) => (Number(a.totalDeposit || 0) + Number(a.totalCASA || 0) + Number(a.totalLoan || 0)) - (Number(b.totalDeposit || 0) + Number(b.totalCASA || 0) + Number(b.totalLoan || 0)), render: (_, row) => { const value = Number(row.totalDeposit || 0) + Number(row.totalCASA || 0) + Number(row.totalLoan || 0); return <Tooltip title={fullMoney(value)}><Text strong>{compactMoney(value)}</Text></Tooltip>; } },
         { title: 'Tiền gửi CKH', dataIndex: 'totalDeposit', align: 'right', width: 160, sorter: (a, b) => Number(a.totalDeposit || 0) - Number(b.totalDeposit || 0), render: (value) => <Tooltip title={fullMoney(value)}>{compactMoney(value)}</Tooltip> },
         { title: 'TGTT bình quân', dataIndex: 'totalCASA', align: 'right', width: 160, sorter: (a, b) => Number(a.totalCASA || 0) - Number(b.totalCASA || 0), render: (value) => <Tooltip title={fullMoney(value)}>{compactMoney(value)}</Tooltip> },
@@ -3423,6 +3497,60 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
         { title: 'Phí/cán bộ', align: 'right', width: 145, render: (_, row) => Number(row.officers || 0) ? compactMoney(Number(row.fee || 0) / Number(row.officers)) : '—' },
       ]} /></Card>
     </>}
+    <Drawer className="c360-fee-trace-drawer" width="min(1320px, 98vw)" open={feeTrace.open} onClose={() => setFeeTrace((current) => ({ ...current, open: false }))} title={<div className="c360-kpi-drill-title"><span>Truy vết phí KH02 · {feeTrace.categoryLabel || 'Tất cả nhóm phí'}</span><small>{feeTrace.level === 'account' ? 'Nhóm phí → mã tài khoản' : feeTrace.level === 'customer' ? `Mã ${feeTrace.accountCode} → khách hàng` : `Khách hàng ${feeTrace.customerCode} → bút toán gốc`} · Kỳ ${periodLabel(periodKey)}</small></div>} extra={feeTrace.level !== 'account' ? <Button onClick={() => feeTrace.level === 'transaction' ? loadFeeTrace({ level: 'customer', category: feeTrace.category, accountCode: feeTrace.accountCode }) : loadFeeTrace({ level: 'account', category: feeTrace.category })}>Quay lại</Button> : null}>
+      <AppliedScopeBanner params={profileParams} />
+      <div className="c360-fee-trace-summary">
+        <span><Text type="secondary">Phát sinh Có</Text><strong>{fullMoney(feeTrace.summary?.credit)}</strong></span>
+        <span><Text type="secondary">Phát sinh Nợ</Text><strong>{fullMoney(feeTrace.summary?.debit)}</strong></span>
+        <span><Text type="secondary">Phí thuần</Text><strong>{fullMoney(feeTrace.summary?.net)}</strong></span>
+        <span><Text type="secondary">Quy mô truy vết</Text><strong>{Number(feeTrace.summary?.records || 0).toLocaleString('vi-VN')} dòng · {Number(feeTrace.summary?.customers || 0).toLocaleString('vi-VN')} KH</strong></span>
+      </div>
+      {feeTrace.level === 'customer' && !feeTrace.canViewTransactions ? <Alert className="c360-fee-trace-note" showIcon type="info" message="Bấm khách hàng để mở hồ sơ C360" description="Bút toán KH02 gốc chỉ hiển thị cho quản trị viên có quyền truy vết dữ liệu." /> : null}
+      <Table
+        loading={feeTraceLoading}
+        size="small"
+        sticky
+        rowKey={(row) => feeTrace.level === 'account' ? `${row.category}-${row.account_code}` : feeTrace.level === 'customer' ? `${row.branch_code}-${row.customer_code}` : row.id}
+        dataSource={feeTrace.items || []}
+        rowClassName={feeTrace.level === 'transaction' ? '' : 'demo-clickable-row'}
+        onRow={(row) => ({ onClick: () => {
+          if (feeTrace.level === 'account') loadFeeTrace({ level: 'customer', category: row.category, accountCode: row.account_code });
+          else if (feeTrace.level === 'customer' && feeTrace.canViewTransactions) loadFeeTrace({ level: 'transaction', category: feeTrace.category, accountCode: feeTrace.accountCode, customerCode: row.customer_code });
+          else if (feeTrace.level === 'customer') onOpenCustomer?.({ id: row.customer_code, ma_kh: row.customer_code, ten_kh: row.customer_name, primary_branch_code: row.branch_code });
+        } })}
+        scroll={{ x: feeTrace.level === 'transaction' ? 1500 : 980, y: 'calc(100vh - 350px)' }}
+        pagination={{ current: feeTrace.page, pageSize: 20, total: feeTrace.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} ${feeTrace.level === 'account' ? 'mã tài khoản' : feeTrace.level === 'customer' ? 'quan hệ khách hàng' : 'bút toán'}`, onChange: (page) => loadFeeTrace({ level: feeTrace.level, category: feeTrace.category, accountCode: feeTrace.accountCode, customerCode: feeTrace.customerCode, page }) }}
+        columns={feeTrace.level === 'account' ? [
+          { title: 'Mã tài khoản', dataIndex: 'account_code', fixed: 'left', width: 135, render: (value) => <Text code strong>{value}</Text> },
+          { title: 'Nhóm phí', dataIndex: 'category_label', width: 220, render: (value, row) => <Tag color={row.category === 'unclassified' ? 'warning' : 'blue'}>{value}</Tag> },
+          { title: 'Số KH', dataIndex: 'customers', align: 'right', width: 100, render: (value) => Number(value || 0).toLocaleString('vi-VN') },
+          { title: 'Số dòng', dataIndex: 'records', align: 'right', width: 100, render: (value) => Number(value || 0).toLocaleString('vi-VN') },
+          { title: 'Số CN', dataIndex: 'branches', align: 'right', width: 90 },
+          { title: 'Phát sinh Có', dataIndex: 'credit', align: 'right', width: 170, render: fullMoney },
+          { title: 'Phát sinh Nợ', dataIndex: 'debit', align: 'right', width: 170, render: fullMoney },
+          { title: 'Phí thuần', dataIndex: 'net', align: 'right', width: 180, render: (value) => <Text strong type={Number(value || 0) < 0 ? 'danger' : undefined}>{fullMoney(value)}</Text> },
+        ] : feeTrace.level === 'customer' ? [
+          { title: 'Chi nhánh', dataIndex: 'branch_code', fixed: 'left', width: 105, render: (value) => <Tag color="blue">{value || '—'}</Tag> },
+          { title: 'Khách hàng', fixed: 'left', width: 290, render: (_, row) => <div><Text strong>{row.customer_name || 'Chưa có tên'}</Text><br /><Text copyable>{row.customer_code}</Text></div> },
+          { title: 'Số dòng', dataIndex: 'records', align: 'right', width: 100, render: (value) => Number(value || 0).toLocaleString('vi-VN') },
+          { title: 'Phát sinh Có', dataIndex: 'credit', align: 'right', width: 180, render: fullMoney },
+          { title: 'Phát sinh Nợ', dataIndex: 'debit', align: 'right', width: 180, render: fullMoney },
+          { title: 'Phí thuần', dataIndex: 'net', align: 'right', width: 190, render: (value) => <Text strong type={Number(value || 0) < 0 ? 'danger' : undefined}>{fullMoney(value)}</Text> },
+        ] : [
+          { title: 'Ngày GD', dataIndex: 'transaction_date', fixed: 'left', width: 115, render: dateLabel },
+          { title: 'Chi nhánh', dataIndex: 'branch_code', width: 95 },
+          { title: 'Khách hàng', width: 240, render: (_, row) => <div><Text>{row.customer_name || '—'}</Text><br /><Text copyable>{row.customer_code}</Text></div> },
+          { title: 'ACCTCD', dataIndex: 'account_code', width: 115, render: (value) => <Text code>{value}</Text> },
+          { title: 'Mã nghiệp vụ', dataIndex: 'business_code', width: 120 },
+          { title: 'Mã giao dịch', dataIndex: 'transaction_code', width: 120 },
+          { title: 'Tham chiếu', dataIndex: 'transaction_sequence', width: 200, render: (value) => value ? <Text copyable>{value}</Text> : '—' },
+          { title: 'Phát sinh Có', dataIndex: 'credit', align: 'right', width: 160, render: fullMoney },
+          { title: 'Phát sinh Nợ', dataIndex: 'debit', align: 'right', width: 160, render: fullMoney },
+          { title: 'Phí thuần', dataIndex: 'net', align: 'right', width: 165, render: fullMoney },
+          { title: 'File nguồn', dataIndex: 'source_file', width: 250 },
+        ]}
+      />
+    </Drawer>
     <Drawer width="min(1380px, 98vw)" open={reconciliation.open} onClose={() => setReconciliation((current) => ({ ...current, open: false }))} title={`Khách hàng chưa đối chiếu Kho CIF · Kỳ ${periodLabel(periodKey)}`}>
       <AppliedScopeBanner params={profileParams} total={reconciliation.total} />
       <Alert showIcon type="info" message="Nguyên tắc hiển thị" description="Chỉ lấy kết quả của job xử lý gần nhất để không đếm lặp lịch sử. Một mã có thể xuất hiện ở nhiều nguồn hoặc chi nhánh; từng dòng ghi rõ nơi phát hiện và nguyên nhân chưa ghép được với CIF." />
@@ -3435,10 +3563,11 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
         { title: 'Trạng thái', dataIndex: 'status', width: 125, render: (value) => <Tag color={value === 'resolved' ? 'success' : value === 'reviewed' ? 'processing' : 'warning'}>{reconciliationStatusLabels[value] || value}</Tag> }, { title: 'Thời điểm ghi nhận', dataIndex: 'created_at', width: 180, render: (value) => value ? new Date(value).toLocaleString('vi-VN') : '—' },
       ]} />
     </Drawer>
-    <Drawer className="c360-kpi-drill-drawer" width="min(1240px, 98vw)" open={drilldown.open} onClose={() => setDrilldown((current) => ({ ...current, open: false }))} title={<div className="c360-kpi-drill-title"><span>{drilldown.label || 'Chi tiết khách hàng'}</span><small>Danh sách đúng nội dung biến động · Kỳ {periodLabel(periodKey)}</small></div>} extra={canExport ? <Button icon={<DownloadOutlined />} onClick={exportMetric}>Xuất Excel</Button> : null}>
+    <Drawer className="c360-kpi-drill-drawer" width="min(1240px, 98vw)" open={drilldown.open} onClose={() => setDrilldown((current) => ({ ...current, open: false }))} title={<div className="c360-kpi-drill-title"><span>{drilldown.label || 'Chi tiết khách hàng'}</span><small>{drillIsOfficer ? 'Danh mục theo cán bộ và phạm vi đang áp dụng' : 'Danh sách đúng nội dung biến động'} · Kỳ {periodLabel(periodKey)}</small></div>} extra={canExport && !drillIsOfficer ? <Button icon={<DownloadOutlined />} onClick={exportMetric}>Xuất Excel</Button> : null}>
       <AppliedScopeBanner params={profileParams} total={drilldown.total} />
-      <div className="c360-drill-toolbar"><Input.Search allowClear value={drillKeyword} onChange={(event) => setDrillKeyword(event.target.value)} onSearch={(value) => loadDrilldown(drilldown.metric, 1, value)} placeholder="Tìm mã hoặc tên khách hàng" /><Space direction="vertical" size={0} align="end"><Text type="secondary">{drilldown.total.toLocaleString('vi-VN')} khách hàng phù hợp</Text>{Number(drilldown.totalValue || 0) !== 0 && <Text strong>{drillIsAccountMovement ? `${Number(drilldown.totalValue || 0).toLocaleString('vi-VN')} tài khoản biến động` : drillIsService ? `${Number(drilldown.totalValue || 0).toLocaleString('vi-VN')} lượt sản phẩm đang sử dụng` : `Tổng giá trị: ${fullMoney(drilldown.totalValue)}`}</Text>}</Space></div>
-      <Table loading={drillLoading} size="small" sticky rowKey="ma_kh" dataSource={drilldown.items} onRow={(row) => ({ onClick: () => onOpenCustomer?.({ ...row, id: row.ma_kh, ma_kh: row.ma_kh, ten_kh: row.ten_kh }) })} rowClassName="demo-clickable-row" scroll={{ x: 1120, y: 'calc(100vh - 300px)' }} pagination={{ current: drilldown.page, pageSize: 20, total: drilldown.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: (nextPage) => loadDrilldown(drilldown.metric, nextPage) }} columns={analysisDrillColumns} />
+      {drillIsOfficer ? <div className="c360-officer-quick-filters"><span><FilterOutlined /><strong>Lọc nhanh danh mục</strong></span><Checkbox.Group value={officerQuickValues} options={[{ label: 'Có tiền gửi', value: 'hasDeposit' }, { label: 'Có tiền vay', value: 'hasLoan' }, { label: 'Có phí', value: 'hasFee' }, { label: 'Quan hệ nhiều chi nhánh', value: 'multiBranch' }]} onChange={(values) => { const filters = { hasDeposit: values.includes('hasDeposit'), hasLoan: values.includes('hasLoan'), hasFee: values.includes('hasFee'), multiBranch: values.includes('multiBranch') }; loadOfficerCustomers(officerDrill.row, filters, 1, drillKeyword); }} /></div> : null}
+      <div className="c360-drill-toolbar"><Input.Search allowClear value={drillKeyword} onChange={(event) => setDrillKeyword(event.target.value)} onSearch={(value) => drillIsOfficer ? loadOfficerCustomers(officerDrill.row, officerDrill.filters, 1, value) : loadDrilldown(drilldown.metric, 1, value)} placeholder="Tìm mã hoặc tên khách hàng" /><Space direction="vertical" size={0} align="end"><Text type="secondary">{drilldown.total.toLocaleString('vi-VN')} khách hàng phù hợp</Text>{Number(drilldown.totalValue || 0) !== 0 && <Text strong>{drillIsAccountMovement ? `${Number(drilldown.totalValue || 0).toLocaleString('vi-VN')} tài khoản biến động` : drillIsService ? `${Number(drilldown.totalValue || 0).toLocaleString('vi-VN')} lượt sản phẩm đang sử dụng` : `Tổng giá trị: ${fullMoney(drilldown.totalValue)}`}</Text>}</Space></div>
+      <Table loading={drillLoading} size="small" sticky rowKey="ma_kh" dataSource={drilldown.items} onRow={(row) => ({ onClick: () => onOpenCustomer?.({ ...row, id: row.ma_kh, ma_kh: row.ma_kh, ten_kh: row.ten_kh }) })} rowClassName="demo-clickable-row" scroll={{ x: 1120, y: 'calc(100vh - 340px)' }} pagination={{ current: drilldown.page, pageSize: 20, total: drilldown.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: (nextPage) => drillIsOfficer ? loadOfficerCustomers(officerDrill.row, officerDrill.filters, nextPage, drillKeyword) : loadDrilldown(drilldown.metric, nextPage) }} columns={analysisDrillColumns} />
     </Drawer>
   </div>;
 }
