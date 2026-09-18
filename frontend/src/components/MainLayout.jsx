@@ -22,7 +22,9 @@ import client from '../api/client';
 import { PAGE_NAVIGATION } from '../constants/navigation';
 import GlobalAnalysisFilter from './GlobalAnalysisFilter';
 import PersonalProfileDrawer from './PersonalProfileDrawer';
+import WorkspaceHub from './WorkspaceHub';
 import { useAnalysisScope } from '../c360/AnalysisScopeContext';
+import { useUserWorkspace } from '../workspace/UserWorkspaceContext';
 
 const { Header, Sider, Content } = Layout;
 
@@ -107,6 +109,7 @@ export const PAGE_PERMISSIONS = {
 
 function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout, onUserUpdated }) {
   const analysisScope = useAnalysisScope();
+  const workspace = useUserWorkspace();
   const [collapsed, setCollapsed] = useState(false);
   const [sourceIssueCount, setSourceIssueCount] = useState(0);
   const [profileOpen, setProfileOpen] = useState(false);
@@ -121,6 +124,11 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout,
   });
   const siderWidth = collapsed ? 76 : 260;
   const parentMenu = pageMeta.parent;
+  const pageScrollKey = (key) => `c360_page_scroll_${currentUser?.id || currentUser?.username}_${key}`;
+  const navigateWithHistory = (key) => {
+    localStorage.setItem(pageScrollKey(activeMenu), String(window.scrollY || 0));
+    onMenuChange(key);
+  };
   const menuItems = useMemo(() => {
     const granted = new Set(currentUser?.permissions || []);
     const canSee = (item) => granted.has('admin') || (PAGE_PERMISSIONS[item.key] || []).some((code) => granted.has(code));
@@ -149,6 +157,24 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout,
       return next;
     });
   }, [parentMenu]);
+
+  useEffect(() => {
+    workspace?.recordRecent({ type: 'page', key: activeMenu, title: pageMeta.title, subtitle: pageMeta.parentLabel });
+    const top = Number(localStorage.getItem(pageScrollKey(activeMenu)) || 0);
+    window.requestAnimationFrame(() => window.scrollTo({ top, behavior: 'auto' }));
+  }, [activeMenu]);
+
+  useEffect(() => {
+    const scope = analysisScope?.applied;
+    if (!scope?.periodKey) return;
+    workspace?.recordRecent({
+      type: 'filter',
+      key: `c360-dashboard?period=${scope.periodKey}&branch=${scope.branchCode || ''}&pgd=${scope.pgdCode || ''}`,
+      title: `Phạm vi kỳ ${scope.periodKey}`,
+      subtitle: [scope.branchCode ? `CN ${scope.branchCode}` : 'Toàn hệ thống', scope.pgdCode ? `Phòng ${scope.pgdCode}` : null].filter(Boolean).join(' · '),
+      raw: { scope },
+    });
+  }, [analysisScope?.applied]);
 
   useEffect(() => {
     let active = true;
@@ -210,7 +236,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout,
           }}
           onClick={({ key }) => {
             if (['overview', 'customers', 'analytics', 'data', 'admin'].includes(key)) return;
-            onMenuChange(key);
+            navigateWithHistory(key);
           }}
         />
         {!collapsed ? (
@@ -236,6 +262,13 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout,
             </Typography.Title>
           </Space>
           <Space className="app-user" size={12}>
+            <WorkspaceHub
+              onNavigate={navigateWithHistory}
+              onRestoreScope={analysisScope?.restore}
+              periodKey={analysisScope?.applied?.periodKey}
+              fallbackPeriodKey={analysisScope?.periods?.[0]?.period_key}
+              fallbackBranchCode={analysisScope?.fixedBranchCode}
+            />
             <button type="button" className="app-user-profile-trigger" onClick={() => setProfileOpen(true)} title="Mở thông tin cá nhân">
               <Avatar className="app-user-avatar">{currentUser?.full_name?.charAt(0) || 'C'}</Avatar>
               <span className="app-user-identity">

@@ -10,6 +10,7 @@ const client = axios.create({
 const responseCache = new Map();
 const inflightGets = new Map();
 let heavyAnalysisTail = Promise.resolve();
+let lastSessionEndedNotificationAt = 0;
 // Một phiên lọc C360 dùng lại kết quả khi chuyển tab; bộ lọc mới/Làm mới sẽ xóa cache.
 const DEFAULT_CACHE_TTL = 5 * 60_000;
 const CACHEABLE_GET_PATHS = [
@@ -65,7 +66,10 @@ export function clearApiCache() {
 function clearExpiredSession() {
   localStorage.removeItem('access_token');
   localStorage.removeItem('c360_user');
+  localStorage.removeItem('c360_session_policy');
+  localStorage.removeItem('c360_last_activity_at');
   sessionStorage.removeItem('c360_analysis_session');
+  clearApiCache();
 }
 
 function emitLoading(delta) {
@@ -120,10 +124,20 @@ client.interceptors.response.use(
     if (error.config?.__tracksGlobalLoading) emitLoading(-1);
     const requestUrl = String(error.config?.url || '');
     if (error.response?.status === 401 && !requestUrl.startsWith('/auth/login')) {
+      const detail = error.response?.data?.detail;
+      const sessionMessage = typeof detail === 'object' ? detail?.message : detail;
+      const sessionCode = typeof detail === 'object' ? detail?.code : 'SESSION_ENDED';
       clearExpiredSession();
-      notifyUnauthorized();
-      if (typeof window !== 'undefined' && window.location.pathname !== '/') window.location.assign('/');
-      else if (typeof window !== 'undefined') window.location.reload();
+      notifyUnauthorized({ code: sessionCode, message: sessionMessage });
+      if (typeof window !== 'undefined' && Date.now() - lastSessionEndedNotificationAt > 1500) {
+        lastSessionEndedNotificationAt = Date.now();
+        window.dispatchEvent(new CustomEvent('c360:session-ended', {
+          detail: {
+            code: sessionCode,
+            message: sessionMessage || 'Phiên đăng nhập không còn hiệu lực, vui lòng đăng nhập lại',
+          },
+        }));
+      }
     }
     const detail = error.response?.data?.detail;
     if (error.response?.status === 403 && detail?.code === 'PASSWORD_CHANGE_REQUIRED' && typeof window !== 'undefined') {

@@ -1,20 +1,33 @@
+from app.auth.permissions import expand_denied_permissions
 from app.auth.schemas import CurrentUser
 from app.models import SystemUser
 
 
-def effective_permission_codes(user: SystemUser) -> list[str]:
-    permission_codes: set[str] = set()
-    if user.role:
-        permission_codes.update(
-            item.permission.permission_code
-            for item in user.role.permissions
-            if item.permission
-        )
-    permission_codes.update(
+def permission_code_sets(user: SystemUser) -> tuple[set[str], set[str], set[str], set[str]]:
+    """Return role, direct allow, explicit deny and effective deny permissions."""
+
+    role_codes = {
+        item.permission.permission_code
+        for item in (user.role.permissions if user.role else [])
+        if item.permission
+    }
+    direct_allow_codes = {
         item.permission.permission_code
         for item in user.permission_grants
-        if item.permission
-    )
+        if item.permission and str(getattr(item, "effect", "allow") or "allow").lower() != "deny"
+    }
+    explicit_deny_codes = {
+        item.permission.permission_code
+        for item in user.permission_grants
+        if item.permission and str(getattr(item, "effect", "allow") or "allow").lower() == "deny"
+    }
+    effective_deny_codes = expand_denied_permissions(explicit_deny_codes)
+    return role_codes, direct_allow_codes, explicit_deny_codes, effective_deny_codes
+
+
+def effective_permission_codes(user: SystemUser) -> list[str]:
+    role_codes, direct_allow_codes, _, denied_codes = permission_code_sets(user)
+    permission_codes = (role_codes | direct_allow_codes) - denied_codes
     if user.is_superuser:
         permission_codes.add("admin")
     return sorted(permission_codes)

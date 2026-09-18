@@ -3,7 +3,7 @@ from decimal import Decimal
 from io import BytesIO
 from time import monotonic
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -16,6 +16,7 @@ from app.auth.branch_scope import BranchScope
 from app.auth.dependencies import get_branch_scope, get_current_user, require_any_permission
 from app.auth.schemas import CurrentUser
 from app.database import get_db
+from app.security_audit import record_security_event
 from app.fee_rules import FEE_CANDIDATE_PREFIXES, FEE_CATEGORY_LABELS, FEE_CATEGORY_PREFIXES, FEE_FIELDS
 from app.analysis_cache import get_shared_analysis_cache, set_shared_analysis_cache
 from app.models import (
@@ -2321,6 +2322,7 @@ def dashboard_fee_drilldown(
 
 @router.get("/business-export", dependencies=[Depends(require_any_permission("dashboard:export", "analytics:export"))])
 def dashboard_business_export(
+    request: Request,
     period_key: str = Query(...),
     metric: str = Query(default="deposit"),
     detail_keyword: str | None = Query(default=None),
@@ -2332,6 +2334,7 @@ def dashboard_business_export(
     filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
     filters = _scope_filters(scope, filters)
     payload = dashboard_business_drilldown(
@@ -2400,11 +2403,28 @@ def dashboard_business_export(
     workbook.save(output)
     output.seek(0)
     filename = f"phan_tich_{metric}_{period_key}.xlsx"
+    record_security_event(
+        request,
+        user,
+        "business_export",
+        "business_export",
+        filename,
+        "Xuất báo cáo phân tích nghiệp vụ",
+        {
+            "period_key": period_key,
+            "metric": metric,
+            "branch_code": scope.ma_cn,
+            "department_code": scope.ma_pgd,
+            "row_count": len(export_rows),
+            "result_total": payload.get("total", 0),
+        },
+    )
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 
 @router.get("/table-export", dependencies=[Depends(require_any_permission("dashboard:export"))])
 def dashboard_table_export(
+    request: Request,
     period_key: str = Query(...),
     dataset: str = Query(pattern="^(branches|anomalies|top_changes)$"),
     anomaly_keyword: str | None = Query(default=None),
@@ -2412,6 +2432,7 @@ def dashboard_table_export(
     filters: dict = Depends(_advanced_filters),
     scope: BranchScope = Depends(get_branch_scope),
     db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
     """Xuất các bảng điều hành theo đúng phạm vi và bộ lọc chung."""
     filters = _scope_filters(scope, filters)
@@ -2473,6 +2494,21 @@ def dashboard_table_export(
         sheet.column_dimensions[get_column_letter(column_index)].width = min(max(len(str(cell.value or "")) for cell in column) + 2, 42)
     output = BytesIO(); workbook.save(output); output.seek(0)
     filename = f"c360_{dataset}_{period_key}.xlsx"
+    record_security_event(
+        request,
+        user,
+        "dashboard_export",
+        "dashboard_export",
+        filename,
+        "Xuất bảng dữ liệu điều hành",
+        {
+            "period_key": period_key,
+            "dataset": dataset,
+            "branch_code": scope.ma_cn,
+            "department_code": scope.ma_pgd,
+            "row_count": len(rows),
+        },
+    )
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
 
 

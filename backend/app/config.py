@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     ANALYSIS_CACHE_MAX_BYTES: int = 20_000_000
     AUTH_SECRET: str
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 240
+    SESSION_IDLE_MINUTES: int = 30
+    TRUSTED_PROXY_HOSTNAME: str = ""
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
@@ -44,6 +46,13 @@ class Settings(BaseSettings):
     def validate_access_token_expiry(cls, value: int) -> int:
         if not 15 <= int(value) <= 1440:
             raise ValueError("ACCESS_TOKEN_EXPIRE_MINUTES phải nằm trong khoảng 15–1440 phút")
+        return int(value)
+
+    @field_validator("SESSION_IDLE_MINUTES")
+    @classmethod
+    def validate_session_idle_minutes(cls, value: int) -> int:
+        if not 5 <= int(value) <= 240:
+            raise ValueError("SESSION_IDLE_MINUTES phải nằm trong khoảng 5–240 phút")
         return int(value)
 
     @property

@@ -2,6 +2,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     ForeignKey,
@@ -1526,6 +1527,7 @@ class SystemUserPermission(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("system_users.id", ondelete="CASCADE"), index=True, nullable=False)
     permission_id: Mapped[int] = mapped_column(ForeignKey("system_permissions.id", ondelete="CASCADE"), index=True, nullable=False)
+    effect: Mapped[str] = mapped_column(String(10), default="allow", server_default="allow", nullable=False)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user = relationship("SystemUser", back_populates="permission_grants")
@@ -1533,6 +1535,7 @@ class SystemUserPermission(Base):
 
     __table_args__ = (
         UniqueConstraint("user_id", "permission_id", name="uq_system_user_permissions"),
+        CheckConstraint("effect IN ('allow', 'deny')", name="ck_system_user_permissions_effect"),
     )
 
 
@@ -1568,6 +1571,53 @@ class SystemUser(Base):
     department = relationship("OrgDepartment", back_populates="users", foreign_keys=[department_id])
     role = relationship("SystemRole", back_populates="users")
     permission_grants = relationship("SystemUserPermission", back_populates="user", cascade="all, delete-orphan")
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("system_users.id", ondelete="CASCADE"), index=True, nullable=False)
+    device_id: Mapped[str | None] = mapped_column(String(128), index=True)
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    user_agent: Mapped[str | None] = mapped_column(String(500))
+    logged_in_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    last_activity_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True, nullable=False)
+    revoked_at: Mapped[object | None] = mapped_column(DateTime(timezone=True), index=True)
+    revoke_reason: Mapped[str | None] = mapped_column(String(80))
+    revoked_by: Mapped[str | None] = mapped_column(String(80))
+
+    user = relationship("SystemUser")
+
+    __table_args__ = (
+        Index("ix_user_sessions_user_active", "user_id", "revoked_at"),
+    )
+
+
+class UserPinnedCustomer(Base):
+    """A private customer watch list owned by one system user."""
+
+    __tablename__ = "user_pinned_customers"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(
+        ForeignKey("system_users.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    customer_code: Mapped[str] = mapped_column(String(32), index=True, nullable=False)
+    customer_name: Mapped[str | None] = mapped_column(String(255))
+    branch_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    note: Mapped[str | None] = mapped_column(String(500))
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    updated_at: Mapped[object] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    user = relationship("SystemUser")
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "customer_code", name="uq_user_pinned_customer"),
+        Index("ix_user_pinned_customers_user_created", "user_id", "created_at"),
+    )
 
 
 class AuditLog(Base):

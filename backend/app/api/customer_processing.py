@@ -4,13 +4,13 @@ from io import BytesIO
 from pathlib import Path
 from time import monotonic
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook
 from sqlalchemy import DateTime as SQLDateTime, Float, Integer, Numeric, and_, asc, case, desc, distinct, func, or_, text
 from sqlalchemy.orm import Session, aliased
 
-from app.auth.dependencies import get_current_user, require_any_permission
+from app.auth.dependencies import get_current_user, require_all_permissions, require_any_permission
 from app.auth.schemas import CurrentUser
 
 from app.customer_processing import (
@@ -53,9 +53,22 @@ from app.models import (
     SystemUser,
     SystemConfigurationEntry,
 )
+from app.security_audit import record_security_event
 
 
 router = APIRouter(prefix="/api/customer-processing", tags=["customer-processing"])
+
+
+def _has_permission(user: CurrentUser, permission_code: str) -> bool:
+    granted = set(user.permissions or [])
+    return "admin" in granted or permission_code in granted
+
+
+def _mask_identifier(value, visible: int = 4):
+    text_value = str(value or "").strip()
+    if not text_value:
+        return None
+    return f"{'*' * max(4, len(text_value) - visible)}{text_value[-visible:]}"
 PF10_LOAN_TYPE_GROUPS = {
     "short_term": {"100"},
     "medium_long_term": {"110", "120"},
@@ -1724,6 +1737,7 @@ RECONCILIATION_REASON_LABELS = {
 
 @router.get("/reconciliations-export", dependencies=[Depends(require_any_permission("reconciliation:view", "report:export"))])
 def export_source_reconciliations(
+    request: Request,
     period_key: str = Query(...),
     source_type: str | None = None,
     branch_code: str | None = None,
@@ -1731,6 +1745,7 @@ def export_source_reconciliations(
     keyword: str | None = None,
     latest_job_only: bool = True,
     db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
     query = db.query(CustomerSourceReconciliation).filter(
         CustomerSourceReconciliation.period_key == period_key
@@ -1785,6 +1800,23 @@ def export_source_reconciliations(
     workbook.save(output)
     output.seek(0)
     filename = f"doi_chieu_cif_{period_key}.xlsx"
+    record_security_event(
+        request,
+        user,
+        "reconciliation_export",
+        "reconciliation_export",
+        filename,
+        "Xuất danh sách nguồn chưa đối chiếu được với CIF",
+        {
+            "period_key": period_key,
+            "source_type": source_type,
+            "branch_code": branch_code,
+            "reason_code": reason_code,
+            "keyword": keyword,
+            "latest_job_only": latest_job_only,
+            "row_count": len(rows),
+        },
+    )
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -1882,6 +1914,7 @@ def _enforce_customer_data_scope(
 
 @router.get("/profiles", dependencies=[Depends(require_any_permission("customer:view"))])
 def list_profiles(
+    request: Request,
     period_key: str = Query(...),
     keyword: str | None = None,
     branch_code: str | None = None,
@@ -2052,19 +2085,42 @@ def list_profiles(
     )
     items = _enrich_latest_relationship(db, period_key, items, branch_code)
     items = enrich_profile_org_names(db, items, include_units=include_units)
-    if "admin" not in set(user.permissions or []) and "customer:view_sensitive" not in set(user.permissions or []):
-        def mask_value(value, visible=4):
-            text_value = str(value or "").strip()
-            if not text_value:
-                return None
-            return f"{'*' * max(4, len(text_value) - visible)}{text_value[-visible:]}"
-
-        for item in items:
-            item["so_cccd"] = mask_value(item.get("so_cccd"))
-            item["telephone"] = mask_value(item.get("telephone"), visible=3)
-            item["ma_so_thue"] = mask_value(item.get("ma_so_thue"))
+    can_view_identity = _has_permission(user, "customer:sensitive:identity")
+    can_view_contact = _has_permission(user, "customer:sensitive:contact")
+    can_view_accounts = _has_permission(user, "customer:sensitive:account")
+    for item in items:
+        if not can_view_identity:
+            item["so_cccd"] = _mask_identifier(item.get("so_cccd"))
+            item["ma_so_thue"] = _mask_identifier(item.get("ma_so_thue"))
+        if not can_view_contact:
+            item["telephone"] = _mask_identifier(item.get("telephone"), visible=3)
             if item.get("dia_chi"):
                 item["dia_chi"] = "Thông tin được bảo vệ theo quyền dữ liệu nhạy cảm"
+        if not can_view_accounts and item.get("hkd_account_numbers"):
+            item["hkd_account_numbers"] = ", ".join(
+                _mask_identifier(account)
+                for account in str(item["hkd_account_numbers"]).split(",")
+                if str(account).strip()
+            )
+    if keyword:
+        record_security_event(
+            request,
+            user,
+            "customer_search",
+            "customer",
+            description="Tìm kiếm danh sách khách hàng C360",
+            metadata={
+                "period_key": period_key,
+                "keyword": keyword,
+                "branch_code": branch_code,
+                "department_code": pgd_code,
+                "result_count": len(items),
+                "include_units": bool(include_units),
+                "sensitive_identity_visible": can_view_identity,
+                "sensitive_contact_visible": can_view_contact,
+                "sensitive_accounts_visible": can_view_accounts,
+            },
+        )
     if include_total:
         return {"items": items, "total": total, "page": page, "page_size": effective_page_size}
     return items
@@ -2112,6 +2168,7 @@ def get_customer_financial_metrics(
 
 @router.get("/rr01-handled-risk", dependencies=[Depends(require_any_permission("customer:credit:view"))])
 def get_rr01_handled_risk(
+    request: Request,
     period_key: str = Query(...), ma_kh: str = Query(...), branch_code: str | None = None,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -2139,12 +2196,28 @@ def get_rr01_handled_risk(
         item["lds_count"] += 1
         item["current_principal"] += row.current_principal or 0
         item["recovered_amount"] += (row.recovered_principal_period or 0) + (row.recovered_interest_period or 0)
+    loan_details_masked = not _has_permission(user, "customer:sensitive:loan")
+    payload_items = [serialize_model(row, fields) for row in rows]
+    payload_groups = [{**value, "current_principal": serialize_value(value["current_principal"]), "recovered_amount": serialize_value(value["recovered_amount"])} for value in groups.values()]
+    if loan_details_masked:
+        for item in payload_items:
+            item["lav_number"] = _mask_identifier(item.get("lav_number"))
+            item["lds_number"] = _mask_identifier(item.get("lds_number"))
+        for item in payload_groups:
+            item["lav_number"] = _mask_identifier(item.get("lav_number"))
+    else:
+        record_security_event(
+            request, user, "sensitive_loan_view", "customer", ma_kh,
+            "Xem chi tiết LAV/LDS nợ xử lý rủi ro",
+            {"period_key": period_key, "branch_code": branch_code, "record_count": len(payload_items)},
+        )
     return {
         "period_key": period_key, "ma_kh": ma_kh,
         "total_current_principal": serialize_value(sum((row.current_principal or 0 for row in rows), Decimal(0))),
         "total_recovered_amount": serialize_value(sum(((row.recovered_principal_period or 0) + (row.recovered_interest_period or 0) for row in rows), Decimal(0))),
-        "lav_groups": [{**value, "current_principal": serialize_value(value["current_principal"]), "recovered_amount": serialize_value(value["recovered_amount"])} for value in groups.values()],
-        "items": [serialize_model(row, fields) for row in rows],
+        "lav_groups": payload_groups,
+        "items": payload_items,
+        "loan_details_masked": loan_details_masked,
     }
 
 
@@ -2220,6 +2293,7 @@ def classify_gl02_transaction(remark: str | None, debit_amount=0, credit_amount=
 
 @router.get("/gl02-account-activity", dependencies=[Depends(require_any_permission("customer:deposit:view"))])
 def get_gl02_account_activity(
+    request: Request,
     period_key: str = Query(...), ma_kh: str = Query(...), branch_code: str | None = None,
     user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
@@ -2361,11 +2435,34 @@ def get_gl02_account_activity(
             "credit_amount": serialize_value(latest_row.credit_amount),
             **transaction_meaning,
         }
+    unclassified_count = sum(item["transaction_count"] for item in unknown_remarks)
+    transaction_details_masked = not _has_permission(user, "customer:sensitive:transaction")
+    if transaction_details_masked:
+        if latest_transaction:
+            latest_transaction.update({
+                "reference": None,
+                "remark": None,
+                "transaction_code": None,
+                "description": "Nội dung giao dịch được bảo vệ theo quyền dữ liệu nhạy cảm",
+                "description_translated": False,
+            })
+        unknown_remarks = []
+    else:
+        record_security_event(
+            request,
+            user,
+            "sensitive_transaction_view",
+            "customer",
+            ma_kh,
+            "Xem nội dung giao dịch GL02 của khách hàng",
+            {"period_key": period_key, "branch_code": branch_code},
+        )
     return {
         "period_key": period_key, "ma_kh": ma_kh, "daily": daily,
         "branches": branches, "history": history, "latest_transaction": latest_transaction,
         "categories": categories, "unknown_remarks": unknown_remarks[:100],
-        "unclassified_count": sum(item["transaction_count"] for item in unknown_remarks),
+        "unclassified_count": unclassified_count,
+        "transaction_details_masked": transaction_details_masked,
     }
 
 
@@ -2423,6 +2520,7 @@ def get_dp01_pf14_reconciliation(
 
 @router.get("/pf10-loans", dependencies=[Depends(require_any_permission("customer:credit:view"))])
 def get_pf10_customer_loans(
+    request: Request,
     period_key: str = Query(...),
     ma_kh: str = Query(...),
     category: str | None = None,
@@ -2694,6 +2792,23 @@ def get_pf10_customer_loans(
         "debt_group_changed": bool(previous_groups and current_groups and previous_groups != current_groups),
     }
 
+    loan_details_masked = not _has_permission(user, "customer:sensitive:loan")
+    if loan_details_masked:
+        for item in items:
+            item["account_number"] = _mask_identifier(item.get("account_number"))
+            item["lds_number"] = _mask_identifier(item.get("lds_number"))
+            item["approval_number"] = _mask_identifier(item.get("approval_number"))
+    else:
+        record_security_event(
+            request,
+            user,
+            "sensitive_loan_view",
+            "customer",
+            ma_kh,
+            "Xem đầy đủ LDS và chi tiết khoản vay",
+            {"period_key": period_key, "branch_code": branch_code, "record_count": len(items)},
+        )
+
     return {
         "period_key": period_key,
         "ma_kh": ma_kh,
@@ -2706,11 +2821,13 @@ def get_pf10_customer_loans(
         "page_size": page_size,
         "risk": risk,
         "obligations": obligations,
+        "loan_details_masked": loan_details_masked,
     }
 
 
 @router.get("/deposit-accounts", dependencies=[Depends(require_any_permission("customer:deposit:view"))])
 def get_customer_deposit_accounts(
+    request: Request,
     period_key: str = Query(...),
     ma_kh: str = Query(...),
     category: str | None = None,
@@ -3104,6 +3221,20 @@ def get_customer_deposit_accounts(
     analytics["closed"] = sum(1 for item in dp_items if item["account_status"] == "closed")
     start = (page - 1) * page_size
     items = items[start:start + page_size]
+    account_numbers_masked = not _has_permission(user, "customer:sensitive:account")
+    if account_numbers_masked:
+        for item in [*items, *primary_accounts]:
+            item["account_number"] = _mask_identifier(item.get("account_number"))
+    else:
+        record_security_event(
+            request,
+            user,
+            "sensitive_account_view",
+            "customer",
+            ma_kh,
+            "Xem đầy đủ số tài khoản/sổ tiết kiệm của khách hàng",
+            {"period_key": period_key, "branch_code": branch_code, "account_count": total},
+        )
 
     return {
         "period_key": period_key,
@@ -3118,11 +3249,13 @@ def get_customer_deposit_accounts(
         "previous_period": previous_period,
         "analytics": analytics,
         "primary_accounts": primary_accounts,
+        "account_numbers_masked": account_numbers_masked,
     }
 
 
-@router.get("/deposit-account-history", dependencies=[Depends(require_any_permission("customer:deposit:view"))])
+@router.get("/deposit-account-history", dependencies=[Depends(require_all_permissions("customer:deposit:view", "customer:sensitive:account"))])
 def get_customer_deposit_account_history(
+    request: Request,
     period_key: str = Query(...),
     ma_kh: str = Query(...),
     account_number: str = Query(..., min_length=1, max_length=50),
@@ -3136,6 +3269,15 @@ def get_customer_deposit_account_history(
     mức khách hàng + chi nhánh, tuyệt đối không khẳng định thuộc riêng tài khoản.
     """
     branch_code = _enforce_customer_data_scope(db, user, ma_kh, period_key, branch_code)
+    record_security_event(
+        request,
+        user,
+        "sensitive_account_history_view",
+        "customer_account",
+        account_number,
+        "Xem vòng đời tài khoản tiền gửi",
+        {"period_key": period_key, "customer_code": ma_kh, "branch_code": branch_code},
+    )
     account_number = account_number.strip()
     if not account_number:
         raise HTTPException(status_code=400, detail="Số tài khoản không hợp lệ")
@@ -3280,6 +3422,21 @@ def get_customer_deposit_account_history(
                 latest_gl02.credit_amount,
             ),
         }
+    transaction_details_masked = not _has_permission(user, "customer:sensitive:transaction")
+    if gl02_payload and transaction_details_masked:
+        gl02_payload.update({
+            "reference": None,
+            "remark": None,
+            "transaction_code": None,
+            "description": "Nội dung giao dịch được bảo vệ theo quyền dữ liệu nhạy cảm",
+            "description_translated": False,
+        })
+    elif gl02_payload:
+        record_security_event(
+            request, user, "sensitive_transaction_view", "customer", ma_kh,
+            "Xem nội dung giao dịch GL02 từ vòng đời tài khoản",
+            {"period_key": period_key, "branch_code": branch_code, "account_number": account_number},
+        )
 
     latest = history[-1]
     return {
@@ -3296,6 +3453,7 @@ def get_customer_deposit_account_history(
         "latest_status": latest["status"],
         "history": history,
         "latest_gl02": gl02_payload,
+        "transaction_details_masked": transaction_details_masked,
     }
 
 
@@ -3368,6 +3526,7 @@ PROFILE_EXPORT_COLUMNS = [
 
 @router.get("/profiles/export", dependencies=[Depends(require_any_permission("customer:export"))])
 def export_profiles(
+    request: Request,
     period_key: str = Query(...),
     keyword: str | None = None,
     branch_code: str | None = None,
@@ -3457,6 +3616,14 @@ def export_profiles(
     sheet.append([label for _, label in PROFILE_EXPORT_COLUMNS])
 
     field_names = [field for field, _ in PROFILE_EXPORT_COLUMNS]
+    can_view_contact = _has_permission(user, "customer:sensitive:contact")
+
+    def export_value(payload: dict, field: str):
+        value = payload.get(field)
+        if field == "telephone" and not can_view_contact:
+            return _mask_identifier(value, visible=3)
+        return value
+
     relationship_fields = {"latest_relationship_date", "latest_relationship_type", "latest_relationship_source"}
     model_field_names = [field for field in field_names if field not in relationship_fields]
     batch: list = []
@@ -3472,7 +3639,7 @@ def export_profiles(
             )
             payloads = _enrich_latest_relationship(db, period_key, payloads, branch_code)
             for payload in payloads:
-                sheet.append([payload.get(field) for field in field_names])
+                sheet.append([export_value(payload, field) for field in field_names])
             batch = []
     if batch:
         payloads = _apply_branch_finance_to_payloads(
@@ -3484,11 +3651,28 @@ def export_profiles(
         )
         payloads = _enrich_latest_relationship(db, period_key, payloads, branch_code)
         for payload in payloads:
-            sheet.append([payload.get(field) for field in field_names])
+            sheet.append([export_value(payload, field) for field in field_names])
 
     buffer = BytesIO()
     workbook.save(buffer)
     buffer.seek(0)
+    record_security_event(
+        request,
+        user,
+        "customer_export",
+        "customer_export",
+        period_key,
+        "Xuất danh sách khách hàng C360 ra Excel",
+        {
+            "period_key": period_key,
+            "branch_code": branch_code,
+            "department_code": pgd_code,
+            "officer_code": officer_code,
+            "keyword": keyword,
+            "row_count": total,
+            "phone_unmasked": can_view_contact,
+        },
+    )
     filename = f"bao_cao_kh_{period_key}.xlsx"
     return StreamingResponse(
         buffer,
@@ -3828,6 +4012,7 @@ def get_profile_history(
 
 @router.get("/relationship-map", dependencies=[Depends(require_any_permission("customer:profile:view"))])
 def get_customer_relationship_map(
+    request: Request,
     period_key: str = Query(...), ma_kh: str = Query(...),
     user: CurrentUser = Depends(get_current_user), db: Session = Depends(get_db),
 ):
@@ -3939,11 +4124,39 @@ def get_customer_relationship_map(
             "accounts": [{**item, "balance": serialize_value(item["balance"])} for item in sorted(accounts, key=lambda value: abs(value["balance"]), reverse=True)[:8]],
             "loans": [{**item, "balance": serialize_value(item["balance"])} for item in sorted(loans, key=lambda value: abs(value["balance"]), reverse=True)[:8]],
         })
+    can_view_accounts = _has_permission(user, "customer:sensitive:account")
+    can_view_loans = _has_permission(user, "customer:sensitive:loan")
+    if not can_view_accounts:
+        for branch in branches:
+            for item in branch["accounts"]:
+                item["account_number"] = _mask_identifier(item.get("account_number"))
+    if not can_view_loans:
+        for branch in branches:
+            for item in branch["loans"]:
+                item["lds_number"] = _mask_identifier(item.get("lds_number"))
+    record_security_event(
+        request,
+        user,
+        "customer_profile_view",
+        "customer",
+        ma_kh,
+        "Mở hồ sơ chi tiết khách hàng C360",
+        {
+            "period_key": period_key,
+            "visible_branches": [item["branch_code"] for item in branches],
+            "identity_visible": _has_permission(user, "customer:sensitive:identity"),
+            "contact_visible": _has_permission(user, "customer:sensitive:contact"),
+            "accounts_visible": can_view_accounts,
+            "loans_visible": can_view_loans,
+        },
+    )
     return {
         "period_key": period_key, "ma_kh": ma_kh, "customer_name": profile.ten_kh,
         "primary_branch_code": profile.primary_branch_code,
         "primary_location_reason": profile.primary_location_reason,
         "branches": branches,
+        "account_numbers_masked": not can_view_accounts,
+        "loan_details_masked": not can_view_loans,
     }
 
 

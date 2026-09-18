@@ -1,5 +1,7 @@
 from datetime import datetime, time, timedelta
+from typing import Literal
 from urllib.parse import unquote
+from uuid import uuid4
 from tempfile import NamedTemporaryFile
 from pathlib import Path
 
@@ -12,7 +14,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.auth.dependencies import get_current_user, require_any_permission
 from app.auth.schemas import CurrentUser
-from app.auth.user_mapper import effective_permission_codes
+from app.auth.permissions import PERMISSION_PREREQUISITES, expand_denied_permissions
+from app.auth.user_mapper import effective_permission_codes, permission_code_sets
 from app.models import (
     AuditLog,
     CustomerPeriodBranchDetail,
@@ -25,9 +28,11 @@ from app.models import (
     SystemRolePermission,
     SystemUser,
     SystemUserPermission,
+    UserSession,
 )
 from app.security import hash_password
 from app.seed_data import norm_code, norm_text, read_excel_rows
+from app.session_management import ensure_aware, reason_message, revoke_session, revoke_user_sessions, session_is_idle, utc_now
 
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -68,6 +73,7 @@ class UserPayload(BaseModel):
     is_active: bool = True
     is_superuser: bool = False
     extra_permission_codes: list[str] = Field(default_factory=list)
+    denied_permission_codes: list[str] = Field(default_factory=list)
 
 
 class ResetPasswordPayload(BaseModel):
@@ -94,35 +100,23 @@ class AccessCheckPayload(BaseModel):
     customer_code: str | None = None
 
 
-PERMISSION_PREREQUISITES = {
-    "dashboard:drilldown": "dashboard:view",
-    "dashboard:export": "dashboard:view",
-    "customer:profile:view": "customer:view",
-    "customer:deposit:view": "customer:profile:view",
-    "customer:credit:view": "customer:profile:view",
-    "customer:income:view": "customer:profile:view",
-    "customer:export": "customer:view",
-    "analytics:export": "analytics:view",
-    "warehouse:import": "warehouse:view",
-    "warehouse:replace": "warehouse:view",
-    "warehouse:delete": "warehouse:view",
-    "warehouse:summarize": "warehouse:view",
-    "cif:import": "cif:view",
-    "cif:review": "cif:view",
-    "cif:override": "cif:view",
-    "processing:run": "processing:view",
-    "processing:recover": "processing:view",
-    "reconciliation:review": "reconciliation:view",
-    "mapping:write": "mapping:view",
-    "report:summarize": "report:view",
-    "report:export": "report:view",
-    "admin:branch:write": "admin:branch:view",
-    "admin:department:write": "admin:department:view",
-    "admin:user:write": "admin:user:view",
-    "admin:role:write": "admin:role:view",
-    "admin:config:write": "admin:config:view",
-    "admin:access_test": "admin:user:view",
-}
+class BulkUserActionPayload(BaseModel):
+    user_ids: list[int] = Field(min_length=1, max_length=500)
+    action: Literal[
+        "grant_permissions",
+        "deny_permissions",
+        "remove_overrides",
+        "assign_role",
+        "set_scope",
+        "lock_accounts",
+        "unlock_accounts",
+        "force_logout",
+    ]
+    permission_codes: list[str] = Field(default_factory=list)
+    role_id: int | None = None
+    data_scope: str | None = None
+    clear_overrides: bool = True
+
 
 VALID_DATA_SCOPES = {"province", "branch", "department", "own"}
 ROLE_SCOPE_DEFAULTS = {
@@ -188,6 +182,12 @@ HIGH_RISK_PERMISSIONS = {
     "admin:user:write",
     "admin:role:write",
     "admin:config:write",
+    "customer:sensitive:identity",
+    "customer:sensitive:contact",
+    "customer:sensitive:account",
+    "customer:sensitive:transaction",
+    "customer:sensitive:loan",
+    "customer:sensitive:copy",
 }
 
 
@@ -493,9 +493,23 @@ def serialize_user(user: SystemUser) -> dict:
     role_permission_codes = {item.permission_code for item in role_permissions}
     extra_permissions = [
         item.permission for item in user.permission_grants
-        if item.permission and item.permission.permission_code not in role_permission_codes
+        if item.permission
+        and str(item.effect or "allow").lower() != "deny"
+        and item.permission.permission_code not in role_permission_codes
     ]
-    effective_permissions = {item.permission_code: item for item in [*role_permissions, *extra_permissions]}
+    denied_permissions = [
+        item.permission for item in user.permission_grants
+        if item.permission and str(item.effect or "allow").lower() == "deny"
+    ]
+    effective_codes = set(effective_permission_codes(user))
+    permission_catalog = {item.permission_code: item for item in [*role_permissions, *extra_permissions]}
+    effective_permissions = {
+        code: permission_catalog[code]
+        for code in effective_codes
+        if code in permission_catalog
+    }
+    locked_until = ensure_aware(user.locked_until)
+    temporarily_locked = bool(locked_until and locked_until > utc_now())
     return {
         "id": user.id,
         "username": user.username,
@@ -522,10 +536,15 @@ def serialize_user(user: SystemUser) -> dict:
         "must_change_password": bool(user.must_change_password),
         "password_changed_at": user.password_changed_at.isoformat() if user.password_changed_at else None,
         "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+        "failed_login_attempts": int(user.failed_login_attempts or 0),
+        "is_temporarily_locked": temporarily_locked,
         "role_permission_codes": sorted(role_permission_codes),
         "extra_permission_codes": sorted(item.permission_code for item in extra_permissions),
         "extra_permissions": [serialize_permission(item) for item in sorted(extra_permissions, key=lambda value: value.permission_code)],
-        "effective_permission_codes": sorted(effective_permissions),
+        "denied_permission_codes": sorted(item.permission_code for item in denied_permissions),
+        "effective_denied_permission_codes": sorted(expand_denied_permissions(item.permission_code for item in denied_permissions)),
+        "denied_permissions": [serialize_permission(item) for item in sorted(denied_permissions, key=lambda value: value.permission_code)],
+        "effective_permission_codes": sorted(effective_codes),
         "effective_permissions": [serialize_permission(item) for item in sorted(effective_permissions.values(), key=lambda value: value.permission_code)],
     }
 
@@ -566,8 +585,17 @@ def serialize_permission(item: SystemPermission) -> dict:
     }
 
 
-def sync_user_extra_permissions(db: Session, user: SystemUser, permission_codes: list[str]) -> None:
+def sync_user_permission_overrides(
+    db: Session,
+    user: SystemUser,
+    permission_codes: list[str],
+    denied_permission_codes: list[str],
+) -> None:
     requested_codes = {clean_code(code).lower() for code in permission_codes if clean_code(code)}
+    denied_codes = {clean_code(code).lower() for code in denied_permission_codes if clean_code(code)}
+    overlap = requested_codes & denied_codes
+    if overlap:
+        raise HTTPException(status_code=400, detail=f"Một quyền không thể vừa cho phép vừa từ chối: {', '.join(sorted(overlap))}")
     role_codes = {
         row[0] for row in db.query(SystemPermission.permission_code)
         .join(SystemRolePermission, SystemRolePermission.permission_id == SystemPermission.id)
@@ -575,15 +603,213 @@ def sync_user_extra_permissions(db: Session, user: SystemUser, permission_codes:
         .all()
     } if user.role_id else set()
     extra_codes = requested_codes - role_codes - {"admin"}
-    permissions = db.query(SystemPermission).filter(SystemPermission.permission_code.in_(extra_codes)).all() if extra_codes else []
-    found_codes = {item.permission_code for item in permissions}
-    unknown_codes = extra_codes - found_codes
+    irrelevant_denies = denied_codes - (role_codes | extra_codes)
+    if irrelevant_denies:
+        raise HTTPException(status_code=400, detail=f"Chỉ có thể từ chối quyền đang được cấp: {', '.join(sorted(irrelevant_denies))}")
+    all_override_codes = extra_codes | denied_codes
+    permissions = db.query(SystemPermission).filter(SystemPermission.permission_code.in_(all_override_codes)).all() if all_override_codes else []
+    permission_map = {item.permission_code: item for item in permissions}
+    found_codes = set(permission_map)
+    unknown_codes = all_override_codes - found_codes
     if unknown_codes:
         raise HTTPException(status_code=400, detail=f"Quyền không tồn tại: {', '.join(sorted(unknown_codes))}")
-    validate_permission_dependencies(role_codes | found_codes)
+    validate_permission_dependencies(role_codes | extra_codes)
     db.query(SystemUserPermission).filter(SystemUserPermission.user_id == user.id).delete(synchronize_session=False)
-    for permission in permissions:
-        db.add(SystemUserPermission(user_id=user.id, permission_id=permission.id))
+    for code in sorted(extra_codes):
+        db.add(SystemUserPermission(user_id=user.id, permission_id=permission_map[code].id, effect="allow"))
+    for code in sorted(denied_codes):
+        db.add(SystemUserPermission(user_id=user.id, permission_id=permission_map[code].id, effect="deny"))
+
+
+def permission_codes_with_prerequisites(permission_codes: set[str]) -> set[str]:
+    expanded = set(permission_codes)
+    pending = list(permission_codes)
+    while pending:
+        code = pending.pop()
+        prerequisite = PERMISSION_PREREQUISITES.get(code)
+        if prerequisite and prerequisite not in expanded:
+            expanded.add(prerequisite)
+            pending.append(prerequisite)
+    return expanded
+
+
+def validate_bulk_scope(user: SystemUser, role: SystemRole | None, data_scope: str | None) -> str | None:
+    scope = str(data_scope or "").strip().lower()
+    if scope not in VALID_DATA_SCOPES:
+        return "Phạm vi dữ liệu không hợp lệ"
+    if not role:
+        return "Người dùng chưa có nhóm quyền"
+    _, allowed_scopes, _ = role_scope_values(role)
+    if scope not in allowed_scopes:
+        labels = ", ".join(SCOPE_LABELS.get(item, item) for item in allowed_scopes)
+        return f"Nhóm {role.role_name} chỉ cho phép phạm vi: {labels}"
+    if scope != "province" and not user.branch:
+        return "Phạm vi đã chọn yêu cầu người dùng có chi nhánh"
+    if scope in {"department", "own"}:
+        if not user.department:
+            return "Phạm vi đã chọn yêu cầu người dùng có phòng ban/PGD"
+        if user.department.branch_id != user.branch_id:
+            return "Phòng ban/PGD không thuộc chi nhánh của người dùng"
+    if scope == "own" and not str(user.employee_code or "").strip():
+        return "Phạm vi khách hàng được phân công yêu cầu mã nhân viên"
+    return None
+
+
+def bulk_action_preview(
+    db: Session,
+    payload: BulkUserActionPayload,
+    current_user: CurrentUser,
+) -> dict:
+    requested_ids = list(dict.fromkeys(payload.user_ids))
+    users = db.query(SystemUser).filter(SystemUser.id.in_(requested_ids)).all()
+    users_by_id = {item.id: item for item in users}
+    missing_ids = [item for item in requested_ids if item not in users_by_id]
+    requested_codes = {
+        str(code or "").strip().lower()
+        for code in payload.permission_codes
+        if str(code or "").strip()
+    }
+    permission_rows = (
+        db.query(SystemPermission)
+        .filter(SystemPermission.permission_code.in_(requested_codes))
+        .all()
+        if requested_codes else []
+    )
+    known_codes = {item.permission_code for item in permission_rows}
+    unknown_codes = sorted(requested_codes - known_codes)
+    target_role = db.query(SystemRole).filter(SystemRole.id == payload.role_id).first() if payload.role_id else None
+    rows = []
+    action_requires_permissions = payload.action in {"grant_permissions", "deny_permissions"}
+    global_errors = []
+    if missing_ids:
+        global_errors.append(f"Không tìm thấy người dùng ID: {', '.join(map(str, missing_ids))}")
+    if action_requires_permissions and not requested_codes:
+        global_errors.append("Chưa chọn quyền cần áp dụng")
+    if unknown_codes:
+        global_errors.append(f"Quyền không tồn tại: {', '.join(unknown_codes)}")
+    if "admin" in requested_codes:
+        global_errors.append("Không cấp hoặc từ chối quyền admin trực tiếp; hãy cấu hình riêng tài khoản quản trị")
+    if payload.action == "assign_role" and not target_role:
+        global_errors.append("Nhóm quyền được chọn không tồn tại")
+    if payload.action == "set_scope" and str(payload.data_scope or "").strip().lower() not in VALID_DATA_SCOPES:
+        global_errors.append("Phạm vi dữ liệu được chọn không hợp lệ")
+    high_risk_requested = bool(requested_codes.intersection(HIGH_RISK_PERMISSIONS))
+    if high_risk_requested and not is_superuser_actor(current_user):
+        global_errors.append("Chỉ siêu quản trị viên được phân quyền rủi ro cao")
+    if target_role and target_role.role_code == "ADMIN":
+        global_errors.append("Không gán nhóm Quản trị hệ thống bằng thao tác hàng loạt; hãy cập nhật riêng từng tài khoản")
+
+    for user_id in requested_ids:
+        user = users_by_id.get(user_id)
+        if not user:
+            continue
+        role_codes, extra_codes, denied_codes, _ = permission_code_sets(user)
+        proposed_role = target_role if payload.action == "assign_role" else user.role
+        proposed_scope = user.data_scope
+        proposed_extra = set(extra_codes)
+        proposed_denied = set(denied_codes)
+        errors = []
+        warnings = []
+        changes = []
+        if str(user.id) == str(current_user.id):
+            errors.append("Không thể thao tác hàng loạt trên chính tài khoản đang đăng nhập")
+        if user.is_superuser or (user.role and user.role.role_code == "ADMIN"):
+            errors.append("Tài khoản siêu quản trị phải được cập nhật riêng, không qua thao tác hàng loạt")
+
+        if payload.action == "grant_permissions":
+            expanded = permission_codes_with_prerequisites(requested_codes)
+            auto_added = expanded - requested_codes
+            if auto_added:
+                warnings.append("Tự bổ sung quyền nền: " + ", ".join(sorted(auto_added)))
+            proposed_extra |= expanded - role_codes
+            proposed_denied -= expanded
+            changes.append(f"Cấp thêm {len(expanded)} quyền")
+        elif payload.action == "deny_permissions":
+            unavailable = requested_codes - (role_codes | extra_codes)
+            if unavailable:
+                errors.append("Không đang được cấp các quyền: " + ", ".join(sorted(unavailable)))
+            proposed_extra -= requested_codes
+            proposed_denied |= requested_codes & role_codes
+            changes.append(f"Từ chối {len(requested_codes)} quyền")
+        elif payload.action == "remove_overrides":
+            if requested_codes:
+                proposed_extra -= requested_codes
+                proposed_denied -= requested_codes
+                changes.append(f"Gỡ ngoại lệ của {len(requested_codes)} quyền")
+            else:
+                proposed_extra.clear()
+                proposed_denied.clear()
+                changes.append("Gỡ toàn bộ quyền cấp thêm và quyền từ chối")
+        elif payload.action == "assign_role":
+            proposed_scope = role_scope_values(target_role)[0] if target_role else user.data_scope
+            if payload.clear_overrides:
+                proposed_extra.clear()
+                proposed_denied.clear()
+            elif target_role:
+                next_role_codes = {
+                    item.permission.permission_code for item in target_role.permissions if item.permission
+                }
+                proposed_extra -= next_role_codes
+                proposed_denied &= next_role_codes
+            changes.append(f"Gán nhóm {target_role.role_name if target_role else 'không xác định'}")
+            changes.append(f"Đưa phạm vi về {SCOPE_LABELS.get(proposed_scope, proposed_scope)}")
+            if target_role and target_role.role_code == "HEAD_OFFICE_LEADER" and (not user.branch or user.branch.branch_code != "2600"):
+                errors.append("Lãnh đạo Hội sở phải thuộc chi nhánh 2600")
+            if target_role and target_role.role_code == "BRANCH_MANAGER" and (not user.branch or user.branch.branch_level != "LEVEL_2"):
+                errors.append("Lãnh đạo chi nhánh phải thuộc chi nhánh loại II")
+        elif payload.action == "set_scope":
+            proposed_scope = str(payload.data_scope or "").strip().lower()
+            changes.append(f"Đổi phạm vi sang {SCOPE_LABELS.get(proposed_scope, proposed_scope)}")
+        elif payload.action == "lock_accounts":
+            if user.is_superuser:
+                errors.append("Không khóa tài khoản siêu quản trị bằng thao tác hàng loạt")
+            changes.append("Khóa tài khoản và kết thúc các phiên đang hoạt động")
+        elif payload.action == "unlock_accounts":
+            if user.is_superuser:
+                errors.append("Không mở khóa tài khoản siêu quản trị bằng thao tác hàng loạt")
+            changes.append("Mở khóa tài khoản")
+        elif payload.action == "force_logout":
+            changes.append("Kết thúc toàn bộ phiên đăng nhập")
+
+        if payload.action in {"assign_role", "set_scope"}:
+            scope_error = validate_bulk_scope(user, proposed_role, proposed_scope)
+            if scope_error:
+                errors.append(scope_error)
+        effective_before = (role_codes | extra_codes) - expand_denied_permissions(denied_codes)
+        proposed_role_codes = {
+            grant.permission.permission_code
+            for grant in (proposed_role.permissions if proposed_role else [])
+            if grant.permission
+        }
+        effective_after = (proposed_role_codes | proposed_extra) - expand_denied_permissions(proposed_denied)
+        rows.append({
+            "id": user.id,
+            "username": user.username,
+            "full_name": user.full_name,
+            "employee_code": user.employee_code,
+            "branch_code": user.branch.branch_code if user.branch else None,
+            "department_name": user.department.department_name if user.department else None,
+            "role_code": user.role.role_code if user.role else None,
+            "proposed_role_code": proposed_role.role_code if proposed_role else None,
+            "current_scope": user.data_scope,
+            "proposed_scope": proposed_scope,
+            "current_permission_count": len(effective_before),
+            "proposed_permission_count": len(effective_after),
+            "changes": changes,
+            "warnings": warnings,
+            "errors": errors,
+            "valid": not errors,
+        })
+    invalid_count = sum(not item["valid"] for item in rows)
+    return {
+        "action": payload.action,
+        "requested_count": len(requested_ids),
+        "valid_count": len(rows) - invalid_count,
+        "invalid_count": invalid_count + len(missing_ids),
+        "global_errors": global_errors,
+        "can_apply": not global_errors and invalid_count == 0 and bool(rows),
+        "items": rows,
+    }
 
 
 def user_authorization_snapshot(user: SystemUser) -> dict:
@@ -597,7 +823,12 @@ def user_authorization_snapshot(user: SystemUser) -> dict:
         "extra_permissions": sorted(
             item.permission.permission_code
             for item in user.permission_grants
-            if item.permission
+            if item.permission and str(item.effect or "allow").lower() != "deny"
+        ),
+        "denied_permissions": sorted(
+            item.permission.permission_code
+            for item in user.permission_grants
+            if item.permission and str(item.effect or "allow").lower() == "deny"
         ),
     }
 
@@ -611,6 +842,7 @@ def authorization_change_description(before: dict, after: dict) -> str:
         "is_active": "trạng thái",
         "is_superuser": "quản trị viên",
         "extra_permissions": "quyền cấp thêm",
+        "denied_permissions": "quyền từ chối",
     }
     changes = [
         f"{labels[key]}: {before.get(key)} → {after.get(key)}"
@@ -628,6 +860,8 @@ def overview(db: Session = Depends(get_db)):
         "user_count": db.query(SystemUser).count(),
         "role_count": db.query(SystemRole).count(),
         "direct_permission_grant_count": db.query(SystemUserPermission).count(),
+        "direct_permission_allow_count": db.query(SystemUserPermission).filter(SystemUserPermission.effect == "allow").count(),
+        "direct_permission_deny_count": db.query(SystemUserPermission).filter(SystemUserPermission.effect == "deny").count(),
         "warning_count": db.query(SystemUser).filter(
             or_(SystemUser.role_id.is_(None), SystemUser.department_id.is_(None))
         ).count(),
@@ -860,10 +1094,11 @@ def create_user(
     validate_user_payload(db, payload)
     target_role = db.query(SystemRole).filter(SystemRole.id == payload.role_id).first()
     requested_extra_codes = {str(code or "").strip().lower() for code in payload.extra_permission_codes}
+    requested_denied_codes = {str(code or "").strip().lower() for code in payload.denied_permission_codes}
     if (
         payload.is_superuser
         or (target_role and target_role.role_code == "ADMIN")
-        or requested_extra_codes.intersection(HIGH_RISK_PERMISSIONS)
+        or (requested_extra_codes | requested_denied_codes).intersection(HIGH_RISK_PERMISSIONS)
     ):
         require_superuser_actor(current_user, "Chỉ siêu quản trị viên được tạo tài khoản quản trị hệ thống")
     employee_code = clean_code(payload.employee_code)
@@ -891,7 +1126,7 @@ def create_user(
     db.add(user)
     try:
         db.flush()
-        sync_user_extra_permissions(db, user, payload.extra_permission_codes)
+        sync_user_permission_overrides(db, user, payload.extra_permission_codes, payload.denied_permission_codes)
         db.flush()
         db.expire(user, ["permission_grants"])
         log_action(
@@ -904,6 +1139,139 @@ def create_user(
         raise HTTPException(status_code=400, detail="Tên đăng nhập hoặc mã nhân viên đã tồn tại") from exc
     db.refresh(user)
     return serialize_user(user)
+
+
+@router.post("/users/bulk-action/preview", dependencies=[Depends(require_any_permission("admin:user:write"))])
+def preview_bulk_user_action(
+    payload: BulkUserActionPayload,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return bulk_action_preview(db, payload, current_user)
+
+
+@router.post("/users/bulk-action", dependencies=[Depends(require_any_permission("admin:user:write"))])
+def apply_bulk_user_action(
+    payload: BulkUserActionPayload,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    preview = bulk_action_preview(db, payload, current_user)
+    if not preview["can_apply"]:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "message": "Chưa thể áp dụng vì còn người dùng hoặc cấu hình không hợp lệ",
+                "preview": preview,
+            },
+        )
+    requested_codes = {
+        str(code or "").strip().lower()
+        for code in payload.permission_codes
+        if str(code or "").strip()
+    }
+    users_by_id = {
+        item.id: item
+        for item in db.query(SystemUser).filter(SystemUser.id.in_(payload.user_ids)).all()
+    }
+    target_role = db.query(SystemRole).filter(SystemRole.id == payload.role_id).first() if payload.role_id else None
+    batch_id = str(uuid4())
+    affected = []
+    try:
+        for user_id in dict.fromkeys(payload.user_ids):
+            user = users_by_id[user_id]
+            before_data = user_audit_snapshot(user)
+            role_codes, extra_codes, denied_codes, _ = permission_code_sets(user)
+            if payload.action == "grant_permissions":
+                expanded = permission_codes_with_prerequisites(requested_codes)
+                next_extra = extra_codes | (expanded - role_codes)
+                next_denied = denied_codes - expanded
+                sync_user_permission_overrides(db, user, sorted(next_extra), sorted(next_denied))
+            elif payload.action == "deny_permissions":
+                next_extra = extra_codes - requested_codes
+                next_denied = denied_codes | (requested_codes & role_codes)
+                sync_user_permission_overrides(db, user, sorted(next_extra), sorted(next_denied))
+            elif payload.action == "remove_overrides":
+                next_extra = extra_codes - requested_codes if requested_codes else set()
+                next_denied = denied_codes - requested_codes if requested_codes else set()
+                sync_user_permission_overrides(db, user, sorted(next_extra), sorted(next_denied))
+            elif payload.action == "assign_role":
+                user.role = target_role
+                user.role_id = target_role.id
+                user.data_scope = role_scope_values(target_role)[0]
+                user.is_superuser = target_role.role_code == "ADMIN"
+                if payload.clear_overrides:
+                    sync_user_permission_overrides(db, user, [], [])
+                else:
+                    next_role_codes = {
+                        item.permission.permission_code for item in target_role.permissions if item.permission
+                    }
+                    next_extra = extra_codes - next_role_codes
+                    next_denied = denied_codes & next_role_codes
+                    sync_user_permission_overrides(db, user, sorted(next_extra), sorted(next_denied))
+            elif payload.action == "set_scope":
+                user.data_scope = str(payload.data_scope).strip().lower()
+            elif payload.action == "lock_accounts":
+                user.is_active = False
+            elif payload.action == "unlock_accounts":
+                user.is_active = True
+
+            db.flush()
+            if payload.action in {"grant_permissions", "deny_permissions", "remove_overrides", "assign_role"}:
+                db.expire(user, ["permission_grants"])
+            if payload.action != "unlock_accounts":
+                if payload.action != "force_logout":
+                    user.auth_version = int(user.auth_version or 1) + 1
+                revoke_user_sessions(
+                    db,
+                    user.id,
+                    "account_locked" if payload.action == "lock_accounts" else
+                    "admin_revoked" if payload.action == "force_logout" else
+                    "authorization_changed",
+                    current_user.username,
+                )
+            after_data = user_audit_snapshot(user)
+            after_data["bulk_batch_id"] = batch_id
+            log_action(
+                db,
+                request,
+                "bulk_authorization_change" if payload.action != "force_logout" else "bulk_force_logout",
+                "user",
+                user.id,
+                f"Thao tác hàng loạt {payload.action} cho người dùng {user.username}",
+                before_data=before_data,
+                after_data=after_data,
+            )
+            affected.append({"id": user.id, "username": user.username, "full_name": user.full_name})
+        log_action(
+            db,
+            request,
+            "bulk_user_action",
+            "user_bulk_action",
+            batch_id,
+            f"Hoàn tất thao tác hàng loạt {payload.action} cho {len(affected)} người dùng",
+            after_data={
+                "batch_id": batch_id,
+                "action": payload.action,
+                "user_ids": [item["id"] for item in affected],
+                "user_count": len(affected),
+                "permission_codes": sorted(requested_codes),
+                "role_id": payload.role_id,
+                "data_scope": payload.data_scope,
+            },
+        )
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    return {
+        "status": "success",
+        "batch_id": batch_id,
+        "action": payload.action,
+        "affected_count": len(affected),
+        "items": affected,
+    }
 
 
 @router.put("/users/{user_id}", dependencies=[Depends(require_any_permission("admin:user:write"))])
@@ -919,12 +1287,14 @@ def update_user(
         raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
     validate_user_payload(db, payload, user_id=user_id)
     target_role = db.query(SystemRole).filter(SystemRole.id == payload.role_id).first()
-    current_extra_codes_set = {
-        item.permission.permission_code for item in user.permission_grants if item.permission
-    }
+    _, current_extra_codes_set, current_denied_codes_set, _ = permission_code_sets(user)
     requested_extra_codes = {str(code or "").strip().lower() for code in payload.extra_permission_codes}
+    requested_denied_codes = {str(code or "").strip().lower() for code in payload.denied_permission_codes}
     high_risk_direct_changed = bool(
-        (current_extra_codes_set ^ requested_extra_codes).intersection(HIGH_RISK_PERMISSIONS)
+        (
+            (current_extra_codes_set ^ requested_extra_codes)
+            | (current_denied_codes_set ^ requested_denied_codes)
+        ).intersection(HIGH_RISK_PERMISSIONS)
     )
     if (
         user.is_superuser
@@ -943,6 +1313,7 @@ def update_user(
             bool(user.is_active) != bool(payload.is_active),
             bool(user.is_superuser) != bool(payload.is_superuser),
             current_extra_codes != sorted(set(payload.extra_permission_codes)),
+            sorted(current_denied_codes_set) != sorted(set(payload.denied_permission_codes)),
         ))
         if self_authorization_changed:
             raise HTTPException(
@@ -980,7 +1351,7 @@ def update_user(
     user.data_scope = payload.data_scope
     try:
         db.flush()
-        sync_user_extra_permissions(db, user, payload.extra_permission_codes)
+        sync_user_permission_overrides(db, user, payload.extra_permission_codes, payload.denied_permission_codes)
         db.flush()
         db.expire(user, ["permission_grants"])
         authorization_after = {
@@ -991,10 +1362,17 @@ def update_user(
             "is_active": bool(payload.is_active),
             "is_superuser": bool(payload.is_superuser),
             "extra_permissions": sorted(set(payload.extra_permission_codes)),
+            "denied_permissions": sorted(set(payload.denied_permission_codes)),
         }
         authorization_changes = authorization_change_description(authorization_before, authorization_after)
         if authorization_changes or payload.password:
             user.auth_version = int(user.auth_version or 1) + 1
+            revoke_user_sessions(
+                db,
+                user.id,
+                "password_reset" if payload.password else "authorization_changed",
+                current_user.username,
+            )
         log_action(
             db,
             request,
@@ -1074,6 +1452,7 @@ def reset_user_password(
     user.password_changed_at = None
     user.failed_login_attempts = 0
     user.locked_until = None
+    revoke_user_sessions(db, user.id, "password_reset", current_user.username)
     log_action(
         db, request, "reset_password", "user", user.id, f"Reset mật khẩu người dùng {user.username}",
         before_data=before_data,
@@ -1112,6 +1491,8 @@ def toggle_user_active(
     before_data = user_audit_snapshot(user)
     user.is_active = not user.is_active
     user.auth_version = int(user.auth_version or 1) + 1
+    if not user.is_active:
+        revoke_user_sessions(db, user.id, "account_locked", current_user.username)
     action = "unlock" if user.is_active else "lock"
     log_action(
         db, request, action, "user", user.id, f"{'Mở khóa' if user.is_active else 'Khóa'} người dùng {user.username}",
@@ -1119,6 +1500,110 @@ def toggle_user_active(
     )
     db.commit()
     return serialize_user(user)
+
+
+@router.post("/users/{user_id}/unlock-login", dependencies=[Depends(require_any_permission("admin:user:write"))])
+def unlock_user_login(
+    user_id: int,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    user = db.query(SystemUser).filter(SystemUser.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="Không tìm thấy người dùng")
+    if user.is_superuser:
+        require_superuser_actor(current_user, "Chỉ siêu quản trị viên được mở khóa đăng nhập tài khoản quản trị")
+    before_data = {
+        "failed_login_attempts": int(user.failed_login_attempts or 0),
+        "locked_until": user.locked_until.isoformat() if user.locked_until else None,
+    }
+    user.failed_login_attempts = 0
+    user.locked_until = None
+    log_action(
+        db,
+        request,
+        "unlock_login",
+        "user",
+        user.id,
+        f"Mở khóa đăng nhập tạm thời cho người dùng {user.username}",
+        before_data=before_data,
+        after_data={"failed_login_attempts": 0, "locked_until": None},
+    )
+    db.commit()
+    db.refresh(user)
+    return serialize_user(user)
+
+
+def serialize_login_session(item: UserSession) -> dict:
+    if item.revoked_at is None and session_is_idle(item):
+        revoke_session(item, "idle_timeout", "system")
+    user_agent = str(item.user_agent or "")
+    return {
+        "id": item.id,
+        "user_id": item.user_id,
+        "username": item.user.username if item.user else None,
+        "full_name": item.user.full_name if item.user else None,
+        "role_code": item.user.role.role_code if item.user and item.user.role else None,
+        "device_id": item.device_id,
+        "ip_address": item.ip_address,
+        "user_agent": user_agent,
+        "logged_in_at": item.logged_in_at.isoformat() if item.logged_in_at else None,
+        "last_activity_at": item.last_activity_at.isoformat() if item.last_activity_at else None,
+        "revoked_at": item.revoked_at.isoformat() if item.revoked_at else None,
+        "revoke_reason": item.revoke_reason,
+        "revoke_reason_label": reason_message(item.revoke_reason) if item.revoke_reason else None,
+        "revoked_by": item.revoked_by,
+        "is_active": item.revoked_at is None,
+    }
+
+
+@router.get("/sessions", dependencies=[Depends(require_any_permission("admin:user:view"))])
+def list_login_sessions(
+    active_only: bool = True,
+    user_id: int | None = None,
+    db: Session = Depends(get_db),
+):
+    query = db.query(UserSession)
+    if user_id is not None:
+        query = query.filter(UserSession.user_id == user_id)
+    items = query.order_by(UserSession.logged_in_at.desc()).limit(500).all()
+    payload = [serialize_login_session(item) for item in items]
+    db.commit()
+    if active_only:
+        payload = [item for item in payload if item["is_active"]]
+    return {"items": payload, "total": len(payload)}
+
+
+@router.post("/sessions/{session_id}/revoke", dependencies=[Depends(require_any_permission("admin:user:write"))])
+def revoke_login_session(
+    session_id: str,
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    item = db.query(UserSession).filter(UserSession.id == session_id).first()
+    if not item:
+        raise HTTPException(status_code=404, detail="Không tìm thấy phiên đăng nhập")
+    if item.user and item.user.is_superuser:
+        require_superuser_actor(
+            current_user,
+            "Chỉ siêu quản trị viên được kết thúc phiên của tài khoản quản trị",
+        )
+    if str(item.user_id) == str(current_user.id):
+        raise HTTPException(status_code=400, detail="Không thể kết thúc phiên đang sử dụng tại đây")
+    revoke_session(item, "admin_revoked", current_user.username)
+    log_action(
+        db,
+        request,
+        "revoke_session",
+        "user_session",
+        item.id,
+        f"Kết thúc phiên đăng nhập của {item.user.username if item.user else item.user_id}",
+        after_data={"revoke_reason": "admin_revoked", "revoked_by": current_user.username},
+    )
+    db.commit()
+    return {"status": "revoked", "id": item.id}
 
 
 @router.get("/roles", dependencies=[Depends(require_any_permission("admin:role:view"))])
@@ -1234,6 +1719,12 @@ def update_role(
         if authorization_changed:
             for assigned_user in role.users:
                 assigned_user.auth_version = int(assigned_user.auth_version or 1) + 1
+                revoke_user_sessions(
+                    db,
+                    assigned_user.id,
+                    "authorization_changed",
+                    current_user.username,
+                )
         log_action(
             db,
             request,
@@ -1293,15 +1784,12 @@ def check_effective_access(payload: AccessCheckPayload, db: Session = Depends(ge
         for item in (user.role.permissions if user.role else [])
         if item.permission
     }
-    direct_codes = {
-        item.permission.permission_code
-        for item in user.permission_grants
-        if item.permission
-    }
+    _, direct_codes, explicit_denied_codes, effective_denied_codes = permission_code_sets(user)
     granted_codes = set(effective_permission_codes(user))
     function_allowed = "admin" in granted_codes or permission_code in granted_codes
     permission_source = (
         "superuser" if "admin" in granted_codes
+        else "denied" if permission_code in effective_denied_codes
         else "role" if permission_code in role_codes
         else "direct" if permission_code in direct_codes
         else "missing"
@@ -1372,7 +1860,11 @@ def check_effective_access(payload: AccessCheckPayload, db: Session = Depends(ge
     reasons.append(
         f"Có quyền {permission_code} từ {'nhóm quyền' if permission_source == 'role' else 'quyền cấp thêm' if permission_source == 'direct' else 'quản trị viên'}."
         if function_allowed
-        else f"Thiếu quyền chức năng {permission_code}."
+        else (
+            f"Quyền {permission_code} bị từ chối trực tiếp hoặc do quyền cha bị từ chối."
+            if permission_source == "denied"
+            else f"Thiếu quyền chức năng {permission_code}."
+        )
     )
     reasons.append(scope_reason)
     if customer_reason:
@@ -1383,6 +1875,7 @@ def check_effective_access(payload: AccessCheckPayload, db: Session = Depends(ge
         "user": serialize_user(user),
         "permission": serialize_permission(permission),
         "permission_source": permission_source,
+        "explicit_denied": permission_code in explicit_denied_codes,
         "function_allowed": function_allowed,
         "scope_allowed": scope_allowed,
         "scope": scope,

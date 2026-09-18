@@ -3,6 +3,7 @@ from fastapi import Depends, HTTPException, Query, Request
 from app.auth.branch_scope import BranchScope, resolve_branch_scope
 from app.auth.provider import resolve_current_user
 from app.auth.schemas import CurrentUser
+from app.security_audit import record_permission_denied
 
 
 async def get_current_user(request: Request) -> CurrentUser:
@@ -10,10 +11,25 @@ async def get_current_user(request: Request) -> CurrentUser:
 
 
 def require_any_permission(*permission_codes: str):
-    async def dependency(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    async def dependency(request: Request, user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
         granted = set(user.permissions or [])
         if "admin" not in granted and not granted.intersection(permission_codes):
+            record_permission_denied(request, user, permission_codes)
             raise HTTPException(status_code=403, detail="Bạn không có quyền thực hiện chức năng này")
+        return user
+
+    return dependency
+
+
+def require_all_permissions(*permission_codes: str):
+    """Require every permission; superuser remains an explicit bypass."""
+
+    async def dependency(request: Request, user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+        granted = set(user.permissions or [])
+        missing = [code for code in permission_codes if code not in granted]
+        if "admin" not in granted and missing:
+            record_permission_denied(request, user, missing)
+            raise HTTPException(status_code=403, detail="Bạn chưa có đủ quyền để thực hiện chức năng này")
         return user
 
     return dependency

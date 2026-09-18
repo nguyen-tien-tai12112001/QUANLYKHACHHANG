@@ -216,6 +216,24 @@ export function AnalysisScopeProvider({ children, currentUser }) {
       setSessionVersion((value) => value + 1);
       return true;
     },
+    restore: (snapshot) => {
+      if (!snapshot?.periodKey) return false;
+      clearApiCache();
+      const next = {
+        ...snapshot,
+        branchCode: fixedBranchCode || snapshot.branchCode || null,
+        pgdCode: snapshot.pgdCode || null,
+        advanced: { ...EMPTY_ADVANCED_SCOPE, ...(snapshot.advanced || {}) },
+      };
+      setDraft(next);
+      setApplied(next);
+      setSessionData(null);
+      setSessionLoading(true);
+      setSessionProgress({ completed: 0, total: 0, stage: 'Đang khôi phục phạm vi đã xem' });
+      sessionStorage.setItem('c360_analysis_session', createAnalysisSessionId());
+      setSessionVersion((value) => value + 1);
+      return true;
+    },
     reset: () => {
       setDraft({ periodKey: '', branchCode: fixedBranchCode, pgdCode: null, advanced: EMPTY_ADVANCED_SCOPE });
       setApplied(null);

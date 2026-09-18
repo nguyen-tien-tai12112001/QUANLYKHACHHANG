@@ -8,6 +8,7 @@ from app.api.cif import router as cif_router
 from app.api.dashboard import router as dashboard_router
 from app.api.health import router as health_router
 from app.api.imports import router as imports_router
+from app.api.user_preferences import router as user_preferences_router
 from app.config import settings
 from app.database import init_db
 from app.cif_importer import resume_pending_cif_imports
@@ -39,6 +40,7 @@ app.include_router(customer_processing_router)
 app.include_router(cif_router)
 app.include_router(admin_router)
 app.include_router(dashboard_router)
+app.include_router(user_preferences_router)
 
 
 @app.on_event("startup")

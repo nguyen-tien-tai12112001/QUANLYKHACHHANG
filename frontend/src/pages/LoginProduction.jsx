@@ -9,6 +9,17 @@ import './LoginProduction.css';
 
 const { Paragraph, Text, Title } = Typography;
 
+function getOrCreateDeviceId() {
+  const stored = localStorage.getItem('c360_device_id');
+  if (stored) return stored;
+  const cryptoApi = globalThis.crypto;
+  const value = typeof cryptoApi?.randomUUID === 'function'
+    ? cryptoApi.randomUUID()
+    : `c360-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}`;
+  localStorage.setItem('c360_device_id', value);
+  return value;
+}
+
 export default function LoginProduction({ onLogin }) {
   const [submitting, setSubmitting] = useState(false);
   const [capsLock, setCapsLock] = useState(false);
@@ -18,8 +29,8 @@ export default function LoginProduction({ onLogin }) {
     setSubmitting(true);
     setLoginError('');
     try {
-      const { data } = await client.post('/auth/login', values, { hideGlobalLoading: true });
-      onLogin(data.user, data.access_token);
+      const { data } = await client.post('/auth/login', { ...values, device_id: getOrCreateDeviceId() }, { hideGlobalLoading: true });
+      onLogin(data.user, data.access_token, data.session_policy);
       if (!data.user.must_change_password) message.success(`Xin chào ${data.user.full_name}`);
     } catch (error) {
       const errorText = apiErrorMessage(error, 'Không thể đăng nhập. Vui lòng kiểm tra lại kết nối.');
@@ -33,30 +44,72 @@ export default function LoginProduction({ onLogin }) {
   return (
     <main className="login-page">
       <section className="login-intro">
-        <div className="login-intro-orb is-one" />
-        <div className="login-intro-orb is-two" />
+        <div className="login-ambient" aria-hidden="true">
+          <span className="login-ambient-orb is-one" />
+          <span className="login-ambient-orb is-two" />
+          <span className="login-ambient-beam" />
+        </div>
         <div className="login-brand">
-          <img src={logoUrl} alt="C360" />
-          <div><Title level={1}>C360</Title><Text>NỀN TẢNG DỮ LIỆU KHÁCH HÀNG</Text></div>
+          <span className="login-brand-mark"><img src={logoUrl} alt="Agribank C360" /></span>
+          <div>
+            <Title level={1}>C360</Title>
+            <Text>NỀN TẢNG DỮ LIỆU KHÁCH HÀNG</Text>
+          </div>
         </div>
-        <Text className="login-kicker"><span /> Hệ thống quản lý khách hàng tập trung</Text>
-        <Title level={2} className="login-headline">Toàn cảnh khách hàng, thống nhất dữ liệu, hỗ trợ quyết định</Title>
-        <Paragraph>Tập trung dữ liệu, phân tích nghiệp vụ và hỗ trợ điều hành trên cùng một nền tảng an toàn trong mạng nội bộ.</Paragraph>
-        <div className="login-feature-grid">
-          <div><DatabaseOutlined /><span>Kho dữ liệu hợp nhất</span><small>CIF và nguồn nghiệp vụ</small></div>
-          <div><BarChartOutlined /><span>Phân tích tức thời</span><small>Theo kỳ và đơn vị</small></div>
-          <div><SafetyCertificateOutlined /><span>Kiểm soát truy cập</span><small>Theo vai trò và phạm vi</small></div>
+
+        <div className="login-intro-body">
+          <div className="login-copy">
+            <Text className="login-kicker"><span /> Trung tâm dữ liệu khách hàng số</Text>
+            <Title level={2} className="login-headline">
+              Dữ liệu hợp nhất.<br />
+              <span>Thấu hiểu khách hàng.</span><br />
+              Điều hành hiệu quả.
+            </Title>
+            <Paragraph className="login-description">Kết nối hồ sơ CIF với dữ liệu nghiệp vụ, mang đến góc nhìn khách hàng toàn diện, nhất quán và an toàn.</Paragraph>
+          </div>
+
+          <div className="login-data-scene" aria-hidden="true">
+            <div className="login-scene-halo" />
+            <div className="login-scene-ring ring-one" />
+            <div className="login-scene-ring ring-two" />
+            <div className="login-scene-ring ring-three" />
+            <div className="login-data-core">
+              <span className="login-core-pulse" />
+              <span className="login-core-logo"><img src={logoUrl} alt="" /></span>
+              <strong>C360</strong><small>DATA CORE</small>
+            </div>
+            <span className="login-data-node node-cif"><i />CIF</span>
+            <span className="login-data-node node-deposit"><i />TIỀN GỬI</span>
+            <span className="login-data-node node-loan"><i />TIỀN VAY</span>
+            <span className="login-data-node node-service"><i />SẢN PHẨM</span>
+            <span className="login-data-node node-risk"><i />RỦI RO</span>
+          </div>
+
+          <div className="login-feature-grid">
+            <div className="login-feature-card"><span className="login-feature-icon"><DatabaseOutlined /></span><span>Hồ sơ 360°</span><small>Dữ liệu hợp nhất, truy vết rõ ràng</small></div>
+            <div className="login-feature-card"><span className="login-feature-icon"><BarChartOutlined /></span><span>Phân tích nghiệp vụ</span><small>Theo kỳ, đơn vị và cán bộ</small></div>
+            <div className="login-feature-card"><span className="login-feature-icon"><SafetyCertificateOutlined /></span><span>Truy cập an toàn</span><small>Đúng vai trò, đúng phạm vi</small></div>
+          </div>
         </div>
-        <div className="login-intro-foot"><CheckCircleFilled /> Vận hành độc lập trong hạ tầng nội bộ</div>
+
+        <div className="login-intro-foot">
+          <span><CheckCircleFilled /> Vận hành độc lập trong hạ tầng nội bộ</span>
+          <span className="login-live-indicator"><i /> Hệ thống sẵn sàng</span>
+        </div>
       </section>
 
       <section className="login-form-wrap">
+        <div className="login-form-pattern" aria-hidden="true" />
         <div className="login-card">
+          <span className="login-card-glow" aria-hidden="true" />
+          <div className="login-card-status"><i /> KẾT NỐI NỘI BỘ AN TOÀN</div>
           <div className="login-card-heading">
             <span className="login-card-icon"><LockOutlined /></span>
-            <Text className="login-form-kicker">TRUY CẬP HỆ THỐNG</Text>
-            <Title level={2}>Đăng nhập C360</Title>
-            <Text type="secondary">Sử dụng tài khoản được quản trị viên cấp cho bạn.</Text>
+            <div>
+              <Text className="login-form-kicker">TRUY CẬP HỆ THỐNG</Text>
+              <Title level={2}>Chào mừng trở lại</Title>
+              <Text type="secondary">Đăng nhập để tiếp tục làm việc trên C360.</Text>
+            </div>
           </div>
           {loginError ? (
             <Alert
@@ -82,8 +135,8 @@ export default function LoginProduction({ onLogin }) {
               {submitting ? 'Đang đăng nhập...' : 'Đăng nhập'}
             </Button>
           </Form>
-          <div className="login-security-note"><SafetyCertificateOutlined /><span><strong>Kết nối được bảo vệ</strong><small>Không chia sẻ mật khẩu và luôn đăng xuất khi rời máy.</small></span></div>
-          <div className="login-copyright">C360 · Hệ thống sử dụng nội bộ</div>
+          <div className="login-security-note"><SafetyCertificateOutlined /><span><strong>Phiên truy cập được bảo vệ</strong><small>Không chia sẻ mật khẩu và luôn đăng xuất khi rời máy.</small></span></div>
+          <div className="login-copyright"><span>C360</span><i />@Agribank Chi nhánh Bắc Ninh</div>
         </div>
       </section>
     </main>

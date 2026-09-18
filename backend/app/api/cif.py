@@ -6,7 +6,7 @@ from io import BytesIO
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
 from openpyxl import Workbook
 from sqlalchemy import desc, func, or_
@@ -22,9 +22,10 @@ from app.cif_importer import (
     normalized_status,
     telephone,
 )
-from app.auth.dependencies import get_current_user
+from app.auth.dependencies import get_current_user, require_all_permissions, require_any_permission
 from app.auth.schemas import CurrentUser
 from app.database import get_db
+from app.security_audit import record_security_event
 from app.models import (
     CifCustomer,
     CifCustomerIdentifier,
@@ -37,7 +38,11 @@ from app.models import (
 )
 
 
-router = APIRouter(prefix="/api/cif", tags=["cif"])
+router = APIRouter(
+    prefix="/api/cif",
+    tags=["cif"],
+    dependencies=[Depends(require_any_permission("cif:view"))],
+)
 CIF_UPLOAD_DIR = Path("/app/uploads/cif")
 ALLOWED_CIF_SUFFIXES = {".csv", ".xls", ".xlsx"}
 MAX_CIF_FILES_PER_UPLOAD = 20
@@ -47,6 +52,20 @@ STUCK_JOB_MINUTES = 20
 def require_cif_manager(user: CurrentUser, permission: str = "cif:import") -> None:
     if "admin" not in user.permissions and permission not in user.permissions:
         raise HTTPException(status_code=403, detail="Bạn không có quyền cập nhật kho CIF")
+
+
+def has_permission(user: CurrentUser, permission_code: str) -> bool:
+    granted = set(user.permissions or [])
+    return "admin" in granted or permission_code in granted
+
+
+def mask_identifier(value, visible: int = 4):
+    text_value = str(value or "").strip()
+    if not text_value:
+        return None
+    if len(text_value) <= visible:
+        return "•" * len(text_value)
+    return f"{'•' * min(8, len(text_value) - visible)}{text_value[-visible:]}"
 
 
 def import_cif_files_sequentially(files: list[tuple[str, str]], uploaded_by: str) -> None:
@@ -362,18 +381,38 @@ def get_cif_import(batch_id: int, db: Session = Depends(get_db)):
     return batch_payload(item)
 
 
-@router.get("/imports/{batch_id}/file")
-def download_cif_import_file(batch_id: int, db: Session = Depends(get_db)):
+@router.get(
+    "/imports/{batch_id}/file",
+    dependencies=[Depends(require_all_permissions("customer:sensitive:identity", "customer:sensitive:contact"))],
+)
+def download_cif_import_file(
+    batch_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
     item = db.query(CifImportBatch).filter(CifImportBatch.id == batch_id).first()
     if not item:
         raise HTTPException(status_code=404, detail="Không tìm thấy lần import CIF")
     path = Path(item.file_path)
     if not path.is_file():
         raise HTTPException(status_code=410, detail="File nguồn không còn trên vùng lưu trữ dùng chung")
+    record_security_event(
+        request,
+        user,
+        "cif_source_download",
+        "cif_import_file",
+        batch_id,
+        "Tải file CIF nguồn đã import",
+        {"filename": item.original_filename, "branch_code": item.branch_code, "row_count": item.total_rows},
+    )
     return FileResponse(path, filename=item.original_filename, media_type="application/octet-stream")
 
 
-@router.get("/imports/{batch_id}/issues")
+@router.get(
+    "/imports/{batch_id}/issues",
+    dependencies=[Depends(require_all_permissions("customer:sensitive:identity", "customer:sensitive:contact"))],
+)
 def get_cif_import_issues(
     batch_id: int,
     limit: int = Query(default=200, ge=1, le=1000),
@@ -432,6 +471,7 @@ def get_cif_import_issues(
 
 @router.get("/customers")
 def list_cif_customers(
+    request: Request,
     keyword: str | None = None,
     branch_code: str | None = None,
     status: str | None = None,
@@ -439,18 +479,21 @@ def list_cif_customers(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=200),
     db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
     query = db.query(CifCustomer)
     if keyword:
         like = f"%{keyword.strip()}%"
-        query = query.filter(
-            or_(
-                CifCustomer.customer_core_code.ilike(like),
-                CifCustomer.customer_name.ilike(like),
+        search_columns = [
+            CifCustomer.customer_core_code.ilike(like),
+            CifCustomer.customer_name.ilike(like),
+        ]
+        if has_permission(user, "customer:sensitive:identity"):
+            search_columns.extend([
                 CifCustomer.registration_number.ilike(like),
                 CifCustomer.tax_number.ilike(like),
-            )
-        )
+            ])
+        query = query.filter(or_(*search_columns))
     if status:
         query = query.filter(CifCustomer.status == status)
     if quality_issue == "missing_identity":
@@ -496,6 +539,32 @@ def list_cif_customers(
         for identifier in page_identifiers:
             identifiers_by_customer.setdefault(identifier.customer_id, []).append(identifier)
 
+    can_view_identity = has_permission(user, "customer:sensitive:identity")
+    can_view_contact = has_permission(user, "customer:sensitive:contact")
+    if rows and (can_view_identity or can_view_contact):
+        record_security_event(
+            request,
+            user,
+            "cif_customer_list_view",
+            "cif_customer",
+            description="Xem danh sách khách hàng CIF có dữ liệu nhạy cảm",
+            metadata={
+                "branch_code": branch_code,
+                "page": page,
+                "row_count": len(rows),
+                "identity_visible": can_view_identity,
+                "contact_visible": can_view_contact,
+            },
+        )
+    if keyword:
+        record_security_event(
+            request,
+            user,
+            "cif_customer_search",
+            "cif_customer",
+            description="Tìm kiếm khách hàng trong Kho CIF",
+            metadata={"keyword": keyword, "branch_code": branch_code, "result_count": len(rows)},
+        )
     return {
         "items": [
             {
@@ -513,10 +582,10 @@ def list_cif_customers(
                 ],
                 "customer_name": item.customer_name,
                 "customer_type": item.customer_type,
-                "registration_number": item.registration_number,
-                "tax_number": item.tax_number,
-                "telephone": item.telephone,
-                "full_address": item.full_address,
+                "registration_number": item.registration_number if can_view_identity else mask_identifier(item.registration_number),
+                "tax_number": item.tax_number if can_view_identity else mask_identifier(item.tax_number),
+                "telephone": item.telephone if can_view_contact else mask_identifier(item.telephone, visible=3),
+                "full_address": item.full_address if can_view_contact else ("Thông tin được bảo vệ" if item.full_address else None),
                 "status": item.status,
                 "branch_count": item.branch_count,
                 "identifier_count": item.identifier_count,
@@ -530,7 +599,10 @@ def list_cif_customers(
     }
 
 
-@router.get("/changes")
+@router.get(
+    "/changes",
+    dependencies=[Depends(require_all_permissions("customer:sensitive:identity", "customer:sensitive:contact"))],
+)
 def list_cif_changes(
     review_status: str = Query(default="pending"),
     branch_code: str | None = None,
@@ -649,7 +721,10 @@ def reject_cif_change(
     return {"status": "rejected", "source_record_id": source.id, "reviewed_by": user.username}
 
 
-@router.get("/identifiers/{full_cif_code}/history")
+@router.get(
+    "/identifiers/{full_cif_code}/history",
+    dependencies=[Depends(require_all_permissions("customer:sensitive:identity", "customer:sensitive:contact"))],
+)
 def cif_identifier_history(full_cif_code: str, db: Session = Depends(get_db)):
     sources = db.query(CifSourceRecord).filter(CifSourceRecord.full_cif_code == full_cif_code).order_by(desc(CifSourceRecord.imported_at)).all()
     audits = db.query(CifChangeAudit).filter(CifChangeAudit.full_cif_code == full_cif_code).order_by(desc(CifChangeAudit.performed_at)).all()
@@ -682,7 +757,12 @@ def list_cif_golden_rules(db: Session = Depends(get_db)):
 
 
 @router.get("/customers/{customer_id}")
-def cif_customer_detail(customer_id: int, db: Session = Depends(get_db)):
+def cif_customer_detail(
+    customer_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
     customer = db.query(CifCustomer).filter(CifCustomer.id == customer_id).first()
     if not customer:
         raise HTTPException(status_code=404, detail="Không tìm thấy khách hàng CIF")
@@ -692,6 +772,21 @@ def cif_customer_detail(customer_id: int, db: Session = Depends(get_db)):
         .order_by(CifCustomerIdentifier.branch_code)
         .all()
     )
+    can_view_identity = has_permission(user, "customer:sensitive:identity")
+    can_view_contact = has_permission(user, "customer:sensitive:contact")
+    record_security_event(
+        request,
+        user,
+        "cif_customer_view",
+        "cif_customer",
+        customer.id,
+        "Mở chi tiết khách hàng trong Kho CIF",
+        {
+            "customer_core_code": customer.customer_core_code,
+            "identity_visible": can_view_identity,
+            "contact_visible": can_view_contact,
+        },
+    )
     return {
         "id": customer.id,
         "customer_core_code": customer.customer_core_code,
@@ -699,11 +794,11 @@ def cif_customer_detail(customer_id: int, db: Session = Depends(get_db)):
         "customer_name_ascii": customer.customer_name_ascii,
         "customer_type": customer.customer_type,
         "customer_detail_type": customer.customer_detail_type,
-        "registration_number": customer.registration_number,
-        "passport_number": customer.passport_number,
-        "tax_number": customer.tax_number,
-        "telephone": customer.telephone,
-        "full_address": customer.full_address,
+        "registration_number": customer.registration_number if can_view_identity else mask_identifier(customer.registration_number),
+        "passport_number": customer.passport_number if can_view_identity else mask_identifier(customer.passport_number),
+        "tax_number": customer.tax_number if can_view_identity else mask_identifier(customer.tax_number),
+        "telephone": customer.telephone if can_view_contact else mask_identifier(customer.telephone, visible=3),
+        "full_address": customer.full_address if can_view_contact else ("Thông tin được bảo vệ" if customer.full_address else None),
         "nationality_code": customer.nationality_code,
         "status": customer.status,
         "identifiers": [
@@ -712,7 +807,7 @@ def cif_customer_detail(customer_id: int, db: Session = Depends(get_db)):
                 "full_cif_code": item.full_cif_code,
                 "branch_code": item.branch_code,
                 "customer_name": item.customer_name,
-                "registration_number": item.registration_number,
+                "registration_number": item.registration_number if can_view_identity else mask_identifier(item.registration_number),
                 "source_status": item.source_status,
                 "normalized_status": item.normalized_status,
                 "import_batch_id": item.import_batch_id,
@@ -725,10 +820,12 @@ def cif_customer_detail(customer_id: int, db: Session = Depends(get_db)):
 
 @router.get("/conflicts")
 def list_cif_conflicts(
+    request: Request,
     status: str = Query(default="pending"),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=20, ge=1, le=100),
     db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
 ):
     query = db.query(CifIdentityConflict)
     if status:
@@ -740,15 +837,25 @@ def list_cif_conflicts(
         .limit(page_size)
         .all()
     )
+    can_view_identity = has_permission(user, "customer:sensitive:identity")
+    if rows:
+        record_security_event(
+            request,
+            user,
+            "cif_conflict_view",
+            "cif_conflict",
+            description="Xem danh sách xung đột định danh CIF",
+            metadata={"status": status, "row_count": len(rows), "identity_visible": can_view_identity},
+        )
     return {
         "items": [
             {
                 "id": item.id,
                 "conflict_type": item.conflict_type,
-                "identity_value": item.identity_value,
+                "identity_value": item.identity_value if can_view_identity else mask_identifier(item.identity_value),
                 "customer_ids": item.customer_ids,
                 "full_cif_codes": item.full_cif_codes,
-                "details": item.details,
+                "details": item.details if can_view_identity else {"protected": True},
                 "status": item.status,
                 "created_at": item.created_at,
             }
@@ -758,8 +865,16 @@ def list_cif_conflicts(
     }
 
 
-@router.get("/conflicts-export")
-def export_cif_conflicts(status: str = Query(default="pending"), db: Session = Depends(get_db)):
+@router.get(
+    "/conflicts-export",
+    dependencies=[Depends(require_all_permissions("customer:sensitive:identity"))],
+)
+def export_cif_conflicts(
+    request: Request,
+    status: str = Query(default="pending"),
+    db: Session = Depends(get_db),
+    user: CurrentUser = Depends(get_current_user),
+):
     query = db.query(CifIdentityConflict)
     if status:
         query = query.filter(CifIdentityConflict.status == status)
@@ -781,6 +896,15 @@ def export_cif_conflicts(status: str = Query(default="pending"), db: Session = D
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
+    record_security_event(
+        request,
+        user,
+        "cif_conflict_export",
+        "cif_conflict_export",
+        status,
+        "Xuất danh sách xung đột CIF",
+        {"status": status, "row_count": len(rows)},
+    )
     return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="doi_chieu_xung_dot_cif.xlsx"'})
 
 

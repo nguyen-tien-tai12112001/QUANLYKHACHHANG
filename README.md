@@ -1,5 +1,16 @@
 # QUANLYKHACHHANG
 
+Tài liệu sử dụng hiện tại:
+
+- [Sổ tay quản trị hệ thống C360](docs/SO_TAY_QUAN_TRI_HE_THONG_C360.md)
+- [Hướng dẫn sử dụng C360 cho người dùng](docs/HUONG_DAN_NGUOI_DUNG_C360.md)
+
+Bộ Word lưu hồ sơ (bìa, trang kiểm soát, mục lục, số trang và ô ký xác nhận):
+
+- [Danh mục bộ hồ sơ](docs/word/00_DANH_MUC_BO_HO_SO_C360.docx)
+- [Sổ tay quản trị](docs/word/01_SO_TAY_QUAN_TRI_HE_THONG_C360.docx)
+- [Hướng dẫn người dùng](docs/word/02_HUONG_DAN_NGUOI_DUNG_C360.docx)
+
 Hệ thống quản lý, import, xử lý và báo cáo dữ liệu khách hàng.
 
 Hướng dẫn triển khai chi tiết trên máy khác:

@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   ApartmentOutlined,
   BankOutlined,
-  CheckCircleOutlined,
+  CheckCircleFilled,
+  CloseOutlined,
+  ClockCircleOutlined,
+  DesktopOutlined,
   IdcardOutlined,
   KeyOutlined,
   LockOutlined,
@@ -10,9 +13,24 @@ import {
   PhoneOutlined,
   SafetyCertificateOutlined,
   SaveOutlined,
+  TeamOutlined,
   UserOutlined,
 } from '@ant-design/icons';
-import { Avatar, Button, Collapse, Drawer, Form, Input, Progress, Skeleton, Space, Tabs, Tag, Typography, message } from 'antd';
+import {
+  Avatar,
+  Button,
+  Collapse,
+  Drawer,
+  Form,
+  Input,
+  Progress,
+  Skeleton,
+  Tabs,
+  Tag,
+  Tooltip,
+  Typography,
+  message,
+} from 'antd';
 
 import client from '../api/client';
 import { apiErrorMessage, evaluatePassword } from '../auth/passwordPolicy';
@@ -20,8 +38,56 @@ import './PersonalProfileDrawer.css';
 
 const { Text, Title } = Typography;
 
-function ProfileValue({ icon, label, value, code }) {
-  return <div className="personal-profile-value"><span>{icon}</span><div><small>{label}</small><Text strong>{value || 'Chưa cập nhật'}</Text>{code ? <Text type="secondary">{code}</Text> : null}</div></div>;
+const scopeLabels = {
+  province: 'Toàn tỉnh',
+  all: 'Toàn hệ thống',
+  system: 'Toàn hệ thống',
+  branch: 'Theo chi nhánh',
+  department: 'Theo phòng ban',
+  pgd: 'Theo phòng ban',
+  own: 'Khách hàng được giao',
+};
+
+function initials(value) {
+  const words = String(value || 'C360').trim().split(/\s+/).filter(Boolean);
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[words.length - 1][0]}`.toUpperCase();
+}
+
+function formatDateTime(value) {
+  if (!value) return 'Chưa ghi nhận';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Chưa ghi nhận';
+  return new Intl.DateTimeFormat('vi-VN', { dateStyle: 'medium', timeStyle: 'short' }).format(date);
+}
+
+function IdentityField({ icon, label, value, code, wide = false }) {
+  const fullValue = [value, code].filter(Boolean).join(' · ');
+  return (
+    <div className={`digital-identity-field${wide ? ' is-wide' : ''}`}>
+      <span className="digital-identity-field-icon">{icon}</span>
+      <span className="digital-identity-field-copy">
+        <small>{label}</small>
+        <Tooltip title={fullValue || 'Chưa cập nhật'} placement="topLeft">
+          <Text strong>{value || 'Chưa cập nhật'}</Text>
+        </Tooltip>
+        {code ? <Text type="secondary">{code}</Text> : null}
+      </span>
+    </div>
+  );
+}
+
+function SectionHeading({ icon, eyebrow, title, description }) {
+  return (
+    <div className="digital-profile-section-heading">
+      <span>{icon}</span>
+      <div>
+        <small>{eyebrow}</small>
+        <Title level={5}>{title}</Title>
+        {description ? <Text type="secondary">{description}</Text> : null}
+      </div>
+    </div>
+  );
 }
 
 export default function PersonalProfileDrawer({ open, onClose, currentUser, onUpdated }) {
@@ -40,7 +106,7 @@ export default function PersonalProfileDrawer({ open, onClose, currentUser, onUp
       setProfile(data);
       profileForm.setFieldsValue({ full_name: data.full_name, email: data.email, phone: data.phone });
     } catch (error) {
-      message.error(error.response?.data?.detail || 'Không tải được hồ sơ cá nhân');
+      message.error(apiErrorMessage(error, 'Không tải được hồ sơ cá nhân'));
     } finally {
       setLoading(false);
     }
@@ -48,7 +114,10 @@ export default function PersonalProfileDrawer({ open, onClose, currentUser, onUp
 
   useEffect(() => {
     if (open) loadProfile();
-    else passwordForm.resetFields();
+    else {
+      passwordForm.resetFields();
+      setNewPassword('');
+    }
   }, [open]);
 
   const groupedPermissions = useMemo(() => (profile?.effective_permissions || []).reduce((groups, item) => {
@@ -66,7 +135,7 @@ export default function PersonalProfileDrawer({ open, onClose, currentUser, onUp
       onUpdated?.(data.user);
       message.success('Đã cập nhật thông tin cá nhân');
     } catch (error) {
-      message.error(error.response?.data?.detail || 'Không cập nhật được hồ sơ');
+      message.error(apiErrorMessage(error, 'Không cập nhật được hồ sơ'));
     } finally {
       setSaving(false);
     }
@@ -89,67 +158,139 @@ export default function PersonalProfileDrawer({ open, onClose, currentUser, onUp
     }
   }
 
+  const displayName = profile?.full_name || currentUser?.full_name || currentUser?.display_name || 'Người dùng C360';
   const permissionCount = profile?.effective_permissions?.length || 0;
   const extraCount = profile?.extra_permission_codes?.length || 0;
+  const deniedCount = profile?.effective_denied_permission_codes?.length || 0;
+  const inheritedCount = Math.max(0, (profile?.role_permission_codes?.length || 0) - deniedCount);
   const passwordEvaluation = useMemo(() => evaluatePassword(newPassword), [newPassword]);
-  const formatDateTime = (value) => value ? new Intl.DateTimeFormat('vi-VN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'Chưa ghi nhận';
+  const scope = profile?.data_scope || profile?.scope || currentUser?.data_scope || currentUser?.scope;
+  const isAdmin = Boolean(profile?.is_superuser || profile?.role === 'ADMIN' || currentUser?.is_superuser);
 
-  const overviewTab = loading ? <Skeleton active paragraph={{ rows: 10 }} /> : <div className="personal-profile-content">
-    <div className="personal-profile-section-title"><span><UserOutlined /></span><div><Title level={5}>Thông tin tài khoản</Title><Text type="secondary">Thông tin nhận diện và đơn vị công tác trên hệ thống.</Text></div></div>
-    <div className="personal-profile-value-grid">
-      <ProfileValue icon={<IdcardOutlined />} label="Mã nhân viên" value={profile?.employee_code} code={profile?.username} />
-      <ProfileValue icon={<BankOutlined />} label="Chi nhánh" value={profile?.branch} code={profile?.branch_code} />
-      <ProfileValue icon={<ApartmentOutlined />} label="Phòng ban" value={profile?.department} code={profile?.department_code} />
-      <ProfileValue icon={<SafetyCertificateOutlined />} label="Nhóm quyền" value={profile?.role_name} code={profile?.role} />
-    </div>
-    <div className="personal-profile-section-title is-edit"><span><SaveOutlined /></span><div><Title level={5}>Thông tin liên hệ</Title><Text type="secondary">Bạn có thể tự cập nhật các thông tin cá nhân dưới đây.</Text></div></div>
-    <Form form={profileForm} layout="vertical" onFinish={saveProfile} className="personal-profile-form">
-      <Form.Item label="Họ và tên" name="full_name" rules={[{ required: true, message: 'Nhập họ và tên' }]}><Input prefix={<UserOutlined />} /></Form.Item>
-      <Form.Item label="Email" name="email" rules={[{ type: 'email', message: 'Email không hợp lệ' }]}><Input prefix={<MailOutlined />} placeholder="ten.canbo@agribank.com.vn" /></Form.Item>
-      <Form.Item label="Số điện thoại" name="phone"><Input prefix={<PhoneOutlined />} placeholder="Số điện thoại liên hệ" /></Form.Item>
-      <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saving}>Lưu thông tin cá nhân</Button>
-    </Form>
-  </div>;
+  const overviewTab = loading ? (
+    <div className="digital-profile-loading"><Skeleton active avatar paragraph={{ rows: 9 }} /></div>
+  ) : (
+    <div className="digital-profile-overview-grid">
+      <section className="digital-profile-panel digital-profile-identity-panel">
+        <SectionHeading icon={<IdcardOutlined />} eyebrow="ĐỊNH DANH SỐ" title="Tài khoản và đơn vị công tác" description="Thông tin được quản trị tập trung trên hệ thống C360." />
+        <div className="digital-identity-grid">
+          <IdentityField icon={<IdcardOutlined />} label="Mã nhân viên" value={profile?.employee_code} code={`Tên đăng nhập: ${profile?.username || '—'}`} />
+          <IdentityField icon={<SafetyCertificateOutlined />} label="Nhóm quyền" value={profile?.role_name} code={profile?.role} />
+          <IdentityField icon={<BankOutlined />} label="Chi nhánh" value={profile?.branch} code={profile?.branch_code} />
+          <IdentityField icon={<ApartmentOutlined />} label="Phòng ban" value={profile?.department} code={profile?.department_code} />
+          <IdentityField icon={<TeamOutlined />} label="Mã cán bộ tín dụng" value={profile?.credit_officer_code} />
+          <IdentityField icon={<UserOutlined />} label="User IPCAS" value={profile?.ipcas_username} />
+          <IdentityField icon={<IdcardOutlined />} label="Mã CIF được giao" value={profile?.customer_cif_code} wide />
+        </div>
+        <div className="digital-scope-strip">
+          <span><SafetyCertificateOutlined /></span>
+          <div><small>Phạm vi dữ liệu hiện tại</small><strong>{scopeLabels[scope] || scope || 'Chưa cấu hình'}</strong></div>
+          <Tag color="success"><CheckCircleFilled /> Đang áp dụng</Tag>
+        </div>
+      </section>
 
-  const permissionTab = loading ? <Skeleton active paragraph={{ rows: 10 }} /> : <div className="personal-profile-content">
-    <div className="personal-permission-summary">
-      <div><span><SafetyCertificateOutlined /></span><small>Tổng quyền thực tế</small><strong>{permissionCount}</strong></div>
-      <div className="is-role"><span><CheckCircleOutlined /></span><small>Kế thừa từ nhóm</small><strong>{permissionCount - extraCount}</strong></div>
-      <div className="is-extra"><span><KeyOutlined /></span><small>Được cấp thêm</small><strong>{extraCount}</strong></div>
+      <section className="digital-profile-panel digital-profile-contact-panel">
+        <SectionHeading icon={<UserOutlined />} eyebrow="HỒ SƠ LIÊN HỆ" title="Thông tin cá nhân" description="Bạn có thể chủ động cập nhật các trường liên hệ bên dưới." />
+        <Form form={profileForm} layout="vertical" onFinish={saveProfile} className="digital-profile-form" requiredMark={false}>
+          <Form.Item label="Họ và tên" name="full_name" rules={[{ required: true, message: 'Nhập họ và tên' }]}><Input prefix={<UserOutlined />} placeholder="Họ và tên người dùng" /></Form.Item>
+          <Form.Item label="Email" name="email" rules={[{ type: 'email', message: 'Email không hợp lệ' }]}><Input prefix={<MailOutlined />} placeholder="ten.canbo@agribank.com.vn" /></Form.Item>
+          <Form.Item label="Số điện thoại" name="phone"><Input prefix={<PhoneOutlined />} placeholder="Số điện thoại liên hệ" /></Form.Item>
+          <div className="digital-profile-form-note"><CheckCircleFilled /> Thông tin thay đổi được lưu vào nhật ký hệ thống.</div>
+          <Button type="primary" htmlType="submit" icon={<SaveOutlined />} loading={saving} block>Lưu thay đổi</Button>
+        </Form>
+      </section>
     </div>
-    <div className="personal-profile-section-title"><span><SafetyCertificateOutlined /></span><div><Title level={5}>Chi tiết quyền truy cập</Title><Text type="secondary">Quyền xanh lá kế thừa từ nhóm; quyền tím được cấp thêm riêng.</Text></div></div>
-    <Collapse className="personal-permission-groups" defaultActiveKey={Object.keys(groupedPermissions).slice(0, 2)} items={Object.entries(groupedPermissions).map(([group, items]) => ({
-      key: group,
-      label: <span className="personal-permission-group-label"><b>{group}</b><Tag>{items.length} quyền</Tag></span>,
-      children: <div className="personal-permission-list">{items.map((item) => <div key={item.permission_code} className={item.source === 'direct' ? 'is-direct' : ''}><span><CheckCircleOutlined /></span><div><Text strong>{item.permission_name}</Text><Text type="secondary">{item.permission_code}</Text></div><Tag color={item.source === 'direct' ? 'purple' : 'green'}>{item.source === 'direct' ? 'Cấp thêm' : 'Theo nhóm'}</Tag></div>)}</div>,
-    }))} />
-  </div>;
+  );
 
-  const securityTab = <div className="personal-profile-content">
-    <div className="personal-security-hero"><span><LockOutlined /></span><div><Title level={4}>Bảo mật tài khoản</Title><Text type="secondary">Sử dụng mật khẩu riêng, đủ mạnh và không chia sẻ cho người khác.</Text></div></div>
-    <div className="personal-security-status">
-      <div><small>Đăng nhập gần nhất</small><strong>{formatDateTime(profile?.last_login_at)}</strong></div>
-      <div><small>Đổi mật khẩu gần nhất</small><strong>{formatDateTime(profile?.password_changed_at)}</strong></div>
-      <Tag color={profile?.must_change_password ? 'warning' : 'success'}>{profile?.must_change_password ? 'Cần đổi mật khẩu' : 'Tài khoản an toàn'}</Tag>
+  const permissionTab = loading ? (
+    <div className="digital-profile-loading"><Skeleton active paragraph={{ rows: 10 }} /></div>
+  ) : (
+    <div className="digital-permission-layout">
+      <div className="digital-permission-summary">
+        <div className="is-total"><span><SafetyCertificateOutlined /></span><small>Quyền thực tế</small><strong>{permissionCount}</strong><em>Tổng quyền đang có hiệu lực</em></div>
+        <div className="is-inherited"><span><CheckCircleFilled /></span><small>Theo nhóm quyền</small><strong>{inheritedCount}</strong><em>Kế thừa từ {profile?.role_name || 'vai trò'}</em></div>
+        <div className="is-extra"><span><KeyOutlined /></span><small>Quyền cấp thêm</small><strong>{extraCount}</strong><em>Cấp riêng cho tài khoản</em></div>
+        <div className="is-denied"><span><CloseOutlined /></span><small>Quyền bị từ chối</small><strong>{deniedCount}</strong><em>DENY luôn ưu tiên</em></div>
+      </div>
+      <section className="digital-profile-panel digital-permission-panel">
+        <SectionHeading icon={<SafetyCertificateOutlined />} eyebrow="MA TRẬN QUYỀN CÁ NHÂN" title="Chi tiết quyền truy cập" description="Phân biệt rõ quyền kế thừa từ nhóm và quyền được cấp riêng." />
+        {Object.keys(groupedPermissions).length ? (
+          <Collapse className="digital-permission-groups" defaultActiveKey={Object.keys(groupedPermissions).slice(0, 1)} items={Object.entries(groupedPermissions).map(([group, items]) => ({
+            key: group,
+            label: <span className="digital-permission-group-label"><b>{group}</b><Tag>{items.length} quyền</Tag></span>,
+            children: <div className="digital-permission-list">{items.map((item) => <div key={item.permission_code} className={item.source === 'direct' ? 'is-direct' : ''}><span><CheckCircleFilled /></span><div><Text strong>{item.permission_name}</Text><Text type="secondary">{item.permission_code}</Text></div><Tag color={item.source === 'direct' ? 'purple' : 'green'}>{item.source === 'direct' ? 'Cấp riêng' : 'Theo nhóm'}</Tag></div>)}</div>,
+          }))} />
+        ) : <div className="digital-profile-empty">Tài khoản chưa được cấp quyền chức năng.</div>}
+        {(profile?.denied_permissions || []).length ? (
+          <div className="digital-denied-permissions">
+            <Text strong>Quyền bị từ chối riêng</Text>
+            <div className="digital-permission-list">{profile.denied_permissions.map((item) => <div key={item.permission_code} className="is-denied"><span><CloseOutlined /></span><div><Text strong>{item.permission_name}</Text><Text type="secondary">{item.permission_code}</Text></div><Tag color="red">Từ chối</Tag></div>)}</div>
+          </div>
+        ) : null}
+      </section>
     </div>
-    <Form form={passwordForm} layout="vertical" onFinish={changePassword} className="personal-password-form">
-      <Form.Item label="Mật khẩu hiện tại" name="current_password" rules={[{ required: true, message: 'Nhập mật khẩu hiện tại' }]}><Input.Password prefix={<LockOutlined />} autoComplete="current-password" /></Form.Item>
-      <Form.Item label="Mật khẩu mới" name="new_password" rules={[{ required: true, message: 'Nhập mật khẩu mới' }, { validator: (_, value) => evaluatePassword(value).valid ? Promise.resolve() : Promise.reject(new Error('Mật khẩu chưa đáp ứng đủ yêu cầu')) }]}><Input.Password prefix={<KeyOutlined />} autoComplete="new-password" onChange={(event) => setNewPassword(event.target.value)} /></Form.Item>
-      <div className="personal-password-meter"><Progress percent={(passwordEvaluation.passed / passwordEvaluation.results.length) * 100} showInfo={false} strokeColor={passwordEvaluation.valid ? '#16805e' : '#c58a24'} /><div>{passwordEvaluation.results.map((rule) => <span className={rule.passed ? 'is-passed' : ''} key={rule.key}><CheckCircleOutlined /> {rule.label}</span>)}</div></div>
-      <Form.Item label="Xác nhận mật khẩu mới" name="confirm_password" dependencies={['new_password']} rules={[{ required: true, message: 'Xác nhận mật khẩu mới' }, ({ getFieldValue }) => ({ validator(_, value) { return !value || getFieldValue('new_password') === value ? Promise.resolve() : Promise.reject(new Error('Xác nhận mật khẩu không khớp')); } })]}><Input.Password prefix={<KeyOutlined />} /></Form.Item>
-      <Button type="primary" htmlType="submit" icon={<KeyOutlined />} loading={changingPassword}>Cập nhật mật khẩu</Button>
-    </Form>
-  </div>;
+  );
 
-  return <Drawer className="personal-profile-drawer" width={Math.min(820, window.innerWidth)} open={open} onClose={onClose} destroyOnHidden title={null}>
-    <div className="personal-profile-hero">
-      <Avatar size={88}>{(profile?.full_name || currentUser?.full_name || 'C').charAt(0)}</Avatar>
-      <div><Text>HỒ SƠ CÁ NHÂN</Text><Title level={3}>{profile?.full_name || currentUser?.full_name}</Title><Space wrap><Tag color="red">{profile?.branch_code || currentUser?.branch_code}</Tag><Tag color="blue">{profile?.role_name || currentUser?.role_name}</Tag></Space></div>
+  const securityTab = (
+    <div className="digital-security-layout">
+      <aside className="digital-security-overview">
+        <div className="digital-security-emblem"><LockOutlined /></div>
+        <small>TRUNG TÂM BẢO MẬT</small>
+        <Title level={4}>Bảo vệ tài khoản</Title>
+        <Text>Phiên đăng nhập và mật khẩu được kiểm soát tập trung để bảo vệ dữ liệu khách hàng.</Text>
+        <div className="digital-security-facts">
+          <div><span><ClockCircleOutlined /></span><p><small>Không hoạt động</small><strong>Tự đăng xuất sau 30 phút</strong></p></div>
+          <div><span><DesktopOutlined /></span><p><small>Chính sách thiết bị</small><strong>{isAdmin ? 'Cho phép nhiều phiên Admin' : 'Một phiên đăng nhập duy nhất'}</strong></p></div>
+          <div><span><CheckCircleFilled /></span><p><small>Trạng thái</small><strong>{profile?.must_change_password ? 'Cần đổi mật khẩu' : 'Đang được bảo vệ'}</strong></p></div>
+        </div>
+        <div className="digital-security-timeline">
+          <div><small>Đăng nhập gần nhất</small><strong>{formatDateTime(profile?.last_login_at)}</strong></div>
+          <div><small>Đổi mật khẩu gần nhất</small><strong>{formatDateTime(profile?.password_changed_at)}</strong></div>
+        </div>
+      </aside>
+
+      <section className="digital-profile-panel digital-password-panel">
+        <SectionHeading icon={<KeyOutlined />} eyebrow="XÁC THỰC TÀI KHOẢN" title="Thay đổi mật khẩu" description="Mật khẩu mới cần đáp ứng đầy đủ tiêu chuẩn an toàn của hệ thống." />
+        <Form form={passwordForm} layout="vertical" onFinish={changePassword} className="digital-password-form" requiredMark={false}>
+          <Form.Item label="Mật khẩu hiện tại" name="current_password" rules={[{ required: true, message: 'Nhập mật khẩu hiện tại' }]}><Input.Password prefix={<LockOutlined />} autoComplete="current-password" placeholder="Nhập mật khẩu đang sử dụng" /></Form.Item>
+          <Form.Item label="Mật khẩu mới" name="new_password" rules={[{ required: true, message: 'Nhập mật khẩu mới' }, { validator: (_, value) => evaluatePassword(value).valid ? Promise.resolve() : Promise.reject(new Error('Mật khẩu chưa đáp ứng đủ yêu cầu')) }]}><Input.Password prefix={<KeyOutlined />} autoComplete="new-password" placeholder="Tạo mật khẩu mới" onChange={(event) => setNewPassword(event.target.value)} /></Form.Item>
+          <div className="digital-password-meter">
+            <div><Text strong>Mức độ đáp ứng</Text><Text type="secondary">{passwordEvaluation.passed}/{passwordEvaluation.results.length} tiêu chí</Text></div>
+            <Progress percent={(passwordEvaluation.passed / passwordEvaluation.results.length) * 100} showInfo={false} strokeColor={passwordEvaluation.valid ? '#16805e' : '#c58a24'} />
+            <div className="digital-password-rules">{passwordEvaluation.results.map((rule) => <span className={rule.passed ? 'is-passed' : ''} key={rule.key}><CheckCircleFilled /> {rule.label}</span>)}</div>
+          </div>
+          <Form.Item label="Xác nhận mật khẩu mới" name="confirm_password" dependencies={['new_password']} rules={[{ required: true, message: 'Xác nhận mật khẩu mới' }, ({ getFieldValue }) => ({ validator(_, value) { return !value || getFieldValue('new_password') === value ? Promise.resolve() : Promise.reject(new Error('Xác nhận mật khẩu không khớp')); } })]}><Input.Password prefix={<KeyOutlined />} placeholder="Nhập lại mật khẩu mới" /></Form.Item>
+          <Button type="primary" htmlType="submit" icon={<KeyOutlined />} loading={changingPassword} block>Cập nhật mật khẩu</Button>
+        </Form>
+      </section>
     </div>
-    <Tabs className="personal-profile-tabs" items={[
-      { key: 'profile', label: <span><UserOutlined /> Thông tin</span>, children: overviewTab },
-      { key: 'permissions', label: <span><SafetyCertificateOutlined /> Phân quyền</span>, children: permissionTab },
-      { key: 'security', label: <span><LockOutlined /> Mật khẩu</span>, children: securityTab },
-    ]} />
-  </Drawer>;
+  );
+
+  return (
+    <Drawer className="digital-profile-drawer" width={Math.min(940, window.innerWidth)} open={open} onClose={onClose} destroyOnHidden title={null} closable={false}>
+      <header className="digital-profile-hero">
+        <div className="digital-profile-orbit" aria-hidden="true"><i /><i /><i /></div>
+        <button type="button" className="digital-profile-close" onClick={onClose} aria-label="Đóng hồ sơ"><CloseOutlined /></button>
+        <div className="digital-profile-person">
+          <span className="digital-profile-avatar-wrap"><Avatar>{initials(displayName)}</Avatar><i><CheckCircleFilled /></i></span>
+          <div className="digital-profile-person-copy">
+            <small><SafetyCertificateOutlined /> HỒ SƠ ĐỊNH DANH C360</small>
+            <Title level={2}>{displayName}</Title>
+            <div className="digital-profile-badges"><Tag>{profile?.branch_code || currentUser?.branch_code || 'Chưa có CN'}</Tag><Tag>{profile?.role_name || currentUser?.role_name || 'Chưa có nhóm quyền'}</Tag><span><i /> Tài khoản hoạt động</span></div>
+          </div>
+        </div>
+        <div className="digital-profile-quick-facts">
+          <div><small>Mã nhân viên</small><strong>{profile?.employee_code || currentUser?.employee_code || '—'}</strong></div>
+          <div><small>Đơn vị</small><strong>{profile?.department || currentUser?.department || 'Chưa phân công'}</strong></div>
+          <div><small>Phạm vi dữ liệu</small><strong>{scopeLabels[scope] || scope || 'Chưa cấu hình'}</strong></div>
+          <div><small>Quyền hiệu lực</small><strong>{permissionCount} quyền</strong></div>
+        </div>
+      </header>
+      <Tabs className="digital-profile-tabs" animated={{ inkBar: true, tabPane: true }} items={[
+        { key: 'profile', label: <span><UserOutlined /> Tổng quan</span>, children: overviewTab },
+        { key: 'permissions', label: <span><SafetyCertificateOutlined /> Quyền truy cập <b>{permissionCount}</b></span>, children: permissionTab },
+        { key: 'security', label: <span><LockOutlined /> Bảo mật</span>, children: securityTab },
+      ]} />
+    </Drawer>
+  );
 }

@@ -70,12 +70,14 @@ def verify_password(password: str, password_hash: str) -> bool:
         return False
 
 
-def create_access_token(user_id: int | str, auth_version: int = 1) -> str:
+def create_access_token(user_id: int | str, auth_version: int = 1, session_id: str | None = None) -> str:
     payload = {
         "sub": str(user_id),
         "ver": int(auth_version),
         "exp": int(time.time()) + max(int(settings.ACCESS_TOKEN_EXPIRE_MINUTES), 1) * 60,
     }
+    if session_id:
+        payload["sid"] = str(session_id)
     raw = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
     encoded = base64.urlsafe_b64encode(raw).rstrip(b"=")
     signature = hmac.new(settings.AUTH_SECRET.encode("utf-8"), encoded, hashlib.sha256).digest()

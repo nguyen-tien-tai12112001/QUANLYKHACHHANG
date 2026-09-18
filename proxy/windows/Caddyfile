@@ -1,0 +1,12 @@
+# Caddy runs natively on the Windows LAN server. Docker's frontend is bound
+# to 127.0.0.1:8080, so LAN clients cannot bypass this trusted edge proxy.
+:80 {
+    bind 10.8.0.119 127.0.0.1
+
+    reverse_proxy 127.0.0.1:8080 {
+        # Replace, never append, client-supplied forwarding headers.
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+}

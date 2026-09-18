@@ -15,7 +15,7 @@ if ($existing) {
 
 New-NetFirewallRule `
     -DisplayName $displayName `
-    -Description "Cho phep may trong mang 10.8.0.0/24 truy cap QUANLYKHACHHANG qua Nginx." `
+    -Description "Cho phep may trong mang 10.8.0.0/24 truy cap QUANLYKHACHHANG qua proxy Windows." `
     -Direction Inbound `
     -Action Allow `
     -Protocol TCP `

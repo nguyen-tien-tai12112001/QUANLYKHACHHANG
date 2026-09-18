@@ -54,6 +54,7 @@ import logoUrl from '../../favicon.jpg';
 import client from '../api/client';
 import { toApiBranchParams } from '../auth';
 import { scopeToProfileParams, useAnalysisScope } from './AnalysisScopeContext';
+import { useUserWorkspace } from '../workspace/UserWorkspaceContext';
 import '../demo/demo.css';
 import './c360.css';
 
@@ -1030,6 +1031,10 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
 
   useEffect(() => {
     if (open) {
+      let savedView = null;
+      try {
+        savedView = JSON.parse(localStorage.getItem(`c360_customer_view_${currentUser?.id || currentUser?.username}_${customer?.ma_kh}`) || 'null');
+      } catch { savedView = null; }
       setLoanCategory('short_term');
       setLoanBranch(null);
       setDepositCategory('demand');
@@ -1038,7 +1043,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
       setPeriodSwitchTarget(null);
       setProfileReadyPeriod(null);
       setRelationshipReadyPeriod(null);
-      setActiveTab('summary');
+      setActiveTab(savedView?.tab || 'summary');
       setHistory([]);
       setHistoryError('');
       setScopedHistory([]);
@@ -1052,8 +1057,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
       setLoanDetail(null);
       setSelectedLoanId(null);
       setAccountHistory({ open: false, loading: false, data: null, error: '', account: null });
+      window.setTimeout(() => profileScrollRef.current?.scrollTo({ top: Number(savedView?.scrollTop || 0), behavior: 'auto' }), 80);
     }
-  }, [customer?.ma_kh, initialBranchCode, open, periodKey]);
+  }, [customer?.ma_kh, currentUser?.id, currentUser?.username, initialBranchCode, open, periodKey]);
 
   useEffect(() => {
     if (!open) return;
@@ -1072,6 +1078,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     const scrollElement = profileScrollRef.current;
     preservedScrollTopRef.current = scrollElement?.scrollTop || 0;
     setActiveTab(nextTab);
+    if (customer?.ma_kh) localStorage.setItem(`c360_customer_view_${currentUser?.id || currentUser?.username}_${customer.ma_kh}`, JSON.stringify({ tab: nextTab, scrollTop: preservedScrollTopRef.current }));
     window.requestAnimationFrame(() => {
       profileScrollRef.current?.scrollTo({ top: preservedScrollTopRef.current, left: 0, behavior: 'auto' });
     });
@@ -1161,7 +1168,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
   const loanInterestIncome = Number(viewedCustomer.pf10_interest || 0);
   const serviceFeeIncome = feeFields.reduce((sum, field) => sum + Number(metricCustomer[field.key] || 0), 0);
   const periodRevenue = loanInterestIncome + serviceFeeIncome;
-  const canViewLineage = (currentUser?.permissions || []).includes('admin');
+  const canViewLineage = hasPermission(currentUser, 'admin');
+  const canCopySensitive = hasPermission(currentUser, 'customer:sensitive:copy');
+  const canViewSensitiveAccounts = hasPermission(currentUser, 'customer:sensitive:account');
   const loadLineage = async (metric) => {
     setLineage({ open: true, loading: true, metric, items: [], total: 0, record_count: 0 });
     try {
@@ -1186,6 +1195,10 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     }, 180);
   };
   const openAccountHistory = async (account) => {
+    if (depositData?.account_numbers_masked) {
+      message.warning('Bạn chưa có quyền xem đầy đủ số tài khoản và vòng đời tài khoản.');
+      return;
+    }
     if (!account?.account_number || !account?.branch_code) return;
     setAccountHistory({ open: true, loading: true, data: null, error: '', account });
     try {
@@ -1235,7 +1248,10 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
       destroyOnHidden
       className="c360-real-profile-modal"
     >
-      <div ref={profileScrollRef} className="c360-profile-scroll">
+      <div ref={profileScrollRef} className="c360-profile-scroll" onScroll={(event) => {
+        if (!customer?.ma_kh) return;
+        localStorage.setItem(`c360_customer_view_${currentUser?.id || currentUser?.username}_${customer.ma_kh}`, JSON.stringify({ tab: activeTab, scrollTop: event.currentTarget.scrollTop }));
+      }}>
       <div ref={modalAnchorRef} className="demo-quick-header c360-profile-hero">
         <Avatar size={48} className="demo-profile-avatar">{viewedCustomer.ten_kh?.charAt(0) || 'K'}</Avatar>
         <div>
@@ -1323,7 +1339,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
               : 'Chưa có dữ liệu' },
             { key: 'loanType', label: 'Loại vay', children: loanTypeLabel(viewedCustomer.loai_vay) },
             { key: 'hkdAccounts', label: 'Tài khoản hộ kinh doanh', children: viewedCustomer.hkd_tk
-              ? <Text copyable={{ text: viewedCustomer.hkd_account_numbers || '' }}>{viewedCustomer.hkd_account_numbers || 'Đã xác định CUST_TYPE 570'}</Text>
+              ? <Text copyable={canCopySensitive && canViewSensitiveAccounts ? { text: viewedCustomer.hkd_account_numbers || '' } : false}>{viewedCustomer.hkd_account_numbers || 'Đã xác định CUST_TYPE 570'}</Text>
               : 'Không ghi nhận trong kỳ' },
             { key: 'phone', label: 'Điện thoại', children: viewedCustomer.telephone || 'Chưa có dữ liệu' },
             { key: 'officer', label: 'Cán bộ quản lý', span: 2, children: officerSummary ? (
@@ -1474,6 +1490,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
                 </div>
                 <Tag color="green">{profileBranch ? `Chi nhánh ${profileBranch}` : 'Toàn khách hàng'}</Tag>
               </div>
+              {depositData.account_numbers_masked ? <Alert showIcon type="warning" message="Số tài khoản đang được che theo quyền dữ liệu nhạy cảm" description="Liên hệ quản trị viên nếu nhiệm vụ nghiệp vụ yêu cầu xem đầy đủ số tài khoản hoặc vòng đời tài khoản." /> : null}
               <Table
                 loading={depositLoading}
                 size="small"
@@ -1517,6 +1534,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
                   message={`LN01 ghi nhận dư nợ ${fullMoney(viewedCustomer.so_du_tien_vay)}, nhưng PF10 kỳ này chưa có món vay tương ứng để hiển thị chi tiết.`}
                 />
               ) : null}
+              {loanData.loan_details_masked ? <Alert showIcon type="warning" message="Số LDS và tài khoản vay đang được che theo quyền dữ liệu nhạy cảm" /> : null}
               <div className="c360-credit-cards">
                 {(loanData.categories || []).map((item) => (
                   <button
@@ -1578,8 +1596,8 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
                 rowClassName={(record) => record.id === selectedLoanId ? 'c360-selected-loan-row' : ''}
                 columns={[
                   { title: 'Chi nhánh', dataIndex: 'branch_code', width: 95, fixed: 'left' },
-                  { title: 'Số LDS (LN01)', dataIndex: 'lds_number', width: 200, fixed: 'left', render: (value) => <Text strong copyable>{value || 'Chưa ghép được LDS'}</Text> },
-                  { title: 'Tài khoản vay (PF10)', dataIndex: 'account_number', width: 180, render: (value) => <Text copyable>{value || '—'}</Text> },
+                  { title: 'Số LDS (LN01)', dataIndex: 'lds_number', width: 200, fixed: 'left', render: (value) => <Text strong copyable={canCopySensitive}>{value || 'Chưa ghép được LDS'}</Text> },
+                  { title: 'Tài khoản vay (PF10)', dataIndex: 'account_number', width: 180, render: (value) => <Text copyable={canCopySensitive}>{value || '—'}</Text> },
                   { title: 'Loại vay', dataIndex: 'loan_type_label', width: 120, render: (value, row) => <div><Text>{value}</Text><br /><Text type="secondary">{row.loan_type}</Text></div> },
                   { title: 'Trạng thái', dataIndex: 'loan_status', width: 145, render: (value) => {
                     const status = loanStatusLabels[value] || [value || '—', 'default'];
@@ -1783,9 +1801,9 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
             <div><small>Trạng thái</small><Tag color={(loanStatusLabels[loanDetail.loan_status] || ['', 'default'])[1]}>{(loanStatusLabels[loanDetail.loan_status] || [loanDetail.loan_status || '—'])[0]}</Tag></div>
           </div>
           <Descriptions bordered size="small" column={2} items={[
-            { key: 'lds', label: 'Số LDS', children: <Text strong copyable>{loanDetail.lds_number || 'Chưa ghép được LN01'}</Text> },
-            { key: 'lav', label: 'Số LAV', children: <Text copyable>{loanDetail.approval_number || 'Chưa ghép được LN01'}</Text> },
-            { key: 'account', label: 'Tài khoản vay PF10', children: <Text copyable>{loanDetail.account_number || '—'}</Text> },
+            { key: 'lds', label: 'Số LDS', children: <Text strong copyable={canCopySensitive}>{loanDetail.lds_number || 'Chưa ghép được LN01'}</Text> },
+            { key: 'lav', label: 'Số LAV', children: <Text copyable={canCopySensitive}>{loanDetail.approval_number || 'Chưa ghép được LN01'}</Text> },
+            { key: 'account', label: 'Tài khoản vay PF10', children: <Text copyable={canCopySensitive}>{loanDetail.account_number || '—'}</Text> },
             { key: 'branch', label: 'Chi nhánh', children: loanDetail.branch_code || '—' },
             { key: 'type', label: 'Loại vay', children: `${loanDetail.loan_type_label || '—'}${loanDetail.loan_type ? ` (${loanDetail.loan_type})` : ''}` },
             { key: 'ccy', label: 'Loại tiền', children: loanDetail.currency_code || 'VND' },
@@ -1860,7 +1878,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
       <Drawer width="min(1080px, 96vw)" open={lineage.open} onClose={() => setLineage((current) => ({ ...current, open: false }))} title={`Truy vết nguồn · ${{ income: 'Thu nhập trong kỳ', loan: 'Dư nợ', deposit: 'Tiền gửi CKH', casa: 'TGTT bình quân' }[lineage.metric] || lineage.metric} · KH ${viewedCustomer.ma_kh}`}>
         <Alert showIcon type="warning" message="Nội dung dành riêng cho quản trị viên" description={`Tổng ${fullMoney(lineage.total)} từ ${Number(lineage.record_count || 0).toLocaleString('vi-VN')} bản ghi nguồn. Mỗi dòng giữ tên file và ID bản ghi để kiểm tra lại.`} style={{ marginBottom: 12 }} />
         <Table loading={lineage.loading} size="small" sticky rowKey={(row) => `${row.source}-${row.source_record_id}`} dataSource={lineage.items || []} pagination={{ pageSize: 20, showSizeChanger: false }} scroll={{ x: 1100, y: 'calc(100vh - 250px)' }} columns={[
-          { title: 'Nguồn', dataIndex: 'source', width: 80, fixed: 'left', render: (value) => <Tag color="blue">{value}</Tag> }, { title: 'Chi nhánh', dataIndex: 'branch_code', width: 95 }, { title: 'Tệp nguồn', dataIndex: 'file', width: 260, ellipsis: true }, { title: 'ID bản ghi', dataIndex: 'source_record_id', width: 105 }, { title: 'Tài khoản/LDS', dataIndex: 'reference', width: 180, render: (value) => <Text copyable>{value || '—'}</Text> }, { title: 'Cột nguồn', dataIndex: 'source_column', width: 210 }, { title: 'Giá trị đóng góp', dataIndex: 'value', width: 165, align: 'right', render: displayMoney }, { title: 'Công thức', dataIndex: 'formula', width: 250 },
+          { title: 'Nguồn', dataIndex: 'source', width: 80, fixed: 'left', render: (value) => <Tag color="blue">{value}</Tag> }, { title: 'Chi nhánh', dataIndex: 'branch_code', width: 95 }, { title: 'Tệp nguồn', dataIndex: 'file', width: 260, ellipsis: true }, { title: 'ID bản ghi', dataIndex: 'source_record_id', width: 105 }, { title: 'Tài khoản/LDS', dataIndex: 'reference', width: 180, render: (value) => <Text copyable={canCopySensitive}>{value || '—'}</Text> }, { title: 'Cột nguồn', dataIndex: 'source_column', width: 210 }, { title: 'Giá trị đóng góp', dataIndex: 'value', width: 165, align: 'right', render: displayMoney }, { title: 'Công thức', dataIndex: 'formula', width: 250 },
         ]} />
       </Drawer>
       </div>
@@ -1925,6 +1943,7 @@ function PortfolioComparisonModal({ open, onClose, title, description, periodKey
 }
 
 function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) {
+  const workspace = useUserWorkspace();
   const { periodKey, branchCode, pgdCode, refreshKey, profileParams = {}, filterOptions = {}, sessionData, sessionLoading } = context;
   const [data, setData] = useState(null);
   const [insights, setInsights] = useState(null);
@@ -1940,6 +1959,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
   const [anomalyType, setAnomalyType] = useState();
   const [topChangeKeyword, setTopChangeKeyword] = useState('');
   const [topChangeBranch, setTopChangeBranch] = useState();
+  const [crossBranch, setCrossBranch] = useState();
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [blockLoading, setBlockLoading] = useState({ overview: true, deposit: true, risk: true, income: true, branches: true, alerts: true, changes: true });
@@ -2064,6 +2084,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
   }, [branchCode, context.periods, periodKey, pgdCode, profileParams, refreshKey, sessionData, sessionLoading]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { setCrossBranch(undefined); }, [JSON.stringify(profileParams)]);
 
   if (error) return <ErrorState error={error} onRetry={load} />;
   const kpis = data?.kpis || {};
@@ -2214,11 +2235,11 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
     } catch (requestError) { message.error(requestError.response?.data?.detail || 'Không xuất được Excel'); }
   };
 
-  const loadAlertPage = async (page, keyword = anomalyKeyword, type = anomalyType) => {
+  const loadAlertPage = async (page, keyword = anomalyKeyword, type = anomalyType, localBranch = crossBranch) => {
     setAlertLoading(true);
     try {
       const { data: response } = await client.get('/dashboard/insights', {
-        params: { ...profileParams, anomalies_only: true, anomaly_include_total: true, anomaly_page: page, anomaly_page_size: 12, anomaly_keyword: keyword || undefined, anomaly_type: type || undefined },
+        params: { ...profileParams, branch_code: localBranch || profileParams.branch_code, anomalies_only: true, anomaly_include_total: true, anomaly_page: page, anomaly_page_size: 12, anomaly_keyword: keyword || undefined, anomaly_type: type || undefined },
         hideGlobalLoading: true,
       });
       setInsights((current) => ({ ...current, abnormal: { ...(current?.abnormal || {}), ...(response?.abnormal || {}) } }));
@@ -2233,7 +2254,8 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
   const topChangeRows = (key) => (topChanges[key] || []).filter((row) => {
     const keyword = topChangeKeyword.trim().toLocaleLowerCase('vi-VN');
     const keywordOk = !keyword || String(row.ma_kh || '').toLocaleLowerCase('vi-VN').includes(keyword) || String(row.ten_kh || '').toLocaleLowerCase('vi-VN').includes(keyword);
-    return keywordOk && (!topChangeBranch || primaryBranchLabel(row) === topChangeBranch);
+    const effectiveBranch = topChangeBranch || crossBranch;
+    return keywordOk && (!effectiveBranch || primaryBranchLabel(row) === effectiveBranch);
   });
 
   const loadQualityIssue = async (issue, page = 1) => {
@@ -2315,6 +2337,15 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
           : creditDrillMetrics.includes(kpiDrill.metric)
             ? [branchColumn, customerColumn, moneyColumn('Tổng dư nợ', 'loan'), moneyColumn('Dự phòng', 'provision'), { title: 'Loại khách hàng', dataIndex: 'customer_type', width: 180, render: customerTypeLabel }, officerColumn]
             : [branchColumn, customerColumn, moneyColumn(kpiDrill.metric === 'casa' ? 'TGTT bình quân' : 'Tiền gửi CKH', kpiDrill.metric === 'casa' ? 'casa' : 'deposit'), { title: 'Loại khách hàng', dataIndex: 'customer_type', width: 180, render: customerTypeLabel }, officerColumn];
+  const kpiFocusFields = kpiDrill.metric === 'service'
+    ? ['Số SP/DV', 'Sản phẩm đang sử dụng', 'Cán bộ quản lý']
+    : kpiDrill.metric === 'multi_branch'
+      ? ['Chi nhánh chính', 'Các chi nhánh quan hệ', 'Cán bộ quản lý']
+      : creditDrillMetrics.includes(kpiDrill.metric)
+        ? ['Tổng dư nợ', 'Dự phòng', 'Loại khách hàng']
+        : fundingDrillMetrics.includes(kpiDrill.metric) || ['deposit', 'term_deposit', 'casa'].includes(kpiDrill.metric)
+          ? ['Cấu phần tiền gửi', 'Số tài khoản', 'Giá trị sau quy đổi']
+          : ['Tiền gửi', 'TGTT bình quân', 'Dư nợ', 'SP/DV'];
   const portfolioChartConfig = portfolioChart === 'funding' ? {
     title: 'So sánh cơ cấu nguồn vốn huy động',
     description: 'Đối chiếu từng cấu phần nguồn vốn với kỳ liền trước',
@@ -2407,7 +2438,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
         </Col>
       </Row>
       <Card title="Kết quả theo chi nhánh" className="demo-panel demo-section c360-branch-results" loading={blockLoading.branches} extra={<Space><Tooltip title="Mỗi dòng cộng đúng số liệu phát sinh tại chi nhánh; khách hàng đa chi nhánh không bị dồn toàn bộ vào chi nhánh chính."><Text type="secondary">Theo quan hệ KH–chi nhánh</Text></Tooltip>{canExport ? <Button size="small" icon={<DownloadOutlined />} onClick={() => exportDashboardTable('branches')}>Excel</Button> : null}</Space>}>
-        <Table size="small" sticky rowKey="branch_code" pagination={false} dataSource={analytics?.branches || []} scroll={{ x: 1180, y: 360 }} columns={[
+        <Table size="small" sticky rowKey="branch_code" pagination={false} dataSource={analytics?.branches || []} rowClassName="demo-clickable-row" onRow={(row) => ({ onClick: () => { setCrossBranch(row.branch_code); setTopChangeBranch(row.branch_code); setDashboardView('alerts'); loadAlertPage(1, '', undefined, row.branch_code); } })} scroll={{ x: 1180, y: 360 }} columns={[
           { title: 'Chi nhánh', dataIndex: 'branch_code', fixed: 'left', width: 120, render: (value) => <Tag color="blue">{value}</Tag> },
           { title: 'Khách hàng', dataIndex: 'customers', align: 'right', width: 130, render: (value) => Number(value || 0).toLocaleString('vi-VN') },
           { title: 'Tiền gửi CKH', dataIndex: 'deposit', align: 'right', width: 185, render: fullMoney },
@@ -2420,7 +2451,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
       </Card>
       </>}
       {dashboardView === 'alerts' && <>
-      <div className="c360-dashboard-section-title is-warning"><div><Text className="demo-eyebrow">CẦN XỬ LÝ</Text><Title level={4}>Cảnh báo và biến động cần rà soát</Title></div><Text type="secondary">Bấm khách hàng để mở hồ sơ C360</Text></div>
+      <div className="c360-dashboard-section-title is-warning"><div><Text className="demo-eyebrow">CẦN XỬ LÝ</Text><Title level={4}>Cảnh báo và biến động cần rà soát</Title></div><Space>{crossBranch ? <Tag color="processing" closable onClose={(event) => { event.preventDefault(); setCrossBranch(undefined); setTopChangeBranch(undefined); loadAlertPage(1, anomalyKeyword, anomalyType, null); }}>Cross-filter: CN {crossBranch}</Tag> : null}<Text type="secondary">Bấm khách hàng để mở hồ sơ C360</Text></Space></div>
       <Card title="Chất lượng hồ sơ khách hàng" className="demo-panel demo-section">
         <div className="c360-quality-action-grid">
           <button type="button" onClick={() => loadQualityIssue('missing_officer')}><UserOutlined /><span><Text strong>Khách hàng chưa có CBQL</Text><small>Cả mã và tên cán bộ đang trống theo nguồn đã xử lý</small></span><strong>{Number(quality.summary?.missing_officer || 0).toLocaleString('vi-VN')}</strong></button>
@@ -2446,7 +2477,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
           pagination={{ current: alertPage, pageSize: 12, total: Number(abnormal.total || 0), showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: loadAlertPage }}
           dataSource={abnormal?.items || []}
           scroll={{ x: 1180, y: 390 }}
-          onRow={(row) => ({ onClick: () => openInsightCustomer(row) })}
+          onRow={(row) => ({ onClick: () => openInsightCustomer(row), onContextMenu: (event) => workspace?.showCustomerMenu(event, row) })}
           rowClassName="demo-clickable-row"
           locale={{ emptyText: 'Không phát hiện khách hàng có biến động vượt ngưỡng trong kỳ' }}
           columns={[
@@ -2563,6 +2594,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
       </Drawer>
       <Drawer rootClassName={`c360-kpi-drill-drawer is-${kpiDrillPresentation.tone}`} width="min(1180px, 97vw)" open={kpiDrill.open} onClose={() => setKpiDrill((current) => ({ ...current, open: false }))} title={<div className="c360-kpi-drill-title"><span><TeamOutlined /></span><div><strong>{kpiDrillPresentation.title}</strong><small>{kpiDrillPresentation.subtitle} · Kỳ {periodLabel(periodKey)}</small></div></div>} extra={canExport ? <Button icon={<DownloadOutlined />} onClick={exportKpiDrilldown}>Xuất Excel</Button> : null}>
         <AppliedScopeBanner params={profileParams} total={kpiDrill.total} />
+        <div className="c360-kpi-focus"><span>Góc nhìn riêng của chỉ tiêu</span>{kpiFocusFields.map((field) => <Tag key={field}>{field}</Tag>)}</div>
         <div className="c360-kpi-drill-filters">
           <Input
             allowClear
@@ -2577,7 +2609,7 @@ function RealDashboard({ context, onOpenCustomer, onGoCustomers, currentUser }) 
           <Button icon={<ReloadOutlined />} onClick={resetKpiDrillFilters}>Xóa lọc</Button>
         </div>
         <div className="c360-kpi-drill-summary"><span><strong>{kpiDrill.total.toLocaleString('vi-VN')}</strong><small>khách hàng phù hợp</small></span>{kpiDrillPresentation.valueKind !== 'none' ? <span><strong>{kpiDrillPresentation.valueKind === 'count' ? Number(kpiDrill.totalValue || 0).toLocaleString('vi-VN') : fullMoney(kpiDrill.totalValue)}</strong><small>{kpiDrillPresentation.valueKind === 'count' ? 'lượt sản phẩm đang sử dụng' : 'tổng giá trị theo bộ lọc'}</small></span> : null}<Tag color={kpiHasLocalFilters ? 'processing' : 'success'}>{kpiHasLocalFilters ? 'Đã áp dụng bộ lọc trong bảng' : 'Đúng phạm vi chung'}</Tag></div>
-        <Table loading={{ spinning: kpiDrillLoading, tip: 'Đang truy vấn khách hàng tạo ra chỉ tiêu…' }} size="small" sticky rowKey="ma_kh" dataSource={kpiDrill.items} rowClassName="demo-clickable-row" onRow={(row) => ({ onClick: () => onOpenCustomer(context.sessionData?.profiles?.items?.find((item) => item.ma_kh === row.ma_kh) || row) })} scroll={{ x: 1240, y: 'calc(100vh - 330px)' }} pagination={{ current: kpiDrill.page, pageSize: 20, total: kpiDrill.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: (page) => loadKpiDrilldown(kpiDrill.metric, page) }} onChange={(_, __, sorter) => {
+        <Table loading={{ spinning: kpiDrillLoading, tip: 'Đang truy vấn khách hàng tạo ra chỉ tiêu…' }} size="small" sticky rowKey="ma_kh" dataSource={kpiDrill.items} rowClassName="demo-clickable-row" onRow={(row) => ({ onClick: () => onOpenCustomer(context.sessionData?.profiles?.items?.find((item) => item.ma_kh === row.ma_kh) || row), onContextMenu: (event) => workspace?.showCustomerMenu(event, row) })} scroll={{ x: 1240, y: 'calc(100vh - 330px)' }} pagination={{ current: kpiDrill.page, pageSize: 20, total: kpiDrill.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: (page) => loadKpiDrilldown(kpiDrill.metric, page) }} onChange={(_, __, sorter) => {
           const next = { sortBy: sorter?.columnKey || '', sortDir: sorter?.order === 'ascend' ? 'asc' : 'desc' };
           loadKpiDrilldown(kpiDrill.metric, 1, next);
         }} columns={kpiDrillColumns} />
@@ -2606,6 +2638,7 @@ const EMPTY_CUSTOMER_FILTERS = {
 };
 
 function RealCustomerList({ context, onOpenCustomer, currentUser }) {
+  const workspace = useUserWorkspace();
   const { periodKey, branchCode, pgdCode, refreshKey, profileParams = {}, sessionData, sessionLoading, filterOptions: sharedFilterOptions = {} } = context;
   const [keyword, setKeyword] = useState('');
   const [query, setQuery] = useState('');
@@ -2822,7 +2855,7 @@ function RealCustomerList({ context, onOpenCustomer, currentUser }) {
         ]} />
       </Card>
       <div className="c360-list-toolbar">
-        <Text type="secondary"><strong>{total.toLocaleString('vi-VN')}</strong> hồ sơ được tìm thấy</Text>
+        <Space size={14} wrap><Text type="secondary"><strong>{total.toLocaleString('vi-VN')}</strong> hồ sơ được tìm thấy</Text><Tag color="purple">Chuột phải một dòng để ghim KH</Tag></Space>
         <Select
           mode="multiple"
           maxTagCount="responsive"
@@ -2840,7 +2873,7 @@ function RealCustomerList({ context, onOpenCustomer, currentUser }) {
           dataSource={rows}
           columns={columns}
           sticky
-          onRow={(row) => ({ onClick: () => onOpenCustomer(row) })}
+          onRow={(row) => ({ onClick: () => onOpenCustomer(row), onContextMenu: (event) => workspace?.showCustomerMenu(event, row) })}
           rowClassName="demo-clickable-row"
           pagination={{
             current: page,
@@ -3148,6 +3181,7 @@ function OfficerPerformanceMap({ rows = [] }) {
 }
 
 function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
+  const workspace = useUserWorkspace();
   const { periods, periodKey, branchCode, pgdCode, refreshKey, profileParams = {}, sessionData, sessionLoading } = context;
   const [data, setData] = useState(null);
   const [insights, setInsights] = useState(null);
@@ -3567,12 +3601,13 @@ function BusinessAnalysisPage({ context, mode, onOpenCustomer, currentUser }) {
       <AppliedScopeBanner params={profileParams} total={drilldown.total} />
       {drillIsOfficer ? <div className="c360-officer-quick-filters"><span><FilterOutlined /><strong>Lọc nhanh danh mục</strong></span><Checkbox.Group value={officerQuickValues} options={[{ label: 'Có tiền gửi', value: 'hasDeposit' }, { label: 'Có tiền vay', value: 'hasLoan' }, { label: 'Có phí', value: 'hasFee' }, { label: 'Quan hệ nhiều chi nhánh', value: 'multiBranch' }]} onChange={(values) => { const filters = { hasDeposit: values.includes('hasDeposit'), hasLoan: values.includes('hasLoan'), hasFee: values.includes('hasFee'), multiBranch: values.includes('multiBranch') }; loadOfficerCustomers(officerDrill.row, filters, 1, drillKeyword); }} /></div> : null}
       <div className="c360-drill-toolbar"><Input.Search allowClear value={drillKeyword} onChange={(event) => setDrillKeyword(event.target.value)} onSearch={(value) => drillIsOfficer ? loadOfficerCustomers(officerDrill.row, officerDrill.filters, 1, value) : loadDrilldown(drilldown.metric, 1, value)} placeholder="Tìm mã hoặc tên khách hàng" /><Space direction="vertical" size={0} align="end"><Text type="secondary">{drilldown.total.toLocaleString('vi-VN')} khách hàng phù hợp</Text>{Number(drilldown.totalValue || 0) !== 0 && <Text strong>{drillIsAccountMovement ? `${Number(drilldown.totalValue || 0).toLocaleString('vi-VN')} tài khoản biến động` : drillIsService ? `${Number(drilldown.totalValue || 0).toLocaleString('vi-VN')} lượt sản phẩm đang sử dụng` : `Tổng giá trị: ${fullMoney(drilldown.totalValue)}`}</Text>}</Space></div>
-      <Table loading={drillLoading} size="small" sticky rowKey="ma_kh" dataSource={drilldown.items} onRow={(row) => ({ onClick: () => onOpenCustomer?.({ ...row, id: row.ma_kh, ma_kh: row.ma_kh, ten_kh: row.ten_kh }) })} rowClassName="demo-clickable-row" scroll={{ x: 1120, y: 'calc(100vh - 340px)' }} pagination={{ current: drilldown.page, pageSize: 20, total: drilldown.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: (nextPage) => drillIsOfficer ? loadOfficerCustomers(officerDrill.row, officerDrill.filters, nextPage, drillKeyword) : loadDrilldown(drilldown.metric, nextPage) }} columns={analysisDrillColumns} />
+      <Table loading={drillLoading} size="small" sticky rowKey="ma_kh" dataSource={drilldown.items} onRow={(row) => ({ onClick: () => onOpenCustomer?.({ ...row, id: row.ma_kh, ma_kh: row.ma_kh, ten_kh: row.ten_kh }), onContextMenu: (event) => workspace?.showCustomerMenu(event, row) })} rowClassName="demo-clickable-row" scroll={{ x: 1120, y: 'calc(100vh - 340px)' }} pagination={{ current: drilldown.page, pageSize: 20, total: drilldown.total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: (nextPage) => drillIsOfficer ? loadOfficerCustomers(officerDrill.row, officerDrill.filters, nextPage, drillKeyword) : loadDrilldown(drilldown.metric, nextPage) }} columns={analysisDrillColumns} />
     </Drawer>
   </div>;
 }
 
 function RealInsightsPage({ context, onOpenCustomer, currentUser }) {
+  const workspace = useUserWorkspace();
   const { periodKey, branchCode, pgdCode, refreshKey, profileParams = {}, sessionData, sessionLoading } = context;
   const [groups, setGroups] = useState([]);
   const [selectedGroup, setSelectedGroup] = useState('large_deposit');
@@ -3668,7 +3703,7 @@ function RealInsightsPage({ context, onOpenCustomer, currentUser }) {
           loading={loading}
           rowKey="id"
           dataSource={rows}
-          onRow={(row) => ({ onClick: () => onOpenCustomer(row) })}
+          onRow={(row) => ({ onClick: () => onOpenCustomer(row), onContextMenu: (event) => workspace?.showCustomerMenu(event, row) })}
           rowClassName="demo-clickable-row"
           pagination={{ current: page, pageSize: PAGE_SIZE, total, showSizeChanger: false, showTotal: (value) => `${value.toLocaleString('vi-VN')} khách hàng`, onChange: setPage }}
           scroll={{ x: 1180, y: 520 }}
@@ -3689,6 +3724,7 @@ function RealInsightsPage({ context, onOpenCustomer, currentUser }) {
 
 export default function C360App({ currentUser, onLogout, embedded = false, initialPage = 'dashboard' }) {
   const globalScope = useAnalysisScope();
+  const userWorkspace = useUserWorkspace();
   const [page, setPage] = useState(initialPage);
   const [collapsed, setCollapsed] = useState(false);
   const periods = globalScope?.periods || [];
@@ -3702,6 +3738,35 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
   useEffect(() => {
     setPage(initialPage);
   }, [initialPage]);
+
+  const openCustomer = useCallback((row) => {
+    const customer = {
+      ...row,
+      id: row?.id || row?.ma_kh || row?.customer_code,
+      ma_kh: row?.ma_kh || row?.customer_code,
+      ten_kh: row?.ten_kh || row?.customer_name,
+      primary_branch_code: row?.primary_branch_code || row?.branch_code,
+    };
+    if (!customer.ma_kh) return;
+    userWorkspace?.recordRecent({
+      type: 'customer', key: customer.ma_kh,
+      title: customer.ten_kh || customer.ma_kh,
+      subtitle: `Khách hàng · ${customer.ma_kh}`,
+      raw: { customer_code: customer.ma_kh, customer_name: customer.ten_kh, branch_code: customer.primary_branch_code },
+    });
+    setSelectedCustomer(customer);
+    sessionStorage.removeItem('c360_pending_customer');
+  }, [userWorkspace]);
+
+  useEffect(() => {
+    const handler = (event) => openCustomer(event.detail || {});
+    window.addEventListener('c360:open-customer', handler);
+    try {
+      const pending = JSON.parse(sessionStorage.getItem('c360_pending_customer') || 'null');
+      if (pending && periodKey) openCustomer(pending);
+    } catch { sessionStorage.removeItem('c360_pending_customer'); }
+    return () => window.removeEventListener('c360:open-customer', handler);
+  }, [openCustomer, periodKey]);
 
   // Dữ liệu nghiệp vụ chỉ được tải sau khi người dùng áp dụng bộ lọc chung trên header.
   useEffect(() => {
@@ -3723,12 +3788,12 @@ export default function C360App({ currentUser, onLogout, embedded = false, initi
     filterOptions: globalScope?.options || {},
   };
   const content = page === 'customers'
-    ? <RealCustomerList context={context} onOpenCustomer={setSelectedCustomer} currentUser={currentUser} />
+    ? <RealCustomerList context={context} onOpenCustomer={openCustomer} currentUser={currentUser} />
     : page.startsWith('analysis-')
-      ? <BusinessAnalysisPage context={context} mode={page} onOpenCustomer={setSelectedCustomer} currentUser={currentUser} />
+      ? <BusinessAnalysisPage context={context} mode={page} onOpenCustomer={openCustomer} currentUser={currentUser} />
     : page === 'insights'
-      ? <RealInsightsPage context={context} onOpenCustomer={setSelectedCustomer} currentUser={currentUser} />
-      : <RealDashboard context={context} onOpenCustomer={setSelectedCustomer} onGoCustomers={() => setPage('customers')} currentUser={currentUser} />;
+      ? <RealInsightsPage context={context} onOpenCustomer={openCustomer} currentUser={currentUser} />
+      : <RealDashboard context={context} onOpenCustomer={openCustomer} onGoCustomers={() => setPage('customers')} currentUser={currentUser} />;
 
   const workspace = (
     <>

@@ -1,5 +1,7 @@
 # Triển khai QUANLYKHACHHANG trong LAN không có Internet
 
+> Để phiên đăng nhập ghi IP thật của máy người dùng thay vì gateway Docker `172.22.0.1`, triển khai thêm proxy trên Windows theo [hướng dẫn ghi IP thật](GHI_IP_THAT_PHIEN_DANG_NHAP_LAN_WINDOWS.md). Các bước bên dưới về DNS và truy cập LAN vẫn áp dụng.
+
 ## 1. Mô hình triển khai
 
 Máy chủ Windows 11 sử dụng IP tĩnh `10.8.0.119/24`. Người dùng trong cùng mạng LAN truy cập:
@@ -15,7 +17,8 @@ Máy người dùng
     ↓ hỏi DNS TCP/UDP 53
 CoreDNS: c360.agribank.com.vn → 10.8.0.119
     ↓ HTTP cổng 80
-Nginx / Frontend Docker
+Windows Caddy (nhận IP người dùng)
+    -> Nginx / Frontend Docker trên 127.0.0.1:8080
     ↓ /api qua mạng Docker nội bộ
 Backend FastAPI
     ├─ PostgreSQL: postgres:5432

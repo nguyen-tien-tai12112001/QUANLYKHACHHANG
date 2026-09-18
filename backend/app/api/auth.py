@@ -1,16 +1,21 @@
 from datetime import datetime, timedelta, timezone
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.auth.dependencies import get_current_user
+from app.auth.permissions import expand_denied_permissions
 from app.auth.user_mapper import effective_permission_codes
 from app.auth.schemas import CurrentUser
 from app.database import get_db
-from app.models import AuditLog, SystemRole, SystemUser
-from app.security import PASSWORD_POLICY, create_access_token, hash_password, password_policy_errors, verify_password
+from app.config import settings
+from app.client_ip import request_ip
+from app.models import AuditLog, SystemRole, SystemUser, UserSession
+from app.security import PASSWORD_POLICY, create_access_token, decode_access_token, hash_password, password_policy_errors, verify_password
+from app.session_management import revoke_session, revoke_user_sessions, utc_now
 
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
@@ -19,6 +24,7 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 class LoginRequest(BaseModel):
     username: str
     password: str
+    device_id: str | None = Field(default=None, max_length=128)
 
 
 class PersonalProfilePayload(BaseModel):
@@ -83,7 +89,12 @@ def serialize_personal_profile(user: SystemUser) -> dict:
     direct_permissions = {
         item.permission.permission_code: item.permission
         for item in user.permission_grants
-        if item.permission
+        if item.permission and str(item.effect or "allow").lower() != "deny"
+    }
+    denied_permissions = {
+        item.permission.permission_code: item.permission
+        for item in user.permission_grants
+        if item.permission and str(item.effect or "allow").lower() == "deny"
     }
     effective_codes = effective_permission_codes(user)
     permission_items = []
@@ -105,6 +116,14 @@ def serialize_personal_profile(user: SystemUser) -> dict:
         "updated_at": user.updated_at.isoformat() if user.updated_at else None,
         "role_permission_codes": sorted(role_permissions),
         "extra_permission_codes": sorted(set(direct_permissions) - set(role_permissions)),
+        "denied_permission_codes": sorted(denied_permissions),
+        "effective_denied_permission_codes": sorted(expand_denied_permissions(denied_permissions)),
+        "denied_permissions": [{
+            "permission_code": code,
+            "permission_name": permission.permission_name,
+            "permission_group": permission.permission_group,
+            "source": "denied",
+        } for code, permission in sorted(denied_permissions.items())],
         "effective_permissions": permission_items,
     }
 
@@ -120,8 +139,23 @@ def audit_personal_action(db: Session, user: SystemUser, action: str, descriptio
     ))
 
 
+def is_admin_account(user: SystemUser) -> bool:
+    return bool(user.is_superuser or (user.role and user.role.role_code == "ADMIN"))
+
+
+def request_session_id(request: Request) -> str | None:
+    authorization = request.headers.get("Authorization", "")
+    _, _, token = authorization.partition(" ")
+    if not token:
+        return None
+    try:
+        return str(decode_access_token(token).get("sid") or "") or None
+    except ValueError:
+        return None
+
+
 @router.post("/login")
-def login(payload: LoginRequest, db: Session = Depends(get_db)):
+def login(payload: LoginRequest, request: Request, db: Session = Depends(get_db)):
     username = payload.username.strip()
     username_lower = username.lower()
     user = (
@@ -133,23 +167,39 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
                 SystemUser.ipcas_username == username.upper(),
             )
         )
+        .with_for_update()
         .first()
     )
-    now = datetime.now(timezone.utc)
-    if user and user.locked_until and user.locked_until > now:
+    now = utc_now()
+    if not user:
+        raise HTTPException(status_code=404, detail="Tài khoản không tồn tại trên hệ thống")
+    admin_account = is_admin_account(user)
+    if admin_account and user.locked_until:
+        user.failed_login_attempts = 0
+        user.locked_until = None
+    if user.locked_until and user.locked_until > now:
         remaining_minutes = max(1, int((user.locked_until - now).total_seconds() // 60) + 1)
         raise HTTPException(
             status_code=423,
             detail=f"Tài khoản đang tạm khóa do đăng nhập sai nhiều lần. Vui lòng thử lại sau {remaining_minutes} phút",
         )
-    if not user:
-        raise HTTPException(status_code=404, detail="Tài khoản không tồn tại trên hệ thống")
     if not user.is_active:
         raise HTTPException(
             status_code=423,
             detail="Tài khoản đã bị khóa bởi quản trị viên. Vui lòng liên hệ quản trị viên để được mở khóa",
         )
     if not verify_password(payload.password, user.password_hash):
+        if admin_account:
+            db.add(AuditLog(
+                actor_username=user.username,
+                actor_name=user.full_name,
+                action="login_failed",
+                entity_type="security",
+                entity_id=str(user.id),
+                description=f"Đăng nhập quản trị không thành công từ IP {request_ip(request) or 'không xác định'}",
+            ))
+            db.commit()
+            raise HTTPException(status_code=401, detail="Mật khẩu không chính xác")
         user.failed_login_attempts = int(user.failed_login_attempts or 0) + 1
         attempts_left = max(0, 5 - user.failed_login_attempts)
         if user.failed_login_attempts >= 5:
@@ -169,14 +219,90 @@ def login(payload: LoginRequest, db: Session = Depends(get_db)):
     user.failed_login_attempts = 0
     user.locked_until = None
     user.last_login_at = now
+    session_id = str(uuid4())
+    if not admin_account:
+        revoke_user_sessions(db, user.id, "new_login", user.username)
+    login_session = UserSession(
+        id=session_id,
+        user_id=user.id,
+        device_id=str(payload.device_id or "").strip() or None,
+        ip_address=request_ip(request, settings.TRUSTED_PROXY_HOSTNAME),
+        user_agent=str(request.headers.get("user-agent") or "")[:500] or None,
+        logged_in_at=now,
+        last_activity_at=now,
+    )
+    db.add(login_session)
+    db.add(AuditLog(
+        actor_username=user.username,
+        actor_name=user.full_name,
+        action="login",
+        entity_type="security",
+        entity_id=session_id,
+        description=f"Đăng nhập thành công từ IP {login_session.ip_address or 'không xác định'}",
+    ))
     db.commit()
     db.refresh(user)
     return {
         "user": serialize_user(user),
-        "access_token": create_access_token(user.id, user.auth_version),
+        "access_token": create_access_token(user.id, user.auth_version, session_id),
         "token_type": "bearer",
         "password_policy": PASSWORD_POLICY,
+        "session_policy": {
+            "idle_minutes": settings.SESSION_IDLE_MINUTES,
+            "warning_seconds": 120,
+            "heartbeat_seconds": 30,
+            "single_session": not admin_account,
+        },
     }
+
+
+@router.post("/session/heartbeat")
+def session_heartbeat(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session_id = request_session_id(request)
+    item = db.query(UserSession).filter(
+        UserSession.id == session_id,
+        UserSession.user_id == int(current_user.id),
+        UserSession.revoked_at.is_(None),
+    ).first()
+    if not item:
+        raise HTTPException(status_code=401, detail="Phiên đăng nhập không còn hiệu lực")
+    now = utc_now()
+    item.last_activity_at = now
+    db.commit()
+    return {
+        "status": "active",
+        "server_time": now.isoformat(),
+        "idle_minutes": settings.SESSION_IDLE_MINUTES,
+    }
+
+
+@router.post("/logout")
+def logout(
+    request: Request,
+    current_user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    session_id = request_session_id(request)
+    item = db.query(UserSession).filter(
+        UserSession.id == session_id,
+        UserSession.user_id == int(current_user.id),
+    ).first()
+    if item:
+        revoke_session(item, "logout", current_user.username)
+        db.add(AuditLog(
+            actor_username=current_user.username,
+            actor_name=current_user.display_name,
+            action="logout",
+            entity_type="security",
+            entity_id=session_id,
+            description="Người dùng chủ động đăng xuất",
+        ))
+        db.commit()
+    return {"status": "logged_out"}
 
 
 @router.get("/password-policy")
@@ -229,6 +355,7 @@ def update_personal_profile(
 @router.post("/change-password")
 def change_personal_password(
     payload: ChangePasswordPayload,
+    request: Request,
     current_user: CurrentUser = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -252,11 +379,13 @@ def change_personal_password(
     user.password_changed_at = datetime.now(timezone.utc)
     user.failed_login_attempts = 0
     user.locked_until = None
+    session_id = request_session_id(request)
+    revoke_user_sessions(db, user.id, "password_changed", user.username, except_session_id=session_id)
     audit_personal_action(db, user, "change_password", "Người dùng tự thay đổi mật khẩu")
     db.commit()
     return {
         "status": "password_changed",
         "message": "Đã thay đổi mật khẩu thành công",
-        "access_token": create_access_token(user.id, user.auth_version),
+        "access_token": create_access_token(user.id, user.auth_version, session_id),
         "user": serialize_user(user),
     }

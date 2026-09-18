@@ -71,8 +71,10 @@ services:
       ANALYSIS_CACHE_MAX_BYTES: ${ANALYSIS_CACHE_MAX_BYTES:-20000000}
       AUTH_SECRET: ${AUTH_SECRET:?AUTH_SECRET is required and must contain at least 32 characters}
       ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-240}
+      SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES:-30}
+      TRUSTED_PROXY_HOSTNAME: ${TRUSTED_PROXY_HOSTNAME:-}
     ports:
-      - "8000:8000"
+      - "${BACKEND_BIND_ADDR:-127.0.0.1}:8000:8000"
     volumes:
       - ./backend/uploads:/app/uploads
       - ./backend/exports:/app/exports
@@ -82,7 +84,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    command: ["sh", "-c", "alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-proxy-headers"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health', timeout=5)"]
       interval: 15s
@@ -98,7 +100,7 @@ services:
     container_name: qlkh_frontend
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "${FRONTEND_BIND_ADDR:-0.0.0.0}:${FRONTEND_HOST_PORT:-80}:80"
     depends_on:
       backend:
         condition: service_healthy
