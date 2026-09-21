@@ -22,6 +22,7 @@ DOCUMENTS = (
     ("04_DAC_TA_NGUON_DU_LIEU_C360", "docs/DAC_TA_NGUON_DU_LIEU_C360.md", "C360-DATA-03", "ĐẶC TẢ NGUỒN DỮ LIỆU C360", "Chủ nguồn, quản trị dữ liệu và phát triển"),
     ("05_MA_TRAN_PHAN_QUYEN_BAO_MAT_C360", "docs/MA_TRAN_PHAN_QUYEN_VA_BAO_MAT_C360.md", "C360-SEC-05", "MA TRẬN PHÂN QUYỀN VÀ BẢO MẬT C360", "Quản trị quyền và kiểm soát nội bộ"),
     ("06_KIEN_TRUC_HE_THONG_ERD_C360", "docs/KIEN_TRUC_HE_THONG_VA_ERD_C360.md", "C360-ARC-10", "KIẾN TRÚC HỆ THỐNG VÀ ERD C360", "Phát triển và quản trị kỹ thuật"),
+    ("07_TRUY_VET_CHI_TIEU_GIAO_DIEN_C360", "docs/TRUY_VET_CHI_TIEU_GIAO_DIEN_C360.md", "C360-LIN-04", "TRUY VẾT CHỈ TIÊU HIỂN THỊ TRÊN GIAO DIỆN C360", "Nghiệp vụ, kiểm soát và phát triển"),
 )
 
 

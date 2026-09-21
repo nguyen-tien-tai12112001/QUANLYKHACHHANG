@@ -2,7 +2,7 @@
 
 Tài liệu này mô tả các trường dữ liệu đang hiển thị trên Dashboard, trang Báo cáo khách hàng và modal Chi tiết khách hàng.
 
-> **Đặc tả nguồn chuẩn:** [`DAC_TA_NGUON_DU_LIEU_C360.md`](./DAC_TA_NGUON_DU_LIEU_C360.md)
+> **Lưu ý phạm vi:** tài liệu này là sổ trạng thái/mapping trường được hình thành qua nhiều phiên bản. Để tra **con số hiện đang hiển thị trên từng màn hình**, ưu tiên tài liệu chuẩn [`TRUY_VET_CHI_TIEU_GIAO_DIEN_C360.md`](./TRUY_VET_CHI_TIEU_GIAO_DIEN_C360.md). Cấu trúc file đầu vào xem tại [`DAC_TA_NGUON_DU_LIEU_C360.md`](./DAC_TA_NGUON_DU_LIEU_C360.md).
 
 Mục tiêu:
 

@@ -941,6 +941,7 @@ Khi cập nhật hệ thống, cần rà ít nhất: tên menu, quyền, bộ l�
 - [Quy trình vận hành hệ thống](QUY_TRINH_VAN_HANH_HE_THONG_C360.md)
 - [Quy trình sao lưu và khôi phục](QUY_TRINH_SAO_LUU_KHOI_PHUC_C360.md)
 - [Đặc tả nguồn dữ liệu](DAC_TA_NGUON_DU_LIEU_C360.md)
+- [Truy vết chỉ tiêu hiển thị trên giao diện](TRUY_VET_CHI_TIEU_GIAO_DIEN_C360.md)
 - [Ma trận phân quyền và bảo mật](MA_TRAN_PHAN_QUYEN_VA_BAO_MAT_C360.md)
 - [Kiến trúc hệ thống và ERD](KIEN_TRUC_HE_THONG_VA_ERD_C360.md)
 - [Báo cáo chức năng, nguồn dữ liệu và hạ tầng](BAO_CAO_CHUC_NANG_NGUON_DU_LIEU_HA_TANG_C360.md)

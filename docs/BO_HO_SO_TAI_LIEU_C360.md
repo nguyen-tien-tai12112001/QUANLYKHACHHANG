@@ -1,7 +1,7 @@
 # DANH MỤC BỘ HỒ SƠ TÀI LIỆU C360
 
 - **Mã tài liệu:** C360-REG-00
-- **Phiên bản:** 2.0
+- **Phiên bản:** 2.1
 - **Ngày cập nhật:** 21/09/2026
 
 ## 1. Nguyên tắc tổ chức
@@ -18,6 +18,7 @@ Tài liệu Markdown là nguồn duy trì. Bản Word trong `docs/word` dùng ki
 | C360-OPS-01 | `QUY_TRINH_VAN_HANH_HE_THONG_C360.md` | Vận hành máy chủ/dữ liệu | Khởi động, giám sát, job, dung lượng, sự cố |
 | C360-DBA-02 | `QUY_TRINH_SAO_LUU_KHOI_PHUC_C360.md` | Quản trị DB/hệ thống | Backup, restore, kiểm tra và diễn tập |
 | C360-DATA-03 | `DAC_TA_NGUON_DU_LIEU_C360.md` | Chủ nguồn, phát triển, vận hành dữ liệu | Tên file, cột, kiểm tra, công thức và ghép CIF |
+| C360-LIN-04 | `TRUY_VET_CHI_TIEU_GIAO_DIEN_C360.md` | Nghiệp vụ, kiểm soát, phát triển | Từng card/cột/biểu đồ lấy từ nguồn, cột và công thức nào |
 | C360-SEC-05 | `MA_TRAN_PHAN_QUYEN_VA_BAO_MAT_C360.md` | Quản trị quyền, kiểm soát | Role, scope, quyền nhạy cảm, phiên và audit |
 | C360-ARC-10 | `KIEN_TRUC_HE_THONG_VA_ERD_C360.md` | Phát triển, quản trị kỹ thuật | Kiến trúc, luồng dữ liệu, ERD và mở rộng |
 | C360-REG-00 | `BO_HO_SO_TAI_LIEU_C360.md` | Người lưu trữ/bàn giao | Danh mục và kiểm soát phiên bản tài liệu |
@@ -43,7 +44,8 @@ Các tài liệu bổ trợ không được lặp lại toàn bộ tài liệu c
 ### Người dùng
 
 1. Hướng dẫn sử dụng chi tiết.
-2. Từ điển dữ liệu khi cần hiểu trường/chỉ tiêu.
+2. Truy vết chỉ tiêu giao diện khi cần hiểu con số lấy từ đâu và tính thế nào.
+3. Từ điển dữ liệu khi cần tra trạng thái từng trường.
 
 ### Người vận hành
 
@@ -62,7 +64,8 @@ Các tài liệu bổ trợ không được lặp lại toàn bộ tài liệu c
 
 1. Kiến trúc và ERD.
 2. Đặc tả nguồn.
-3. Từ điển/mapping và tài liệu chuyên sâu liên quan.
+3. Truy vết chỉ tiêu giao diện.
+4. Từ điển/mapping và tài liệu chuyên sâu liên quan.
 
 ## 5. Kiểm soát phát hành
 
@@ -92,7 +95,8 @@ Mỗi thay đổi chức năng cần xác định tài liệu bị ảnh hưởn
 | Thay đổi | Tài liệu phải rà |
 |---|---|
 | Menu/giao diện | Hướng dẫn sử dụng |
-| Nguồn/cột/công thức | Đặc tả nguồn + từ điển |
+| Card/cột/biểu đồ/công thức hiển thị | Truy vết chỉ tiêu giao diện + hướng dẫn sử dụng |
+| Nguồn/cột/công thức | Đặc tả nguồn + truy vết chỉ tiêu + từ điển |
 | Role/quyền/scope | Ma trận phân quyền |
 | Bảng/API/cache | Kiến trúc & ERD |
 | Docker/đường dẫn/job | Quy trình vận hành |
