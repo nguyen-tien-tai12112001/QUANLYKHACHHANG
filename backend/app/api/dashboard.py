@@ -17,6 +17,7 @@ from app.auth.dependencies import get_branch_scope, get_current_user, require_an
 from app.auth.schemas import CurrentUser
 from app.database import get_db
 from app.security_audit import record_security_event
+from app.export_progress import begin_export, update_export
 from app.fee_rules import FEE_CANDIDATE_PREFIXES, FEE_CATEGORY_LABELS, FEE_CATEGORY_PREFIXES, FEE_FIELDS
 from app.analysis_cache import get_shared_analysis_cache, set_shared_analysis_cache
 from app.models import (
@@ -2336,6 +2337,7 @@ def dashboard_business_export(
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ):
+    export_task = begin_export(request, user, "Đang truy vấn danh sách phân tích")
     filters = _scope_filters(scope, filters)
     payload = dashboard_business_drilldown(
         period_key=period_key, metric=metric, detail_keyword=detail_keyword,
@@ -2344,6 +2346,7 @@ def dashboard_business_export(
         page=1, page_size=50_000,
         filters=filters, scope=scope, db=db,
     )
+    update_export(export_task, 55, f"Đã lọc {payload['total']:,} khách hàng; đang tạo Excel")
     workbook = Workbook()
     info = workbook.active
     info.title = "Thong tin"
@@ -2386,8 +2389,10 @@ def dashboard_business_export(
         cell.font = Font(bold=True, color="FFFFFF")
         cell.fill = PatternFill("solid", fgColor="8F1438")
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    for export_row in export_rows:
+    for index, export_row in enumerate(export_rows, 1):
         sheet.append(export_row)
+        if index % 1_000 == 0 or index == len(export_rows):
+            update_export(export_task, 55 + int(35 * index / max(len(export_rows), 1)), f"Đã ghi {index:,}/{len(export_rows):,} dòng")
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
     sheet.sheet_view.showGridLines = False
@@ -2402,6 +2407,7 @@ def dashboard_business_export(
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
+    update_export(export_task, 96, "Đã tạo file; đang gửi về trình duyệt")
     filename = f"phan_tich_{metric}_{period_key}.xlsx"
     record_security_event(
         request,
@@ -2419,7 +2425,10 @@ def dashboard_business_export(
             "result_total": payload.get("total", 0),
         },
     )
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Length": str(output.getbuffer().nbytes),
+    })
 
 
 @router.get("/table-export", dependencies=[Depends(require_any_permission("dashboard:export"))])
@@ -2435,6 +2444,7 @@ def dashboard_table_export(
     user: CurrentUser = Depends(get_current_user),
 ):
     """Xuất các bảng điều hành theo đúng phạm vi và bộ lọc chung."""
+    export_task = begin_export(request, user, "Đang truy vấn bảng điều hành")
     filters = _scope_filters(scope, filters)
     if dataset == "branches":
         result = dashboard_business_analytics(
@@ -2468,6 +2478,8 @@ def dashboard_table_export(
             rows.extend([[labels.get(key, key), item.get("primary_branch_code"), item.get("ma_kh"), item.get("ten_kh"), item.get("previous"), item.get("current"), item.get("change"), item.get("change_pct")] for item in items])
         title = "Top biến động trong kỳ"
 
+    update_export(export_task, 55, f"Đã lọc {len(rows):,} dòng; đang tạo Excel")
+
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Bao cao"
@@ -2484,6 +2496,8 @@ def dashboard_table_export(
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     for row_index, values in enumerate(rows, start=4):
         sheet.append(values)
+        if (row_index - 3) % 1_000 == 0 or row_index - 3 == len(rows):
+            update_export(export_task, 55 + int(35 * (row_index - 3) / max(len(rows), 1)), f"Đã ghi {row_index - 3:,}/{len(rows):,} dòng")
         if row_index % 2 == 0:
             for cell in sheet[row_index]:
                 cell.fill = PatternFill("solid", fgColor="FFF7F9")
@@ -2493,6 +2507,7 @@ def dashboard_table_export(
     for column_index, column in enumerate(sheet.columns, start=1):
         sheet.column_dimensions[get_column_letter(column_index)].width = min(max(len(str(cell.value or "")) for cell in column) + 2, 42)
     output = BytesIO(); workbook.save(output); output.seek(0)
+    update_export(export_task, 96, "Đã tạo file; đang gửi về trình duyệt")
     filename = f"c360_{dataset}_{period_key}.xlsx"
     record_security_event(
         request,
@@ -2509,7 +2524,10 @@ def dashboard_table_export(
             "row_count": len(rows),
         },
     )
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": f'attachment; filename="{filename}"'})
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
+        "Content-Disposition": f'attachment; filename="{filename}"',
+        "Content-Length": str(output.getbuffer().nbytes),
+    })
 
 
 @router.get("/insights", dependencies=[Depends(require_any_permission("dashboard:view"))])

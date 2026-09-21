@@ -26,6 +26,7 @@ from app.auth.dependencies import get_current_user, require_all_permissions, req
 from app.auth.schemas import CurrentUser
 from app.database import get_db
 from app.security_audit import record_security_event
+from app.export_progress import begin_export, update_export
 from app.models import (
     CifCustomer,
     CifCustomerIdentifier,
@@ -875,10 +876,12 @@ def export_cif_conflicts(
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ):
+    export_task = begin_export(request, user, "Đang lọc xung đột CIF")
     query = db.query(CifIdentityConflict)
     if status:
         query = query.filter(CifIdentityConflict.status == status)
     rows = query.order_by(desc(CifIdentityConflict.created_at)).all()
+    update_export(export_task, 20, f"Đã tìm thấy {len(rows):,} bản ghi; đang ghi Excel")
     workbook = Workbook()
     sheet = workbook.active
     sheet.title = "Xung dot CIF"
@@ -889,6 +892,8 @@ def export_cif_conflicts(
             ", ".join(item.full_cif_codes or []), item.status,
             str(item.details or {}), item.created_at.isoformat() if item.created_at else None,
         ])
+        if index % 500 == 0 or index == len(rows):
+            update_export(export_task, 20 + int(70 * index / max(len(rows), 1)), f"Đã ghi {index:,}/{len(rows):,} dòng")
     sheet.freeze_panes = "A2"
     sheet.auto_filter.ref = sheet.dimensions
     for column, width in zip("ABCDEFG", [8, 24, 24, 48, 18, 70, 24]):
@@ -896,6 +901,7 @@ def export_cif_conflicts(
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
+    update_export(export_task, 96, "Đã tạo file; đang gửi về trình duyệt")
     record_security_event(
         request,
         user,
@@ -905,7 +911,10 @@ def export_cif_conflicts(
         "Xuất danh sách xung đột CIF",
         {"status": status, "row_count": len(rows)},
     )
-    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={"Content-Disposition": 'attachment; filename="doi_chieu_xung_dot_cif.xlsx"'})
+    return StreamingResponse(output, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers={
+        "Content-Disposition": 'attachment; filename="doi_chieu_xung_dot_cif.xlsx"',
+        "Content-Length": str(output.getbuffer().nbytes),
+    })
 
 
 @router.post("/conflicts/{conflict_id}/resolve")

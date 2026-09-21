@@ -11,6 +11,7 @@ const responseCache = new Map();
 const inflightGets = new Map();
 let heavyAnalysisTail = Promise.resolve();
 let lastSessionEndedNotificationAt = 0;
+let exportTaskSequence = 0;
 // Một phiên lọc C360 dùng lại kết quả khi chuyển tab; bộ lọc mới/Làm mới sẽ xóa cache.
 const DEFAULT_CACHE_TTL = 5 * 60_000;
 const CACHEABLE_GET_PATHS = [
@@ -78,6 +79,25 @@ function emitLoading(delta) {
   }
 }
 
+function emitExportProgress(detail) {
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('c360:excel-export', { detail }));
+  }
+}
+
+function isExcelExport(config) {
+  return config.responseType === 'blob' && /(?:^|\/)\S*export(?:\?|$|\/|-)/i.test(String(config.url || ''));
+}
+
+function exportLabel(url) {
+  if (url.includes('/profiles/export')) return 'Danh sách khách hàng';
+  if (url.includes('/business-export')) return 'Phân tích nghiệp vụ';
+  if (url.includes('/table-export')) return 'Bảng điều hành';
+  if (url.includes('/reconciliations-export')) return 'Đối chiếu CIF';
+  if (url.includes('/conflicts-export')) return 'Xung đột CIF';
+  return 'Dữ liệu Excel';
+}
+
 client.interceptors.request.use((config) => {
   config.headers = config.headers || {};
   const setHeader = (name, value) => {
@@ -85,6 +105,29 @@ client.interceptors.request.use((config) => {
     else config.headers[name] = value;
   };
   const requestPath = String(config.url || '');
+  if (isExcelExport(config)) {
+    config.hideGlobalLoading = true;
+    config.__exportTaskId = `excel-${Date.now()}-${++exportTaskSequence}-${Math.random().toString(36).slice(2, 10).padEnd(8, '0')}`;
+    setHeader('X-Export-Task', config.__exportTaskId);
+    emitExportProgress({
+      id: config.__exportTaskId,
+      title: config.exportTitle || exportLabel(requestPath),
+      status: 'preparing',
+      percent: 0,
+      startedAt: Date.now(),
+    });
+    const previousProgress = config.onDownloadProgress;
+    config.onDownloadProgress = (event) => {
+      previousProgress?.(event);
+      const loaded = Number(event.loaded || 0);
+      const total = Number(event.total || 0);
+      emitExportProgress({
+        id: config.__exportTaskId,
+        status: 'downloading',
+        percent: total > 0 ? Math.min(99, 96 + Math.floor((loaded / total) * 3)) : 96,
+      });
+    };
+  }
   const usesLocalLoading = LOCAL_LOADING_PATHS.some((path) => requestPath.startsWith(path));
   if (!config.hideGlobalLoading && !usesLocalLoading) {
     config.__tracksGlobalLoading = true;
@@ -117,11 +160,17 @@ client.interceptors.request.use((config) => {
 client.interceptors.response.use(
   (response) => {
     if (response.config?.__tracksGlobalLoading) emitLoading(-1);
+    if (response.config?.__exportTaskId) {
+      emitExportProgress({ id: response.config.__exportTaskId, status: 'complete', percent: 100 });
+    }
     if (String(response.config?.method || 'get').toLowerCase() !== 'get') clearApiCache();
     return response;
   },
   (error) => {
     if (error.config?.__tracksGlobalLoading) emitLoading(-1);
+    if (error.config?.__exportTaskId) {
+      emitExportProgress({ id: error.config.__exportTaskId, status: 'error', message: 'Không thể tạo hoặc tải file Excel.' });
+    }
     const requestUrl = String(error.config?.url || '');
     if (error.response?.status === 401 && !requestUrl.startsWith('/auth/login')) {
       const detail = error.response?.data?.detail;

@@ -917,7 +917,6 @@ function ReconciliationPage({ data }) {
   };
 
   const exportExcel = async () => {
-    const hide = message.loading('Đang tạo file Excel đối chiếu CIF…', 0);
     try {
       const response = await client.get('/customer-processing/reconciliations-export', {
         params: {
@@ -940,8 +939,6 @@ function ReconciliationPage({ data }) {
       message.success('Đã xuất danh sách đối chiếu CIF');
     } catch (error) {
       message.error(error.response?.data?.detail || 'Không xuất được file Excel');
-    } finally {
-      hide();
     }
   };
 

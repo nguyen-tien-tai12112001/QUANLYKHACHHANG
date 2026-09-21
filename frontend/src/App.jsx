@@ -4,6 +4,7 @@ import { notification } from 'antd';
 import { AuthProvider } from './auth';
 import MainLayout, { PAGE_PERMISSIONS } from './components/MainLayout';
 import GlobalApiLoading from './components/GlobalApiLoading';
+import ExcelExportProgress from './components/ExcelExportProgress';
 import SessionGuard from './components/SessionGuard';
 import ImportData from './pages/ImportData';
 import CustomerProcessing from './pages/CustomerProcessing';
@@ -231,6 +232,7 @@ function LegacyApp() {
       <AnalysisScopeProvider currentUser={currentUser}>
         <UserWorkspaceProvider currentUser={currentUser}>
           <GlobalApiLoading />
+          <ExcelExportProgress />
           <SessionGuard currentUser={currentUser} onSessionExpired={handleSessionExpired} onLogout={handleLogout} />
           <MainLayout activeMenu={visibleMenu} onMenuChange={handleMenuChange} currentUser={currentUser} onLogout={handleLogout} onUserUpdated={handleUserUpdated}>
             {pages[visibleMenu] || pages['c360-dashboard']}

@@ -1,0 +1,46 @@
+.excel-export-progress {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 1300;
+  display: grid;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.excel-export-progress__task {
+  display: flex;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid #e7dce0;
+  border-left: 4px solid #9b1742;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 12px 34px rgba(31, 24, 42, .17);
+  color: #263247;
+}
+
+.excel-export-progress__task.is-complete { border-left-color: #16805d; }
+.excel-export-progress__task.is-error { border-left-color: #c53030; }
+.excel-export-progress__icon { color: #9b1742; font-size: 20px; line-height: 1; padding-top: 2px; }
+.is-complete .excel-export-progress__icon { color: #16805d; }
+.is-error .excel-export-progress__icon { color: #c53030; }
+.excel-export-progress__content { display: grid; gap: 3px; flex: 1; min-width: 0; }
+.excel-export-progress__content strong { font-size: 14px; }
+.excel-export-progress__title { color: #506076; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.excel-export-progress__meta { display: flex; justify-content: space-between; gap: 8px; color: #657185; font-size: 12px; }
+.excel-export-progress__meta span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.excel-export-progress__meta b { color: #7d1437; white-space: nowrap; }
+.excel-export-progress__content small { color: #7b8594; font-size: 11px; }
+.excel-export-progress__content .ant-progress { margin: 1px 0 0; line-height: 0; }
+.excel-export-progress__content .is-indeterminate .ant-progress-bg { width: 28% !important; animation: excel-export-pulse 1.5s ease-in-out infinite alternate; }
+
+@keyframes excel-export-pulse {
+  from { transform: translateX(0); }
+  to { transform: translateX(250%); }
+}
+
+@media (max-width: 600px) {
+  .excel-export-progress { right: 12px; bottom: 12px; }
+}

@@ -54,6 +54,7 @@ from app.models import (
     SystemConfigurationEntry,
 )
 from app.security_audit import record_security_event
+from app.export_progress import begin_export, update_export
 
 
 router = APIRouter(prefix="/api/customer-processing", tags=["customer-processing"])
@@ -1747,6 +1748,7 @@ def export_source_reconciliations(
     db: Session = Depends(get_db),
     user: CurrentUser = Depends(get_current_user),
 ):
+    export_task = begin_export(request, user, "Đang lọc bản ghi đối chiếu CIF")
     query = db.query(CustomerSourceReconciliation).filter(
         CustomerSourceReconciliation.period_key == period_key
     )
@@ -1773,6 +1775,7 @@ def export_source_reconciliations(
         CustomerSourceReconciliation.branch_code,
         CustomerSourceReconciliation.customer_core_code,
     ).all()
+    update_export(export_task, 20, f"Đã tìm thấy {len(rows):,} bản ghi; đang ghi Excel")
 
     workbook = Workbook()
     worksheet = workbook.active
@@ -1791,6 +1794,8 @@ def export_source_reconciliations(
             row.reviewed_by, row.reviewed_at.isoformat() if row.reviewed_at else None,
             row.created_at.isoformat() if row.created_at else None,
         ])
+        if index % 500 == 0 or index == len(rows):
+            update_export(export_task, 20 + int(70 * index / max(len(rows), 1)), f"Đã ghi {index:,}/{len(rows):,} dòng")
     worksheet.freeze_panes = "A2"
     worksheet.auto_filter.ref = worksheet.dimensions
     widths = [8, 14, 18, 34, 12, 12, 48, 25, 16, 20, 16, 24, 22, 22]
@@ -1799,6 +1804,7 @@ def export_source_reconciliations(
     output = BytesIO()
     workbook.save(output)
     output.seek(0)
+    update_export(export_task, 96, "Đã tạo file; đang gửi về trình duyệt")
     filename = f"doi_chieu_cif_{period_key}.xlsx"
     record_security_event(
         request,
@@ -1820,7 +1826,10 @@ def export_source_reconciliations(
     return StreamingResponse(
         output,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(output.getbuffer().nbytes),
+        },
     )
 
 
@@ -3558,6 +3567,7 @@ def export_profiles(
     db: Session = Depends(get_db),
 ):
     """Xuất Excel theo đúng bộ lọc báo cáo (tối đa EXPORT_MAX_ROWS dòng)."""
+    export_task = begin_export(request, user, "Đang áp dụng bộ lọc khách hàng")
     branch_code, pgd_code, officer_code = _normalize_user_data_scope(
         user, branch_code, pgd_code, officer_code
     )
@@ -3591,6 +3601,7 @@ def export_profiles(
         new_in_period=new_in_period,
     )
     total = query.count()
+    update_export(export_task, 7, f"Đã tìm thấy {total:,} khách hàng phù hợp")
     if total == 0:
         raise HTTPException(status_code=404, detail="Không có khách hàng phù hợp bộ lọc để xuất Excel")
     if total > EXPORT_MAX_ROWS:
@@ -3627,6 +3638,7 @@ def export_profiles(
     relationship_fields = {"latest_relationship_date", "latest_relationship_type", "latest_relationship_source"}
     model_field_names = [field for field in field_names if field not in relationship_fields]
     batch: list = []
+    processed = 0
     for item in query.yield_per(1_000):
         batch.append(item)
         if len(batch) >= 1_000:
@@ -3640,6 +3652,8 @@ def export_profiles(
             payloads = _enrich_latest_relationship(db, period_key, payloads, branch_code)
             for payload in payloads:
                 sheet.append([export_value(payload, field) for field in field_names])
+            processed += len(payloads)
+            update_export(export_task, 7 + int(85 * processed / total), f"Đã ghi {processed:,}/{total:,} khách hàng")
             batch = []
     if batch:
         payloads = _apply_branch_finance_to_payloads(
@@ -3652,10 +3666,13 @@ def export_profiles(
         payloads = _enrich_latest_relationship(db, period_key, payloads, branch_code)
         for payload in payloads:
             sheet.append([export_value(payload, field) for field in field_names])
+        processed += len(payloads)
+        update_export(export_task, 7 + int(85 * processed / total), f"Đã ghi {processed:,}/{total:,} khách hàng")
 
     buffer = BytesIO()
     workbook.save(buffer)
     buffer.seek(0)
+    update_export(export_task, 96, "Đã tạo file; đang gửi về trình duyệt")
     record_security_event(
         request,
         user,
@@ -3679,6 +3696,7 @@ def export_profiles(
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={
             "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(buffer.getbuffer().nbytes),
             "X-Export-Row-Count": str(total),
         },
     )

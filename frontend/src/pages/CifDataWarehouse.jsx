@@ -521,14 +521,12 @@ function ReconciliationTab() {
   }
   useEffect(() => { load(); }, [page]);
   async function exportExcel() {
-    const hide = message.loading('Đang tạo file Excel xung đột CIF…', 0);
     try {
       const response = await client.get('/cif/conflicts-export', { responseType: 'blob' });
       const url = URL.createObjectURL(response.data); const link = document.createElement('a');
       link.href = url; link.download = 'doi_chieu_xung_dot_cif.xlsx'; link.click(); URL.revokeObjectURL(url);
       message.success('Đã xuất danh sách xung đột CIF');
     } catch (error) { message.error(error.response?.data?.detail || error.message); }
-    finally { hide(); }
   }
   async function resolveConflict() {
     try {
