@@ -223,8 +223,9 @@ Kết bài bằng quyết định cụ thể cần lãnh đạo thống nhất: 
 ## Tài liệu đối chiếu trong dự án
 
 - [Báo cáo chức năng, nguồn dữ liệu và hạ tầng](BAO_CAO_CHUC_NANG_NGUON_DU_LIEU_HA_TANG_C360.md): căn cứ chính về nguồn, công thức, hiện trạng tại ngày 08/09/2026.
-- [Sổ tay quản trị hệ thống](SO_TAY_QUAN_TRI_HE_THONG_C360.md): thứ tự import CIF, nguồn kỳ, xử lý và đối chiếu.
-- [Hướng dẫn người dùng](HUONG_DAN_NGUOI_DUNG_C360.md): tên menu và cách dùng bộ lọc/hồ sơ.
+- [Quy trình vận hành hệ thống](QUY_TRINH_VAN_HANH_HE_THONG_C360.md): vận hành Docker, import, xử lý và giám sát.
+- [Hướng dẫn sử dụng chi tiết](HUONG_DAN_SU_DUNG_CHI_TIET_HE_THONG_C360.md): tên menu và cách dùng bộ lọc/hồ sơ.
+- [Đặc tả nguồn dữ liệu](DAC_TA_NGUON_DU_LIEU_C360.md): tên file, cột, kiểm tra và công thức nguồn.
 - [Bộ mã nhận diện file nguồn](../backend/app/imports/filename_parser.py) và [danh mục nguồn bắt buộc](../backend/app/customer_processing.py): quy tắc đang triển khai.
 
 > **Lưu ý bảo mật:** trước khi tải tài liệu, ảnh màn hình hoặc dữ liệu lên NotebookLM hay dịch vụ bên ngoài, cần tuân thủ quy định phê duyệt dữ liệu của đơn vị. Không tải file nguồn, thông tin định danh KH, tài khoản, mật khẩu, cấu hình bí mật hoặc báo cáo chứa dữ liệu chưa được phép chia sẻ.

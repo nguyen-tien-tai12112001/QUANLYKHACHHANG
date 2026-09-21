@@ -742,7 +742,7 @@ Từ điển cần được cập nhật khi logic, DB hoặc nguồn thay đổ
 
 # Chương 13. Quản trị hệ thống
 
-> Phần này chỉ dành cho quản trị viên hoặc tài khoản được cấp quyền cụ thể. Tham khảo thêm [Sổ tay quản trị hệ thống](SO_TAY_QUAN_TRI_HE_THONG_C360.md).
+> Phần này chỉ dành cho quản trị viên hoặc tài khoản được cấp quyền cụ thể. Tham khảo [Quy trình vận hành](QUY_TRINH_VAN_HANH_HE_THONG_C360.md) và [Ma trận phân quyền](MA_TRAN_PHAN_QUYEN_VA_BAO_MAT_C360.md).
 
 ## 13.1. Chi nhánh và phòng ban
 
@@ -938,8 +938,10 @@ Khi cập nhật hệ thống, cần rà ít nhất: tên menu, quyền, bộ l�
 ## Tài liệu liên quan
 
 - [Giới thiệu C360 phục vụ thuyết trình](GIOI_THIEU_CHUONG_TRINH_C360_CHO_THUYET_TRINH.md)
-- [Hướng dẫn nhanh cho người dùng](HUONG_DAN_NGUOI_DUNG_C360.md)
-- [Sổ tay quản trị hệ thống](SO_TAY_QUAN_TRI_HE_THONG_C360.md)
+- [Quy trình vận hành hệ thống](QUY_TRINH_VAN_HANH_HE_THONG_C360.md)
+- [Quy trình sao lưu và khôi phục](QUY_TRINH_SAO_LUU_KHOI_PHUC_C360.md)
+- [Đặc tả nguồn dữ liệu](DAC_TA_NGUON_DU_LIEU_C360.md)
+- [Ma trận phân quyền và bảo mật](MA_TRAN_PHAN_QUYEN_VA_BAO_MAT_C360.md)
+- [Kiến trúc hệ thống và ERD](KIEN_TRUC_HE_THONG_VA_ERD_C360.md)
 - [Báo cáo chức năng, nguồn dữ liệu và hạ tầng](BAO_CAO_CHUC_NANG_NGUON_DU_LIEU_HA_TANG_C360.md)
 - [Từ điển dữ liệu báo cáo](TU_DIEN_DU_LIEU_BAO_CAO.md)
-- [Trình bày nguồn số liệu và hiển thị](TRINH_BAY_NGUON_SO_LIEU_VA_HIEN_THI.md)

@@ -2,7 +2,7 @@
 
 Tài liệu này mô tả các trường dữ liệu đang hiển thị trên Dashboard, trang Báo cáo khách hàng và modal Chi tiết khách hàng.
 
-> **Tra nhanh Ctrl+F khi trình bày:** [`SO_TAY_NHAT_DU_LIEU_C360.md`](./SO_TAY_NHAT_DU_LIEU_C360.md)
+> **Đặc tả nguồn chuẩn:** [`DAC_TA_NGUON_DU_LIEU_C360.md`](./DAC_TA_NGUON_DU_LIEU_C360.md)
 
 Mục tiêu:
 

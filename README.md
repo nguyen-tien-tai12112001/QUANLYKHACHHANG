@@ -1,20 +1,24 @@
 # QUANLYKHACHHANG
 
-Tài liệu sử dụng hiện tại:
+Tài liệu chuẩn hiện tại:
 
-- [Sổ tay quản trị hệ thống C360](docs/SO_TAY_QUAN_TRI_HE_THONG_C360.md)
-- [Hướng dẫn sử dụng C360 cho người dùng](docs/HUONG_DAN_NGUOI_DUNG_C360.md)
+- [Danh mục bộ hồ sơ](docs/BO_HO_SO_TAI_LIEU_C360.md)
+- [Hướng dẫn sử dụng chi tiết](docs/HUONG_DAN_SU_DUNG_CHI_TIET_HE_THONG_C360.md)
+- [Quy trình vận hành](docs/QUY_TRINH_VAN_HANH_HE_THONG_C360.md)
+- [Quy trình sao lưu và khôi phục](docs/QUY_TRINH_SAO_LUU_KHOI_PHUC_C360.md)
+- [Đặc tả nguồn dữ liệu](docs/DAC_TA_NGUON_DU_LIEU_C360.md)
+- [Ma trận phân quyền và bảo mật](docs/MA_TRAN_PHAN_QUYEN_VA_BAO_MAT_C360.md)
+- [Kiến trúc hệ thống và ERD](docs/KIEN_TRUC_HE_THONG_VA_ERD_C360.md)
 
 Bộ Word lưu hồ sơ (bìa, trang kiểm soát, mục lục, số trang và ô ký xác nhận):
 
 - [Danh mục bộ hồ sơ](docs/word/00_DANH_MUC_BO_HO_SO_C360.docx)
-- [Sổ tay quản trị](docs/word/01_SO_TAY_QUAN_TRI_HE_THONG_C360.docx)
-- [Hướng dẫn người dùng](docs/word/02_HUONG_DAN_NGUOI_DUNG_C360.docx)
+- Các bản Word được tạo từ bộ Markdown chuẩn bằng `python tools/build_word_manuals.py`.
 
 Hệ thống quản lý, import, xử lý và báo cáo dữ liệu khách hàng.
 
-Hướng dẫn triển khai chi tiết trên máy khác:
-[docs/TRIEN_KHAI_DOCKER_MAY_KHAC.md](docs/TRIEN_KHAI_DOCKER_MAY_KHAC.md)
+Hướng dẫn triển khai máy chủ LAN offline:
+[docs/TRIEN_KHAI_DOCKER_LAN_OFFLINE_WINDOWS.md](docs/TRIEN_KHAI_DOCKER_LAN_OFFLINE_WINDOWS.md)
 
 Hướng dẫn CI/CD lên máy chủ Windows 11 bằng GitHub Actions và GHCR:
 [docs/TRIEN_KHAI_CICD_WINDOWS.md](docs/TRIEN_KHAI_CICD_WINDOWS.md)

@@ -1,40 +1,99 @@
-# Danh mục bộ hồ sơ tài liệu C360
+# DANH MỤC BỘ HỒ SƠ TÀI LIỆU C360
 
-## 1. Mục đích và phạm vi
+- **Mã tài liệu:** C360-REG-00
+- **Phiên bản:** 2.0
+- **Ngày cập nhật:** 21/09/2026
 
-Bộ hồ sơ dùng để lưu trữ, bàn giao và tra cứu cách vận hành hệ thống quản lý khách hàng C360. Nội dung được lập theo mã nguồn/giao diện tại thời điểm 17/09/2026; số liệu kinh doanh, mật khẩu và dữ liệu khách hàng thật không nằm trong bộ hồ sơ này.
+## 1. Nguyên tắc tổ chức
 
-Tài liệu mô tả cách sử dụng hệ thống hiện tại, không phải văn bản phê duyệt chính sách nghiệp vụ, phân quyền hoặc công bố số liệu. Các ô người biên soạn, kiểm tra, phê duyệt và ngày ký trong bản Word để trống để đơn vị tự xác nhận.
+Bộ tài liệu được tinh gọn theo nguyên tắc **một chủ đề – một tài liệu chuẩn**. Tài liệu cập nhật cũ, hướng dẫn ngắn hoặc bản tổng quan trùng nội dung đã được loại bỏ. Các tài liệu chuyên sâu chỉ được giữ khi có phạm vi riêng và còn phù hợp với mã nguồn hiện tại.
 
-## 2. Danh mục tài liệu bàn giao
+Tài liệu Markdown là nguồn duy trì. Bản Word trong `docs/word` dùng kiểm tra, ký và lưu hồ sơ; phải được tạo lại sau khi Markdown thay đổi.
 
-| Mã tài liệu | Tên tài liệu | Đối tượng sử dụng | Nội dung chính |
+## 2. Bộ tài liệu chuẩn bắt buộc
+
+| Mã | Tài liệu | Đối tượng | Nội dung |
 |---|---|---|---|
-| C360-ADM-01 | Sổ tay quản trị hệ thống C360 | Quản trị ứng dụng, quản trị dữ liệu, vận hành máy chủ | Hạ tầng; tài khoản và phân quyền; CIF; kho nguồn; xử lý kỳ; đối chiếu; nhật ký; sự cố |
-| C360-USR-02 | Hướng dẫn sử dụng C360 cho người dùng | Cán bộ, lãnh đạo đơn vị, người xem báo cáo | Đăng nhập; bộ lọc; Dashboard; hồ sơ KH; phân tích; ghim; xuất dữ liệu; xử lý lỗi thường gặp |
-| C360-REG-00 | Danh mục bộ hồ sơ tài liệu C360 | Người lưu trữ/bàn giao hồ sơ | Danh mục, thứ tự lưu, kiểm tra tiếp nhận và quản lý phiên bản |
+| C360-USR-01 | `HUONG_DAN_SU_DUNG_CHI_TIET_HE_THONG_C360.md` | Người dùng, lãnh đạo, vận hành | Hướng dẫn từ đăng nhập đến từng màn hình |
+| C360-OPS-01 | `QUY_TRINH_VAN_HANH_HE_THONG_C360.md` | Vận hành máy chủ/dữ liệu | Khởi động, giám sát, job, dung lượng, sự cố |
+| C360-DBA-02 | `QUY_TRINH_SAO_LUU_KHOI_PHUC_C360.md` | Quản trị DB/hệ thống | Backup, restore, kiểm tra và diễn tập |
+| C360-DATA-03 | `DAC_TA_NGUON_DU_LIEU_C360.md` | Chủ nguồn, phát triển, vận hành dữ liệu | Tên file, cột, kiểm tra, công thức và ghép CIF |
+| C360-SEC-05 | `MA_TRAN_PHAN_QUYEN_VA_BAO_MAT_C360.md` | Quản trị quyền, kiểm soát | Role, scope, quyền nhạy cảm, phiên và audit |
+| C360-ARC-10 | `KIEN_TRUC_HE_THONG_VA_ERD_C360.md` | Phát triển, quản trị kỹ thuật | Kiến trúc, luồng dữ liệu, ERD và mở rộng |
+| C360-REG-00 | `BO_HO_SO_TAI_LIEU_C360.md` | Người lưu trữ/bàn giao | Danh mục và kiểm soát phiên bản tài liệu |
 
-Các tài liệu Markdown cùng tên trong thư mục `docs` là nguồn để cập nhật nội dung; các file `.docx` trong `docs/word` là bản Word để kiểm tra, ký xác nhận và lưu hồ sơ. Khi giao diện hoặc logic thay đổi, cần cập nhật nguồn và xuất lại bản Word, không sửa riêng một bản mà bỏ quên bản còn lại.
+## 3. Tài liệu nghiệp vụ và triển khai bổ trợ
 
-## 3. Thứ tự đọc và tra cứu
+| Tài liệu | Phạm vi riêng |
+|---|---|
+| `GIOI_THIEU_CHUONG_TRINH_C360_CHO_THUYET_TRINH.md` | Nội dung giới thiệu và tạo slide/NotebookLM |
+| `BAO_CAO_CHUC_NANG_NGUON_DU_LIEU_HA_TANG_C360.md` | Báo cáo hiện trạng cho lãnh đạo |
+| `TU_DIEN_DU_LIEU_BAO_CAO.md` | Trạng thái và mapping từng trường báo cáo |
+| `PHAN_TICH_VA_THIET_KE_NGUON_PF10.md` | Đặc tả chuyên sâu PF10 |
+| `DOI_CHIEU_CAN_BO_PHU_TRACH_THEO_USER_DB.md` | Quy tắc đối chiếu cán bộ |
+| `TINH_DIEM_NOI_GIAO_DICH_CHINH_KHACH_HANG.md` | Quy tắc chọn chi nhánh/nơi giao dịch chính |
+| `TRIEN_KHAI_DOCKER_LAN_OFFLINE_WINDOWS.md` | Cài đặt máy chủ LAN offline |
+| `TRIEN_KHAI_CICD_WINDOWS.md` | CI/CD Windows qua GitHub/GHCR |
+| `GHI_IP_THAT_PHIEN_DANG_NHAP_LAN_WINDOWS.md` | Reverse proxy và ghi IP máy trạm |
 
-1. Người quản trị đọc **Sổ tay quản trị** từ mô hình hệ thống đến checklist bàn giao kỳ, sau đó dùng tài liệu triển khai LAN/CI-CD khi thao tác máy chủ.
-2. Người dùng đọc **Hướng dẫn sử dụng** theo thứ tự: đăng nhập → chọn phạm vi → tra cứu số liệu → mở hồ sơ KH → xử lý tình huống phát sinh.
-3. Khi cần giải thích công thức/cột nguồn, tra **Từ điển số liệu** và **Trình bày nguồn số liệu** trong `docs`. Không sử dụng tài liệu cũ còn mô tả DP01 là tập khách hàng nền để giải thích phiên bản hiện tại.
+Các tài liệu bổ trợ không được lặp lại toàn bộ tài liệu chuẩn; khi có xung đột, tài liệu chuẩn mới hơn và mã nguồn đang chạy là căn cứ.
 
-## 4. Kiểm tra trước khi lưu hồ sơ
+## 4. Thứ tự đọc
 
-- [ ] Mã tài liệu, tên tài liệu, phiên bản và ngày phát hành thống nhất giữa danh mục và từng bản Word.
-- [ ] Nội dung đã được người phụ trách nghiệp vụ và quản trị hệ thống kiểm tra theo phiên bản phần mềm đang chạy.
-- [ ] Mục lục Word đã được cập nhật; số trang và bảng không tràn, không mất chữ.
-- [ ] Đường dẫn đến các tài liệu liên quan còn tồn tại; tài liệu triển khai tương ứng môi trường đang dùng.
-- [ ] Không có mật khẩu, token, file dữ liệu khách hàng, ảnh CCCD hoặc bản backup DB trong bộ hồ sơ.
-- [ ] Chữ ký/ngày ký được bổ sung bởi đúng người có thẩm quyền của đơn vị.
+### Người dùng
 
-## 5. Quản lý thay đổi và lưu trữ
+1. Hướng dẫn sử dụng chi tiết.
+2. Từ điển dữ liệu khi cần hiểu trường/chỉ tiêu.
 
-Mỗi lần phát hành mới cần ghi phiên bản, ngày, nội dung thay đổi, người biên soạn và người phê duyệt. Giữ bản đã ký của phiên bản trước để đối chiếu; đặt tên file có mã tài liệu và phiên bản rõ ràng. Lưu ở nơi nội bộ có phân quyền, có backup. Không đưa bản đã điền thông tin phê duyệt hoặc tài liệu chứa dữ liệu nhạy cảm lên kho Git công khai.
+### Người vận hành
 
-Các cập nhật ưu tiên kiểm tra lại sau mỗi lần thay đổi phần mềm: danh sách nguồn bắt buộc; tập khách hàng nền CIF; công thức KPI; quy tắc phân quyền/phạm vi; thứ tự thao tác import–xử lý; tên menu/nút; cấu hình máy chủ và quy trình backup.
+1. Quy trình vận hành.
+2. Quy trình sao lưu–khôi phục.
+3. Đặc tả nguồn dữ liệu.
+4. Hướng dẫn triển khai LAN hoặc CI/CD theo môi trường.
 
-Để tạo lại DOCX từ nguồn Markdown tại thư mục gốc dự án, chạy `python tools/build_word_manuals.py`. Sau đó mở từng file bằng Microsoft Word, nhấn `Ctrl+A`, `F9` để cập nhật mục lục/số trang và lưu lại. Cần kiểm tra bản in xem bảng và chữ có tràn trang hay không trước khi ký.
+### Người quản trị quyền/kiểm soát
+
+1. Ma trận phân quyền và bảo mật.
+2. Hướng dẫn sử dụng phần quản trị hệ thống.
+3. Nhật ký và biên bản phê duyệt nội bộ.
+
+### Nhóm phát triển
+
+1. Kiến trúc và ERD.
+2. Đặc tả nguồn.
+3. Từ điển/mapping và tài liệu chuyên sâu liên quan.
+
+## 5. Kiểm soát phát hành
+
+- [ ] Tên menu, quyền và scope khớp phiên bản phần mềm.
+- [ ] Tên file, cột bắt buộc và công thức khớp importer/processor.
+- [ ] Sơ đồ/bảng trong Word không tràn trang.
+- [ ] Không có mật khẩu, token, backup, dữ liệu KH hoặc ảnh CCCD thật.
+- [ ] Người nghiệp vụ xác nhận phần công thức.
+- [ ] Người kỹ thuật xác nhận lệnh vận hành/restore.
+- [ ] Cập nhật phiên bản, ngày, người biên soạn/kiểm tra/phê duyệt.
+- [ ] Các liên kết nội bộ không bị hỏng.
+
+## 6. Tạo bộ Word
+
+Tại thư mục gốc dự án:
+
+```powershell
+python tools/build_word_manuals.py
+```
+
+Sau đó mở từng file trong `docs/word`, nhấn `Ctrl+A`, `F9`, kiểm tra mục lục, bảng, ngắt trang và điền thông tin ký xác nhận. Không sửa riêng Word mà không cập nhật Markdown nguồn.
+
+## 7. Quản lý thay đổi
+
+Mỗi thay đổi chức năng cần xác định tài liệu bị ảnh hưởng:
+
+| Thay đổi | Tài liệu phải rà |
+|---|---|
+| Menu/giao diện | Hướng dẫn sử dụng |
+| Nguồn/cột/công thức | Đặc tả nguồn + từ điển |
+| Role/quyền/scope | Ma trận phân quyền |
+| Bảng/API/cache | Kiến trúc & ERD |
+| Docker/đường dẫn/job | Quy trình vận hành |
+| DB/backup/retention | Quy trình sao lưu–khôi phục |

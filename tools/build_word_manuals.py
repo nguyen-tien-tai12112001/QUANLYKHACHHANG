@@ -10,14 +10,18 @@ from xml.sax.saxutils import escape, quoteattr
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "docs" / "word"
-DATE = "17/09/2026"
+DATE = "21/09/2026"
 W = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 R = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 
 DOCUMENTS = (
     ("00_DANH_MUC_BO_HO_SO_C360", "docs/BO_HO_SO_TAI_LIEU_C360.md", "C360-REG-00", "DANH MỤC BỘ HỒ SƠ TÀI LIỆU C360", "Người lưu trữ và bàn giao hồ sơ"),
-    ("01_SO_TAY_QUAN_TRI_HE_THONG_C360", "docs/SO_TAY_QUAN_TRI_HE_THONG_C360.md", "C360-ADM-01", "SỔ TAY QUẢN TRỊ HỆ THỐNG C360", "Quản trị viên ứng dụng và vận hành dữ liệu"),
-    ("02_HUONG_DAN_NGUOI_DUNG_C360", "docs/HUONG_DAN_NGUOI_DUNG_C360.md", "C360-USR-02", "HƯỚNG DẪN SỬ DỤNG C360", "Cán bộ, lãnh đạo đơn vị và người xem báo cáo"),
+    ("01_HUONG_DAN_SU_DUNG_CHI_TIET_C360", "docs/HUONG_DAN_SU_DUNG_CHI_TIET_HE_THONG_C360.md", "C360-USR-01", "HƯỚNG DẪN SỬ DỤNG CHI TIẾT C360", "Cán bộ, lãnh đạo đơn vị và người xem báo cáo"),
+    ("02_QUY_TRINH_VAN_HANH_C360", "docs/QUY_TRINH_VAN_HANH_HE_THONG_C360.md", "C360-OPS-01", "QUY TRÌNH VẬN HÀNH HỆ THỐNG C360", "Quản trị hệ thống và vận hành dữ liệu"),
+    ("03_QUY_TRINH_SAO_LUU_KHOI_PHUC_C360", "docs/QUY_TRINH_SAO_LUU_KHOI_PHUC_C360.md", "C360-DBA-02", "QUY TRÌNH SAO LƯU VÀ KHÔI PHỤC C360", "Quản trị hệ thống và cơ sở dữ liệu"),
+    ("04_DAC_TA_NGUON_DU_LIEU_C360", "docs/DAC_TA_NGUON_DU_LIEU_C360.md", "C360-DATA-03", "ĐẶC TẢ NGUỒN DỮ LIỆU C360", "Chủ nguồn, quản trị dữ liệu và phát triển"),
+    ("05_MA_TRAN_PHAN_QUYEN_BAO_MAT_C360", "docs/MA_TRAN_PHAN_QUYEN_VA_BAO_MAT_C360.md", "C360-SEC-05", "MA TRẬN PHÂN QUYỀN VÀ BẢO MẬT C360", "Quản trị quyền và kiểm soát nội bộ"),
+    ("06_KIEN_TRUC_HE_THONG_ERD_C360", "docs/KIEN_TRUC_HE_THONG_VA_ERD_C360.md", "C360-ARC-10", "KIẾN TRÚC HỆ THỐNG VÀ ERD C360", "Phát triển và quản trị kỹ thuật"),
 )
 
 
