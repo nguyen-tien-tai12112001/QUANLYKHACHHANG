@@ -770,7 +770,7 @@ function CustomerRelationshipMap({ data, selectedBranch, onSelectBranch, loading
   </section>;
 }
 
-function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams, currentUser, open, onClose }) {
+export function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams, currentUser, open, onClose }) {
   const modalAnchorRef = useRef(null);
   const profileScrollRef = useRef(null);
   const preservedScrollTopRef = useRef(0);
@@ -830,7 +830,7 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     const isScopedCustomer = Boolean(customer.viewing_branch_code || customer.viewing_pgd_code);
     const hasUnitDetails = Array.isArray(customer.branch_details)
       && customer.branch_details.every((detail) => Array.isArray(detail.unit_details));
-    if (viewPeriodKey === periodKey && Array.isArray(customer.branch_details) && !isScopedCustomer && hasUnitDetails) {
+    if (viewPeriodKey === periodKey && Array.isArray(customer.branch_details) && (!isScopedCustomer || customer._exact_profile) && hasUnitDetails) {
       setFullCustomer(customer);
       setProfileLoading(false);
       setProfileReadyPeriod(viewPeriodKey);
@@ -839,14 +839,13 @@ function CustomerModal({ customer, periodKey, initialBranchCode, analysisParams,
     let active = true;
     setFullCustomer(null);
     setProfileLoading(true);
-    client.get('/customer-processing/profiles', {
-      params: { period_key: viewPeriodKey, keyword: customer.ma_kh, page: 1, page_size: 10, include_units: true },
+    client.get('/customer-processing/profile', {
+      params: { period_key: viewPeriodKey, ma_kh: customer.ma_kh, include_units: true },
       hideGlobalLoading: true,
     })
       .then(({ data }) => {
         if (!active) return;
-        const items = Array.isArray(data) ? data : data?.items || [];
-        setFullCustomer(items.find((item) => item.ma_kh === customer.ma_kh) || customer);
+        setFullCustomer(data?.customer || customer);
       })
       .catch(() => { if (active) setFullCustomer(customer); })
       .finally(() => { if (active) { setProfileLoading(false); setProfileReadyPeriod(viewPeriodKey); } });

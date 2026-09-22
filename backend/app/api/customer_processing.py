@@ -1921,6 +1921,45 @@ def _enforce_customer_data_scope(
     return effective_branch
 
 
+PROFILE_QUICK_FIELDS = [
+    "id", "period_key", "period_date", "ma_kh", "ten_kh", "loai_khach_hang",
+    "branch_codes", "pgd_codes", "branch_count", "pgd_count", "dp_record_count",
+    "ten_chu_doanh_nghiep", "so_cccd", "ma_so_thue", "ngay_thanh_lap", "dia_chi",
+    "gioi_tinh", "ngay_sinh", "nghe_nghiep", "management_source", "managing_branch_code",
+    "managing_department_code", "managing_department_name", "so_du_tien_gui",
+    "doanh_so_chuyen_tien_ve_tk", "last_tktt_transaction_at", "tktt_inactive_days",
+    "tktt_activity_status", "so_du_tien_vay", "du_no_ngan_han", "du_no_ngan_han_bq",
+    "du_no_trung_dai_han", "du_no_trung_dai_han_bq", "du_no_thau_chi", "du_no_thau_chi_bq",
+    "pf10_lds_count", "pf10_interest", "pf10_accruals", "pf10_book_correction_interest",
+    "du_no_xlrr", "ds_thu_no_xlrr", "loai_vay", "so_du_tgtt_binh_quan", "thau_chi",
+    "tk_so_dep", "agribank_plus", "tin_nhan_ott", "e_banking", "sms_nhac_no_vay",
+    "sms_tien_gui", "the_ghi_no_noi_dia", "the_td_noi_dia", "the_td_quoc_te",
+    "the_td_loc_viet", "bao_lanh", "loa_bien_dong_so_du", "phat_hanh_lc", "thuho_dien",
+    "thuho_nuoc", "thuho_dt", "hkd_tk", "hkd_account_numbers", "abic_batk", "abic_bathe",
+    "ma_cb", "ten_can_bo", "officer_employee_code", "telephone", "primary_branch_code",
+    "primary_pgd_code", "primary_pgd_name", "primary_location_score", "primary_location_reason",
+    "branch_details", "processing_job_id",
+]
+
+
+def _mask_quick_profile(payload: dict, user: CurrentUser) -> dict:
+    """Apply the same sensitive-data policy as the customer list endpoint."""
+    if not _has_permission(user, "customer:sensitive:identity"):
+        payload["so_cccd"] = _mask_identifier(payload.get("so_cccd"))
+        payload["ma_so_thue"] = _mask_identifier(payload.get("ma_so_thue"))
+    if not _has_permission(user, "customer:sensitive:contact"):
+        payload["telephone"] = _mask_identifier(payload.get("telephone"), visible=3)
+        if payload.get("dia_chi"):
+            payload["dia_chi"] = "Thông tin được bảo vệ theo quyền dữ liệu nhạy cảm"
+    if not _has_permission(user, "customer:sensitive:account") and payload.get("hkd_account_numbers"):
+        payload["hkd_account_numbers"] = ", ".join(
+            _mask_identifier(account)
+            for account in str(payload["hkd_account_numbers"]).split(",")
+            if str(account).strip()
+        )
+    return payload
+
+
 @router.get("/profiles", dependencies=[Depends(require_any_permission("customer:view"))])
 def list_profiles(
     request: Request,
@@ -2133,6 +2172,98 @@ def list_profiles(
     if include_total:
         return {"items": items, "total": total, "page": page, "page_size": effective_page_size}
     return items
+
+
+@router.get("/profile", dependencies=[Depends(require_any_permission("customer:view"))])
+def get_profile(
+    request: Request,
+    ma_kh: str = Query(...),
+    period_key: str | None = None,
+    branch_code: str | None = None,
+    include_units: bool = True,
+    user: CurrentUser = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Load exactly one profile without starting or restoring a global analysis session."""
+    customer_code = str(ma_kh or "").strip()
+    if not customer_code:
+        raise HTTPException(status_code=422, detail="Mã khách hàng không hợp lệ")
+
+    effective_branch, effective_pgd, effective_officer = _normalize_user_data_scope(
+        user, branch_code, None, None
+    )
+    selected_period = str(period_key or "").strip() or None
+
+    if selected_period:
+        _enforce_customer_data_scope(
+            db, user, customer_code, period_key=selected_period, branch_code=effective_branch
+        )
+        profile = db.query(CustomerPeriodProfile).filter(
+            CustomerPeriodProfile.period_key == selected_period,
+            CustomerPeriodProfile.ma_kh == customer_code,
+        ).first()
+    elif user.can_view_all_branches() and not effective_branch:
+        profile = (
+            db.query(CustomerPeriodProfile)
+            .filter(CustomerPeriodProfile.ma_kh == customer_code)
+            .order_by(CustomerPeriodProfile.period_date.desc(), CustomerPeriodProfile.id.desc())
+            .first()
+        )
+    else:
+        profile_query = (
+            db.query(CustomerPeriodProfile)
+            .join(
+                CustomerPeriodBranchDetail,
+                and_(
+                    CustomerPeriodBranchDetail.period_key == CustomerPeriodProfile.period_key,
+                    CustomerPeriodBranchDetail.ma_kh == CustomerPeriodProfile.ma_kh,
+                ),
+            )
+            .filter(CustomerPeriodProfile.ma_kh == customer_code)
+        )
+        if effective_branch:
+            profile_query = profile_query.filter(CustomerPeriodBranchDetail.branch_code == effective_branch)
+        if effective_pgd:
+            profile_query = profile_query.filter(CustomerPeriodBranchDetail.ma_pgd == effective_pgd)
+        if effective_officer:
+            profile_query = profile_query.filter(
+                CustomerPeriodBranchDetail.officer_employee_code == effective_officer
+            )
+        profile = profile_query.order_by(
+            CustomerPeriodProfile.period_date.desc(), CustomerPeriodProfile.id.desc()
+        ).first()
+
+    if not profile:
+        detail = (
+            f"Khách hàng chưa có hồ sơ ở kỳ {selected_period} hoặc không thuộc phạm vi dữ liệu được giao"
+            if selected_period
+            else "Khách hàng chưa có hồ sơ thuộc phạm vi dữ liệu được giao"
+        )
+        raise HTTPException(status_code=404, detail=detail)
+
+    selected_period = profile.period_key
+    payload = serialize_model(profile, PROFILE_QUICK_FIELDS)
+    payload = _apply_branch_finance_to_payloads(
+        db, selected_period, effective_branch, effective_pgd, [payload]
+    )[0]
+    payload = enrich_profile_org_names(db, [payload], include_units=include_units)[0]
+    _mask_quick_profile(payload, user)
+    payload["_exact_profile"] = True
+
+    record_security_event(
+        request,
+        user,
+        "customer_profile_open",
+        "customer",
+        entity_id=customer_code,
+        description="Mở nhanh hồ sơ khách hàng",
+        metadata={
+            "period_key": selected_period,
+            "branch_code": effective_branch,
+            "source": "exact_customer_profile",
+        },
+    )
+    return {"period_key": selected_period, "customer": payload}
 
 
 @router.get("/financial-metrics", dependencies=[Depends(require_any_permission("customer:profile:view"))])

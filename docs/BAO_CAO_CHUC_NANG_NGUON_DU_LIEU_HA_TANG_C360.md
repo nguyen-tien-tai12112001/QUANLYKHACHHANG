@@ -1,8 +1,10 @@
 # BÁO CÁO CHỨC NĂNG, NGUỒN DỮ LIỆU VÀ HIỆN TRẠNG HẠ TẦNG C360
 
-**Thời điểm rà soát:** 08/09/2026  
+**Thời điểm rà soát:** 22/09/2026
 **Hệ thống:** Quản lý và phân tích khách hàng C360  
 **Phạm vi báo cáo:** Chức năng đang có, nguồn dữ liệu, cách hình thành chỉ tiêu, hiện trạng máy chủ và kiến nghị triển khai production
+
+**Căn cứ rà soát:** code nhánh `TAI`, migration đến `20260914_0037`, database và các container đang chạy trên máy hiện tại.
 
 > Tài liệu này được đối chiếu theo code, cấu trúc database và dữ liệu đang chạy tại thời điểm rà soát. Các số liệu về dung lượng và số lượng bản ghi là ảnh chụp hiện trạng, sẽ thay đổi sau mỗi lần import hoặc xử lý lại dữ liệu.
 
@@ -27,20 +29,22 @@ Giá trị chính của hệ thống:
 
 ### 1.1. Hiện trạng dữ liệu
 
-| Chỉ tiêu | Hiện trạng ngày 08/09/2026 |
+| Chỉ tiêu | Hiện trạng ngày 22/09/2026 |
 |---|---:|
 | Khách hàng trong Kho CIF | **520.532** |
-| File nguồn import thành công | **492** |
+| File nguồn import thành công | **495** |
 | Loại nguồn định kỳ đã hỗ trợ | **11** |
 | Khoảng kỳ đã import | **05/2026–08/2026** |
 | Kỳ đã xử lý thành hồ sơ C360 | **05/2026, 06/2026, 07/2026** |
 | Hồ sơ ở mỗi kỳ đã xử lý | **518.672** |
-| Kích thước PostgreSQL | **khoảng 30 GB** |
-| Thời gian xử lý một kỳ gần đây | **khoảng 18–22 phút** |
+| Kích thước PostgreSQL | **khoảng 31 GB** |
+| Thời gian xử lý kỳ gần nhất | **17,72–21,93 phút** |
+| Người dùng / nhóm quyền / quyền chi tiết | **370 / 5 / 54** |
+| File bổ sung đã đọc và sẵn sàng | **01 file Bill Payment của kỳ 06/2026** |
 
 Kho CIF hiện nhiều hơn tập hồ sơ đã xử lý **1.860 khách hàng**. Điều này cho thấy CIF đã được cập nhật sau lần xử lý gần nhất; các kỳ cần sử dụng phải chạy lại để nhận tập CIF mới theo đúng quy tắc hiện hành.
 
-> **Cảnh báo hạ tầng:** ổ C chỉ còn **7,34 GB**, ổ D chỉ còn **9,49 GB**, trong khi database đã khoảng **30 GB** và file Docker VHDX gần **47 GB** vẫn nằm trên ổ C. Đây là rủi ro cần xử lý trước khi nhập thêm nhiều kỳ hoặc đưa hệ thống vào production.
+> **Cảnh báo hạ tầng:** ổ C chỉ còn khoảng **8,00 GB**, ổ D chỉ còn khoảng **5,18 GB**, trong khi database đã khoảng **31 GB**, volume PostgreSQL khoảng **33,58 GB** và file Docker VHDX khoảng **48,63 GB** vẫn nằm trên ổ C. Mức trống hiện tại không đủ an toàn để nhập thêm một kỳ lớn, tạo backup cục bộ hoặc vận hành production.
 
 ## 2. Kiến trúc và nguyên tắc dữ liệu
 
@@ -52,6 +56,8 @@ Kho CIF hiện nhiều hơn tập hồ sơ đã xử lý **1.860 khách hàng**.
 | Backend | Python FastAPI | API, phân quyền, import, xử lý nghiệp vụ và xuất báo cáo |
 | Database | PostgreSQL 16 | Lưu CIF, dữ liệu nguồn, kết quả xử lý, cấu hình và nhật ký |
 | Cache | Redis 7 | Cache kết quả phân tích theo phiên; không phải nơi lưu dữ liệu gốc |
+| Reverse proxy | Nginx | Phục vụ frontend, proxy `/api`, giới hạn upload 500 MB và chuyển tiếp IP |
+| DNS LAN tùy chọn | CoreDNS | Trỏ `c360.agribank.com.vn` về IP nội bộ khi profile `lan-dns` được bật |
 | Triển khai | Docker Desktop/WSL2 trên Windows 11 | Chạy frontend, backend, PostgreSQL và Redis |
 | Migration | Alembic | Quản lý thay đổi cấu trúc database |
 
@@ -87,14 +93,36 @@ Kho CIF hiện nhiều hơn tập hồ sơ đã xử lý **1.860 khách hàng**.
 
 Các bộ lọc chi nhánh, phòng ban và cán bộ phải tuân theo danh mục `org_branches`, `org_departments`, `system_users`; dữ liệu “lạ” chỉ có trong file nguồn không được tự động mở rộng phạm vi truy cập.
 
+### 2.4. Nguyên tắc bảo mật và phiên truy cập
+
+Hệ thống áp dụng đồng thời ba lớp kiểm soát:
+
+1. **Quyền chức năng:** quyết định người dùng được xem màn hình, xem chi tiết, chạy xử lý, sửa cấu hình hay xuất dữ liệu.
+2. **Phạm vi dữ liệu:** giới hạn theo toàn tỉnh, chi nhánh, phòng ban hoặc khách hàng của chính cán bộ.
+3. **Quyền dữ liệu nhạy cảm:** tách riêng CCCD/MST, thông tin liên hệ, số tài khoản, giao dịch, khoản vay và quyền sao chép.
+
+Quyền hiệu lực được tính theo công thức:
+
+```text
+Quyền hiệu lực = Quyền của nhóm + Quyền ALLOW cấp riêng − Quyền DENY cấp riêng
+```
+
+`DENY` có hiệu lực ưu tiên và lan truyền theo quan hệ phụ thuộc. Ví dụ, từ chối quyền xem hồ sơ sẽ đồng thời làm mất hiệu lực các quyền xem tiền gửi, tiền vay và dữ liệu nhạy cảm phụ thuộc hồ sơ.
+
+Phiên đăng nhập được lưu tại `user_sessions`, gắn thiết bị, IP, user-agent, thời điểm đăng nhập và hoạt động cuối. Tài khoản thường chỉ duy trì một phiên; đăng nhập mới thu hồi phiên cũ. Tài khoản quản trị được phép nhiều phiên để phục vụ vận hành. Mặc định không hoạt động 30 phút sẽ bị đăng xuất, có cảnh báo trước 120 giây và heartbeat 30 giây khi người dùng còn thao tác.
+
 ## 3. Các nhóm chức năng đang có
 
 ### 3.1. Đăng nhập và hồ sơ cá nhân
 
-- Đăng nhập bằng tài khoản hệ thống, thông báo rõ tài khoản bị khóa hoặc sai thông tin.
+- Đăng nhập bằng tên tài khoản, mã nhân viên hoặc user IPCAS; thông báo riêng cho tài khoản không tồn tại, sai mật khẩu, tạm khóa và khóa bởi quản trị viên.
+- Tài khoản thường nhập sai mật khẩu 5 lần liên tiếp sẽ bị tạm khóa 15 phút; quản trị viên có thể mở khóa ngay. Tài khoản quản trị không áp dụng giới hạn số lần sai này nhưng mọi lần thất bại vẫn được ghi nhật ký.
+- Tài khoản thường chỉ được có một phiên đăng nhập; phiên cũ bị thu hồi khi đăng nhập ở máy khác. Quản trị viên có thể xem và chủ động thu hồi phiên.
+- Không hoạt động 30 phút sẽ tự đăng xuất; giao diện cảnh báo trước 120 giây và cho phép tiếp tục phiên.
+- Khi quản trị viên sửa nhóm quyền, quyền cấp riêng, phạm vi, mật khẩu hoặc khóa tài khoản, phiên hiện tại của người bị tác động bị thu hồi và phải đăng nhập lại.
 - Bắt buộc đổi mật khẩu ở lần đăng nhập đầu tiên/reset mật khẩu.
 - Cảnh báo Caps Lock, hiện/ẩn mật khẩu và trạng thái đang đăng nhập.
-- Hồ sơ cá nhân thể hiện đơn vị, phòng ban, nhóm quyền, quyền cấp thêm và phạm vi dữ liệu.
+- Hồ sơ cá nhân thể hiện đơn vị, phòng ban, nhóm quyền, quyền cấp thêm, quyền bị từ chối và phạm vi dữ liệu.
 - Người dùng có thể đổi mật khẩu; quản trị viên có thể khóa/mở khóa và reset mật khẩu.
 
 ### 3.2. Bộ lọc phạm vi phân tích dùng chung
@@ -102,8 +130,9 @@ Các bộ lọc chi nhánh, phòng ban và cán bộ phải tuân theo danh mụ
 - Bắt buộc chọn kỳ trước khi xem dữ liệu.
 - Lọc theo chi nhánh, phòng ban, cán bộ, tên/mã khách hàng, loại khách hàng, loại vay, số dư, sản phẩm và trạng thái dữ liệu.
 - Danh sách cán bộ thay đổi theo chi nhánh/phòng ban đã chọn.
-- Kết quả bộ lọc được dùng chung cho Dashboard, cảnh báo, danh sách khách hàng và các trang phân tích nghiệp vụ.
-- Redis/cache phiên giúp hạn chế truy vấn lại khi chuyển trang; đóng phiên hoặc đổi điều kiện sẽ làm mới phạm vi.
+- Kết quả bộ lọc được chuẩn bị dùng chung cho Dashboard, cảnh báo, danh sách khách hàng và các trang phân tích nghiệp vụ. Các bảng phân trang, drill-down và hồ sơ một KH chỉ truy vấn bổ sung đúng phần người dùng mở.
+- Redis cache kết quả đọc theo người dùng + phiên phân tích + đường dẫn + bộ tham số; TTL mặc định 15 phút, tối đa 20 MB cho một phản hồi. Redis lỗi thì API tự quay về PostgreSQL, không làm mất dữ liệu nghiệp vụ.
+- Đóng phiên, đăng xuất hoặc áp dụng bộ lọc mới sẽ tạo phạm vi mới; không dùng lại dữ liệu của người dùng hoặc phiên khác.
 
 ### 3.3. Dashboard điều hành
 
@@ -123,6 +152,8 @@ Các bộ lọc chi nhánh, phòng ban và cán bộ phải tuân theo danh mụ
 ### 3.5. Danh sách và hồ sơ khách hàng C360
 
 - Danh sách phân trang, tìm kiếm, sắp xếp, chọn cột và xuất dữ liệu.
+- Có thể bấm chuột phải để ghim KH cần theo dõi. Danh sách ghim lưu riêng trong database theo từng user và không mở rộng quyền xem dữ liệu.
+- Bấm KH đã ghim chỉ truy vấn đúng một mã KH; không tải toàn bộ Danh sách KH hoặc khởi tạo phiên phân tích lớn. Nếu chưa chọn kỳ, hệ thống dùng kỳ mới nhất mà user được phép xem.
 - Một hồ sơ khách hàng gồm thông tin nhận diện, quan hệ chi nhánh, cán bộ quản lý và lịch sử kỳ.
 - Tab Tiền gửi: tài khoản/sổ tiết kiệm, số dư cuối kỳ/bình quân, vòng đời và giao dịch TKTT.
 - Tab Tiền vay: tổng dư nợ, loại vay, LDS/LAV, ngày giải ngân/đáo hạn, lãi và trạng thái khoản vay.
@@ -150,11 +181,35 @@ Các bộ lọc chi nhánh, phòng ban và cán bộ phải tuân theo danh mụ
 
 ### 3.8. Quản trị hệ thống
 
-- Quản lý chi nhánh, phòng ban, người dùng, nhóm quyền và quyền cấp thêm từng người.
-- Phạm vi dữ liệu: toàn hệ thống, chi nhánh, phòng ban hoặc khách hàng thuộc cán bộ.
+- Quản lý chi nhánh, phòng ban, người dùng, nhóm quyền, quyền cấp thêm `ALLOW` và quyền từ chối `DENY` từng người.
+- Phạm vi dữ liệu: toàn hệ thống, chi nhánh, phòng ban hoặc khách hàng thuộc cán bộ; mỗi nhóm quyền có chính sách phạm vi mặc định và danh sách phạm vi được phép gán.
+- Thao tác hàng loạt tối đa 500 user/lần: cấp quyền, từ chối quyền, gỡ ngoại lệ, đổi nhóm, đổi phạm vi, khóa/mở tài khoản hoặc buộc đăng xuất. Hệ thống cho xem trước tác động và loại các cấu hình không hợp lệ trước khi áp dụng.
+- Bảo vệ quản trị: không tự thay đổi quyền/phạm vi của chính mình, không khóa siêu quản trị cuối cùng, thay đổi quyền rủi ro cao chỉ do siêu quản trị thực hiện.
 - Cấu hình mã sản phẩm/dịch vụ, tài khoản và công thức đang dùng trong nghiệp vụ.
 - Kiểm tra cấu hình người dùng sai phạm vi.
-- Nhật ký thao tác, thay đổi quyền và kiểm tra truy cập.
+- Nhật ký thao tác lưu before/after, trường thay đổi, người thực hiện, IP, mã batch và nguyên nhân thu hồi phiên.
+
+Hiện database có **370 người dùng hoạt động**, **5 nhóm quyền**, **54 quyền chi tiết** thuộc 11 nhóm nghiệp vụ. Năm nhóm quyền chuẩn gồm:
+
+| Nhóm quyền | Phạm vi mặc định | Phạm vi được phép |
+|---|---|---|
+| Quản trị hệ thống | Toàn tỉnh | Toàn tỉnh |
+| Lãnh đạo Hội sở | Toàn tỉnh | Toàn tỉnh |
+| Lãnh đạo chi nhánh loại II | Chi nhánh | Chi nhánh |
+| Lãnh đạo phòng/PGD | Phòng ban | Phòng ban |
+| Cán bộ quản lý khách hàng | Cá nhân | Cá nhân hoặc phòng ban khi được cấp |
+
+Sáu quyền dữ liệu nhạy cảm được tách riêng gồm: định danh, liên hệ, tài khoản, giao dịch, khoản vay và sao chép. Quyền truy vết công thức/con số (`customer:view_calculation_trace`) là quyền riêng, không tự động có chỉ vì người dùng xem được hồ sơ.
+
+Tại thời điểm chụp số liệu có 57 phiên đã được ghi nhận, trong đó 7 phiên chưa bị thu hồi. Đây là số động, dùng để minh họa khả năng giám sát phiên chứ không phải số người truy cập đồng thời đã được load test.
+
+### 3.9. Xuất Excel và không gian làm việc cá nhân
+
+- Các bảng nghiệp vụ trọng yếu có nút xuất Excel theo đúng bộ lọc, phạm vi dữ liệu và quyền của người đang đăng nhập.
+- File khách hàng tối thiểu có mã chi nhánh, mã KH, tên KH, loại KH, địa chỉ, điện thoại và bổ sung chỉ tiêu riêng của bảng khi có dữ liệu/quyền.
+- Xuất Excel không bật loading toàn màn hình. Tiến độ, phần trăm và thời gian xử lý hiển thị ở góc dưới bên phải; người dùng vẫn tiếp tục thao tác trên hệ thống.
+- Tiến độ được theo dõi theo mã tác vụ xuất; tối đa bốn tác vụ gần nhất được hiển thị trên giao diện.
+- “Không gian làm việc của tôi” gồm KH đã ghim và nội dung vừa xem. KH ghim lưu trong PostgreSQL; lịch sử vừa xem lưu cục bộ theo tài khoản trên trình duyệt.
 
 ## 4. Quy tắc file nguồn và độ sẵn sàng
 
@@ -202,7 +257,21 @@ Hệ thống kiểm tra ngày nào còn thiếu theo từng chi nhánh. Đây l�
 
 ### 4.6. Nguồn bắt buộc khi xử lý
 
-Logic hiện tại coi các nguồn sau là bộ chính: `DP01`, `LN01`, `CN05`, `PF10`, `PF14`, `BC06`, `BC29`, `KH02`, `FTPLN`. `RR01` và `GL02` được giám sát riêng và có thể bổ sung theo khả năng cung cấp. Hệ thống có cơ chế cho phép bỏ qua riêng FTPLN khi được người có thẩm quyền xác nhận.
+Logic hiện tại coi các nguồn sau là bộ chính: `DP01`, `LN01`, `CN05`, `PF10`, `PF14`, `BC06`, `BC29`, `KH02`, `FTPLN`. `RR01` và `GL02` được import, giám sát và khai thác nghiệp vụ nhưng chưa nằm trong `REQUIRED_FILE_TYPES` dùng để chặn nút xử lý.
+
+Mặc định, kỳ thiếu bất kỳ nguồn chính nào sẽ không được chạy. API có hai mức ngoại lệ có kiểm soát:
+
+- `allow_missing_ftpln`: chỉ cho phép thiếu FTPLN.
+- `allow_missing_sources`: cho phép xử lý kỳ chưa đủ một hoặc nhiều nguồn chính khi người có quyền `processing:run` xác nhận.
+
+Kết quả xử lý thiếu nguồn vẫn phải hiển thị trạng thái sẵn sàng và không được diễn giải trường không có nguồn thành số 0 chắc chắn.
+
+### 4.7. File CIF và file bổ sung
+
+- CIF chấp nhận `.csv`, `.xls`, `.xlsx`; một file có thể chứa nhiều chi nhánh. Mã chi nhánh được suy ra từ từng `CUSTNO`, không bắt buộc toàn file chỉ có một mã chi nhánh.
+- Import CIF trùng `CUSTNO` giữ bản ghi đầu tiên hợp lệ và bỏ qua các dòng trùng sau; bản ghi đã tồn tại nhưng thay đổi được đưa vào lịch sử/xung đột để duyệt thủ công.
+- File bổ sung cho kỳ được đăng ký trong `customer_processing_optional_files`. Dữ liệu đã đọc được chuẩn hóa vào bảng Bill Payment/Bảo lãnh/OAB trong PostgreSQL; file gốc vẫn nằm tại thư mục upload gắn volume/bind mount và phải được backup cùng database.
+- Khi xóa hoặc thay file bổ sung, hệ thống phải xóa cả bản ghi parsed liên quan theo `optional_file_id`, sau đó chạy lại kỳ để phản ánh thay đổi vào hồ sơ.
 
 ## 5. Nguồn dữ liệu và cách hình thành số liệu
 
@@ -489,13 +558,16 @@ Mỗi chi nhánh trong hồ sơ vẫn giữ cán bộ riêng; cán bộ ở chi 
 - Khi chạy xử lý KH, tất cả nguồn mới ghép với Kho CIF hiện hành.
 - Mã nguồn không khớp CIF được lưu trong `customer_source_reconciliations` kèm nguồn, chi nhánh, số dòng, giá trị và lý do.
 - Sau xử lý có kiểm tra số hồ sơ, mã trùng, liên kết CIF và tổng các chỉ tiêu tài chính trọng yếu.
+- Báo cáo chất lượng của từng job được lưu trong `customer_processing_jobs.quality_report`; lịch sử job không bị mất khi đổi tab hoặc khởi động lại giao diện.
+- Job kẹt chỉ được khôi phục khi PostgreSQL không còn query xử lý thật; job cũ được đánh dấu lỗi trước khi tạo job mới để tránh chạy trùng.
 - Đối soát phí KH02 kiểm tra phương trình:
 
 ```text
 Tổng phí ứng viên KH02 = Phí đã phân loại + Phí chưa phân loại
 ```
 
-- Chạy lại một kỳ sẽ tạo lại kết quả của kỳ đó, không cộng nối lên kết quả cũ.
+- Chạy lại một kỳ sẽ xóa kết quả tổng hợp cũ của đúng kỳ rồi tái tạo theo từng bước, không cộng nối lên kết quả cũ. Dữ liệu nguồn đã import vẫn được giữ nguyên. Hiện các bước có `commit` trung gian, vì vậy nếu job lỗi sau bước xóa thì kỳ có thể tạm thời chưa có hoặc chưa đủ kết quả cho đến khi chạy lại thành công.
+- Cache Redis và cache trình duyệt chỉ là lớp tăng tốc; không phải nguồn số liệu và có thể xóa/restart mà không làm mất dữ liệu nghiệp vụ.
 
 ## 8. Hiện trạng nguồn theo kỳ
 
@@ -506,19 +578,20 @@ Số file thành công hiện có:
 | 05/2026 | 7 | 7 | 7 | 7 | 7 | 0 | 7 | 7 | 0 | 7 | 16 |
 | 06/2026 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 210 | 7 | 15 |
 | 07/2026 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 7 | 0 | 7 | 16 |
-| 08/2026 | 7 | 7 | 7 | 7 | 4 | 0 | 7 | 7 | 0 | 7 | 0 |
+| 08/2026 | 7 | 7 | 7 | 7 | 7 | 0 | 7 | 7 | 0 | 7 | 0 |
 
 Nhận xét:
 
 - Tháng 06/2026 là kỳ đầy đủ nhất, gồm 210 file FTPLN tương ứng 30 ngày × 7 chi nhánh.
 - Tháng 05/2026 thiếu BC06 và FTPLN.
 - Tháng 07/2026 thiếu FTPLN.
-- Tháng 08/2026 hiện thiếu 3 chi nhánh CN05, toàn bộ BC06, FTPLN và GL02; chưa có hồ sơ C360 đã xử lý.
+- Tháng 08/2026 đã đủ 7 chi nhánh đối với DP01, LN01, CN05, PF10, PF14, BC29, KH02 và RR01; còn thiếu toàn bộ BC06, FTPLN và GL02, đồng thời chưa có hồ sơ C360 đã xử lý.
+- Tổng số file trạng thái `success` hiện là **495**. Lịch sử xử lý có 24 job thành công và 7 job lỗi; ba kết quả hiện hành gần nhất mất khoảng 17,72 phút (07/2026), 21,93 phút (06/2026) và 21,41 phút (05/2026).
 - Khi báo cáo lãnh đạo phải gắn nhãn độ sẵn sàng của kỳ, tránh so sánh trực tiếp hai kỳ có phạm vi nguồn khác nhau.
 
 ## 9. Hiện trạng và điểm yếu máy chủ
 
-### 9.1. Cấu hình đo tại ngày 08/09/2026
+### 9.1. Cấu hình đo tại ngày 22/09/2026
 
 | Thành phần | Hiện trạng |
 |---|---|
@@ -526,11 +599,13 @@ Nhận xét:
 | CPU | Intel Core i7-8550U, 4 nhân/8 luồng, 1,80 GHz cơ bản |
 | RAM vật lý | 15,8 GB |
 | Tài nguyên Docker | 8 CPU logic, khoảng 8 GB RAM |
-| Ổ C | 157,86 GB, còn **7,34 GB (4,7%)** |
-| Ổ D | 78,09 GB, còn **9,49 GB (12,1%)** |
-| Docker VHDX | `C:\Users\Administrator\AppData\Local\Docker\wsl\disk\docker_data.vhdx`, khoảng **46,98 GB** |
-| Docker volumes | khoảng **37,2 GB** |
-| PostgreSQL | khoảng **30 GB** |
+| Ổ C | 157,86 GB, còn **8,00 GB (5,1%)** |
+| Ổ D | 78,09 GB, còn **5,18 GB (6,6%)** |
+| Docker VHDX | `C:\Users\Administrator\AppData\Local\Docker\wsl\disk\docker_data.vhdx`, khoảng **48,63 GB** |
+| Volume PostgreSQL của C360 | khoảng **33,58 GB** |
+| PostgreSQL | khoảng **31 GB** |
+| Docker build cache | khoảng **2,52 GB** |
+| Redis | giới hạn RAM 1 GB, chính sách `allkeys-lru`, không persistence |
 
 ### 9.2. Thành phần database chiếm dung lượng lớn
 
@@ -549,24 +624,34 @@ Nhận xét:
 
 | Mức độ | Điểm yếu | Tác động có thể xảy ra |
 |---|---|---|
-| **Rất cao** | Ổ C chỉ còn 4,7% trống, trong khi Docker VHDX vẫn nằm trên C | PostgreSQL/Docker có thể dừng ghi, import lỗi, migration thất bại hoặc không tạo được file tạm |
-| **Rất cao** | Ổ D chỉ còn 9,49 GB, thấp hơn nhiều so với DB 30 GB | Không đủ vùng an toàn để backup đầy đủ, chuyển DB hoặc nhập thêm các nguồn lớn tháng mới |
+| **Rất cao** | Ổ C chỉ còn 5,1% trống, trong khi Docker VHDX 48,63 GB vẫn nằm trên C | PostgreSQL/Docker có thể dừng ghi, import lỗi, migration thất bại hoặc không tạo được file tạm |
+| **Rất cao** | Ổ D chỉ còn 5,18 GB (6,6%), thấp hơn nhiều so với DB 31 GB | Không đủ vùng an toàn để backup đầy đủ, chuyển DB hoặc nhập thêm các nguồn lớn tháng mới |
 | **Cao** | Máy chủ thực tế là laptop 4 nhân, RAM 16 GB; Docker chỉ được 8 GB | Truy vấn phân tích và xử lý kỳ cạnh tranh CPU/RAM, chậm rõ khi nhiều người dùng |
 | **Cao** | GL02 đã chiếm 17 GB, hơn một nửa quy mô DB | Mỗi tháng GL02 mới có thể làm dung lượng tăng nhanh; index và VACUUM cũng cần thêm không gian |
 | **Cao** | Một máy duy nhất chạy DB, backend, frontend và cache | Hỏng máy, lỗi Windows, Docker hoặc ổ đĩa sẽ dừng toàn bộ hệ thống; chưa có dự phòng nóng |
 | **Cao** | Chưa có bằng chứng về backup tự động đã được kiểm thử phục hồi định kỳ | Có backup nhưng không restore thử thì vẫn có nguy cơ không sử dụng được khi sự cố |
 | **Trung bình–cao** | Import/xử lý dữ liệu lớn chạy cùng thời điểm người dùng truy vấn | Dashboard chậm, timeout hoặc job kéo dài; kỳ gần đây mất khoảng 18–22 phút xử lý |
-| **Trung bình–cao** | Kho CIF tăng làm mỗi kỳ tạo hơn 500 nghìn hồ sơ | Mỗi kỳ mới tiếp tục tăng vài GB cho profile, branch detail và index nếu không có chính sách lưu trữ |
+| **Trung bình–cao** | Kho CIF tăng làm mỗi kỳ tạo hơn 500 nghìn hồ sơ | Mỗi kỳ mới tiếp tục tăng dung lượng cho profile, branch detail và index nếu không có chính sách lưu trữ |
+| **Trung bình–cao** | Xử lý lại kỳ xóa kết quả cũ rồi commit theo nhiều chặng | Nếu lỗi giữa chừng, kỳ đang chạy có thể tạm mất hoặc thiếu dữ liệu tổng hợp; cần chạy lại thành công mới khôi phục đầy đủ |
 | **Trung bình** | File bổ sung vẫn có đường dẫn file local dù dữ liệu parsed được lưu DB | Khi chuyển máy hoặc xóa file gốc, chạy lại kỳ có thể thiếu nguồn bổ sung nếu không sao chép đúng thư mục |
 | **Trung bình** | Redis cấu hình không persistence | Không mất dữ liệu nghiệp vụ nhưng cache mất sau restart, lượt truy vấn đầu tiên sẽ chậm |
 | **Trung bình** | Không có Internet | Hệ thống LAN vẫn chạy nếu image đã có, nhưng GitHub Actions/GHCR, tải image và cập nhật thư viện không hoạt động trực tiếp |
-| **An toàn thông tin** | PostgreSQL đang publish cổng `5432` ra host | Nếu firewall mở rộng, máy không được phép có thể thử kết nối DB; cần giới hạn IP/mạng và tài khoản |
+| **An toàn thông tin** | PostgreSQL đang publish cổng `5432` ra mọi interface host | Nếu firewall mở rộng, máy không được phép có thể thử kết nối DB; cần giới hạn IP/mạng và tài khoản |
+| **An toàn thông tin** | Ứng dụng dùng HTTP trong LAN | Nội dung và token chưa được mã hóa trên đường truyền; cần HTTPS nội bộ hoặc reverse proxy có TLS trước production |
 
 ### 9.4. Đánh giá khả năng phục vụ
 
 Cấu hình hiện tại phù hợp cho **phát triển, kiểm thử và demo nội bộ có kiểm soát**. Cấu hình này chưa nên được coi là máy chủ production ổn định cho khoảng 100 người truy cập đồng thời, đặc biệt khi vừa truy vấn phân tích vừa import hoặc xử lý kỳ.
 
 Chưa có kết quả load test chính thức nên không nên cam kết số người dùng đồng thời chỉ dựa trên việc hệ thống chạy được ở hiện tại.
+
+### 9.5. Trạng thái triển khai LAN/offline
+
+- Frontend/Nginx publish cổng 80 ra LAN; backend chỉ bind `127.0.0.1:8000` trên host và được Nginx proxy qua `/api`, giảm việc lộ trực tiếp cổng ứng dụng.
+- CORS đã cấu hình cho `localhost`, `10.8.0.119` và `http://c360.agribank.com.vn`.
+- CoreDNS đã có cấu hình ánh xạ `c360.agribank.com.vn → 10.8.0.119`, nhưng container DNS thuộc profile `lan-dns` và tại thời điểm rà soát **không chạy**. Muốn các máy trạm dùng tên miền này phải bật CoreDNS và cấu hình DNS tập trung/DHCP hoặc DNS trên từng máy.
+- Nginx truyền `X-Real-IP` và `X-Forwarded-For`; backend chỉ tin proxy khi `TRUSTED_PROXY_HOSTNAME` được cấu hình đúng. Nếu thiếu cấu hình này, nhật ký có thể ghi IP gateway/container thay vì IP máy trạm.
+- Hệ thống có thể chạy không Internet nếu các Docker image đã tồn tại cục bộ. GitHub Actions, GHCR, tải image và cập nhật thư viện sẽ không hoạt động trực tiếp trong thời gian máy chủ offline.
 
 ## 10. Kiến nghị hạ tầng
 
@@ -579,6 +664,9 @@ Chưa có kết quả load test chính thức nên không nên cam kết số ng
 5. Lập cảnh báo khi ổ đĩa còn dưới 20%, dưới 15% và dưới 10%.
 6. Giới hạn cổng 5432 bằng Windows Firewall cho đúng máy quản trị/ứng dụng; không mở toàn LAN nếu không cần.
 7. Lên lịch import và xử lý kỳ ngoài giờ sử dụng cao điểm.
+8. Bật HTTPS nội bộ trước khi đưa dữ liệu nhạy cảm vào sử dụng rộng rãi; không gửi token/CCCD/tài khoản qua HTTP trên mạng không kiểm soát.
+9. Chuyển quy trình chạy lại kỳ sang mô hình staging + kiểm định + thay thế nguyên tử, để job lỗi không làm mất kết quả kỳ đang phục vụ.
+10. Kiểm thử phục hồi cả database và thư mục file bổ sung trên một máy khác, không chỉ kiểm tra việc tạo được file backup.
 
 ### 10.2. Cấu hình đề xuất tối thiểu cho production nội bộ
 
@@ -601,12 +689,13 @@ Kích thước cuối cùng phải được chốt sau khi đo tốc độ tăng
 - Không xóa dữ liệu chỉ để giảm dung lượng nếu chưa có backup và biên bản lưu trữ.
 - Chạy `VACUUM/ANALYZE` theo lịch; chỉ compact Docker VHDX sau khi đã reclaim trong PostgreSQL/Docker và có backup.
 - Backup theo nguyên tắc 3-2-1 nếu dữ liệu được coi là production: 3 bản, 2 loại thiết bị, 1 bản tách khỏi máy chủ.
+- Bản ghi đã parse của Bill Payment/Bảo lãnh/OAB nằm trong PostgreSQL, nhưng file gốc vẫn cần được lưu trên vùng dùng chung/backup cùng database để có thể chạy lại và kiểm toán nguồn.
 
 ## 11. Điểm yếu dữ liệu và nghiệp vụ cần báo cáo minh bạch
 
 1. Kết quả là dữ liệu theo kỳ/file, không phải số realtime trực tiếp từ hệ thống lõi.
 2. Độ chính xác phụ thuộc tính đầy đủ, đúng cột, đúng kỳ và đúng phạm vi của file nguồn.
-3. Tháng 08/2026 hiện chưa đủ CN05, BC06, FTPLN và GL02; chưa nên dùng làm kỳ báo cáo hoàn chỉnh.
+3. Tháng 08/2026 hiện đã đủ CN05 nhưng còn thiếu BC06, FTPLN và GL02; chưa có hồ sơ C360 đã xử lý và chưa nên dùng làm kỳ báo cáo hoàn chỉnh.
 4. FTPLN đã có kho và kiểm tra đủ ngày nhưng chưa chốt toàn bộ KPI gốc/lãi phải thu trên hồ sơ.
 5. `SO_TRICH_LAP_TRONG_KY` của BC29 đang được dùng như giá trị lũy kế cuối kỳ theo yêu cầu nghiệp vụ; cần văn bản xác nhận từ chủ nguồn.
 6. Một số đầu mã tài khoản/dịch vụ có thể thay đổi; phải cập nhật cấu hình và kiểm thử đối soát trước khi chạy kỳ mới.
@@ -614,14 +703,19 @@ Kích thước cuối cùng phải được chốt sau khi đo tốc độ tăng
 8. Khi Kho CIF thay đổi, các kỳ đã xử lý không tự cập nhật tức thời; cần chạy lại kỳ.
 9. Số âm của phí hoặc biến động DPRR có thể là hoàn/điều chỉnh, không mặc định là lỗi dữ liệu.
 10. So sánh hai kỳ chỉ có ý nghĩa khi hai kỳ có cùng phạm vi chi nhánh và mức độ đầy đủ nguồn tương đương.
+11. Quy trình xử lý lại hiện commit theo nhiều chặng sau khi xóa kết quả cũ; job lỗi giữa chừng có thể làm kỳ tạm thời không phục vụ đủ dữ liệu.
+12. 370 tài khoản đang hoạt động nhưng mới có rất ít quyền ngoại lệ cấp trực tiếp; cần rà soát định kỳ nhóm quyền, phạm vi và user đã chuyển đơn vị/nghỉ công tác thay vì coi cấu hình hiện tại là đúng vĩnh viễn.
+13. Danh sách ghim và API mở nhanh một KH vẫn tuân theo phạm vi hiện tại. KH đã ghim có thể không mở được sau khi quyền/phạm vi của user bị thu hẹp; đây là hành vi bảo mật đúng, không phải mất dữ liệu ghim.
+14. Xuất Excel chạy nền ở góc giao diện nhưng việc tạo workbook vẫn tiêu thụ CPU/RAM backend; nhiều người xuất tập lớn cùng lúc cần được load test và giới hạn nếu cần.
 
 ## 12. Lộ trình ưu tiên đề xuất
 
 ### Giai đoạn 1 – Bảo đảm an toàn vận hành
 
 - Mở rộng ổ đĩa, chuyển Docker data, thiết lập backup/restore và cảnh báo dung lượng.
-- Rà firewall, tài khoản DB, secret và quyền truy cập LAN.
+- Rà firewall, tài khoản DB, secret, HTTPS và quyền truy cập LAN.
 - Chốt lịch import/xử lý, người chịu trách nhiệm và quy trình xử lý job lỗi.
+- Thực hiện staging/swap an toàn khi xử lý lại kỳ để giữ được kết quả cũ nếu job mới thất bại.
 
 ### Giai đoạn 2 – Chốt chất lượng dữ liệu
 
@@ -629,6 +723,7 @@ Kích thước cuối cùng phải được chốt sau khi đo tốc độ tăng
 - Chạy lại các kỳ cần dùng theo Kho CIF mới.
 - Xử lý danh sách chưa khớp CIF và các trường cán bộ/phòng ban chưa xác định.
 - Xác nhận nghiệp vụ FTPLN, BC29 và danh mục tài khoản phí.
+- Rà soát 370 user theo đơn vị, nhóm quyền, phạm vi dữ liệu, quyền nhạy cảm và phiên đang hoạt động; xuất biên bản rà soát định kỳ.
 
 ### Giai đoạn 3 – Tối ưu production
 
@@ -636,18 +731,20 @@ Kích thước cuối cùng phải được chốt sau khi đo tốc độ tăng
 - Tạo bảng tổng hợp/materialized summary cho Dashboard thay vì quét raw.
 - Chạy load test theo 20/50/100 người dùng và đo thời gian phản hồi.
 - Tách worker xử lý khỏi API nếu tài nguyên cho phép.
+- Tách worker xuất Excel khỏi API hoặc giới hạn hàng đợi khi số người dùng tăng.
 - Chuẩn hóa gói triển khai offline và quy trình cập nhật khi máy chủ không có Internet.
 
 ## 13. Kết luận
 
-C360 đã có nền tảng nghiệp vụ tương đối đầy đủ: Kho CIF, 11 nguồn định kỳ, xử lý khách hàng đa chi nhánh, Dashboard, phân tích nghiệp vụ, hồ sơ C360, đối chiếu và phân quyền. Điểm cần ưu tiên nhất trước khi vận hành production không phải bổ sung thêm giao diện mà là:
+C360 đã có nền tảng nghiệp vụ tương đối đầy đủ: Kho CIF, 11 nguồn định kỳ, xử lý khách hàng đa chi nhánh, Dashboard, phân tích nghiệp vụ, hồ sơ C360, đối chiếu, xuất báo cáo, quản lý phiên và phân quyền chi tiết. Điểm cần ưu tiên nhất trước khi vận hành production không phải bổ sung thêm giao diện mà là:
 
 1. **Bảo đảm dung lượng và backup**, vì cả ổ C và D đều đang ở mức thấp.
-2. **Nâng cấu hình máy chủ**, do database đã khoảng 30 GB và GL02 tăng nhanh.
+2. **Nâng cấu hình máy chủ**, do database đã khoảng 31 GB và GL02 tăng nhanh.
 3. **Chốt độ đầy đủ nguồn và công thức**, nhất là các kỳ chưa đủ dữ liệu.
-4. **Kiểm thử tải và phục hồi**, trước khi cam kết phục vụ số lượng lớn người dùng.
+4. **Làm an toàn quy trình xử lý lại kỳ**, tránh mất kết quả đang phục vụ nếu job mới lỗi.
+5. **Kiểm thử tải, bảo mật đường truyền và phục hồi**, trước khi cam kết phục vụ số lượng lớn người dùng.
 
-Nếu hoàn thành bốn nhóm việc trên, hệ thống có thể chuyển từ trạng thái demo/kiểm thử nghiệp vụ sang vận hành nội bộ ổn định và có khả năng giải trình số liệu tốt hơn.
+Nếu hoàn thành năm nhóm việc trên, hệ thống có thể chuyển từ trạng thái demo/kiểm thử nghiệp vụ sang vận hành nội bộ ổn định và có khả năng giải trình số liệu tốt hơn.
 
 ---
 
@@ -671,11 +768,18 @@ Nếu hoàn thành bốn nhóm việc trên, hệ thống có thể chuyển t�
 | `rr01_handled_risk_loans` | RR01 |
 | `gl02_ledger_transactions` | GL02 |
 | `supplemental_billpayment_transactions` | Bill Payment đã đọc từ file bổ sung |
+| `customer_processing_optional_files` | Đăng ký file bổ sung, đường dẫn file gốc và trạng thái đọc |
+| `supplemental_bao_lanh_records`, `supplemental_oab_records` | Bảo lãnh/LC và OAB đã chuẩn hóa |
+| `customer_period_exchange_rates` | Tỷ giá theo kỳ và loại tiền, nguồn DP01 |
 | `customer_period_branch_details` | Kết quả KH theo chi nhánh và kỳ |
 | `customer_period_profiles` | Hồ sơ duy nhất theo mã KH lõi và kỳ |
 | `customer_source_reconciliations` | Mã nguồn chưa khớp CIF |
 | `profile_metric_definitions` | Từ điển chỉ tiêu |
 | `business_matching_rules` | Mã dịch vụ và điều kiện đối chiếu |
 | `system_configuration_entries` | Cấu hình nghiệp vụ |
-| `system_users`, `system_roles`, `system_permissions` | Người dùng và phân quyền |
+| `system_users`, `system_roles`, `system_permissions` | Người dùng, nhóm quyền và danh mục quyền |
+| `system_role_permissions`, `system_user_permissions` | Quyền theo nhóm và ngoại lệ ALLOW/DENY từng user |
+| `role_scope_policies` | Phạm vi mặc định/được phép theo nhóm quyền |
+| `user_sessions` | Phiên đăng nhập, thiết bị, IP, hoạt động cuối và trạng thái thu hồi |
+| `user_pinned_customers` | Danh sách KH ghim riêng của từng người dùng |
 | `audit_logs` | Nhật ký thao tác |

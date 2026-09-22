@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, Upl
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.auth.dependencies import get_current_user, require_any_permission
@@ -549,7 +549,7 @@ def serialize_user(user: SystemUser) -> dict:
     }
 
 
-def serialize_role(role: SystemRole) -> dict:
+def serialize_role(role: SystemRole, user_count: int | None = None) -> dict:
     permissions = [item.permission for item in role.permissions if item.permission]
     default_scope, allowed_scopes, warning_level = role_scope_values(role)
     return {
@@ -558,7 +558,7 @@ def serialize_role(role: SystemRole) -> dict:
         "role_name": role.role_name,
         "description": role.description,
         "is_system": role.is_system,
-        "user_count": len(role.users),
+        "user_count": int(user_count) if user_count is not None else len(role.users),
         "default_scope": default_scope,
         "allowed_scopes": allowed_scopes,
         "scope_warning_level": warning_level,
@@ -1613,7 +1613,10 @@ def list_roles(
     permission_code: str | None = None,
     db: Session = Depends(get_db),
 ):
-    query = db.query(SystemRole)
+    query = db.query(SystemRole).options(
+        selectinload(SystemRole.permissions).selectinload(SystemRolePermission.permission),
+        selectinload(SystemRole.scope_policy),
+    )
     if keyword:
         like = f"%{keyword.strip()}%"
         query = query.filter(or_(SystemRole.role_code.ilike(like), SystemRole.role_name.ilike(like)))
@@ -1628,7 +1631,16 @@ def list_roles(
                 continue
             filtered.append(role)
         roles = filtered
-    return [serialize_role(item) for item in roles]
+    role_user_counts = {
+        role_id: int(count or 0)
+        for role_id, count in (
+            db.query(SystemUser.role_id, func.count(SystemUser.id))
+            .filter(SystemUser.role_id.isnot(None))
+            .group_by(SystemUser.role_id)
+            .all()
+        )
+    }
+    return [serialize_role(item, role_user_counts.get(item.id, 0)) for item in roles]
 
 
 def sync_role_permissions(db: Session, role: SystemRole, permission_codes: list[str]) -> None:

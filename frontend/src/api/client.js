@@ -17,6 +17,9 @@ const DEFAULT_CACHE_TTL = 5 * 60_000;
 const CACHEABLE_GET_PATHS = [
   '/admin/branches',
   '/admin/departments',
+  '/admin/overview',
+  '/admin/roles',
+  '/admin/permissions',
   '/dashboard/',
   '/customer-processing/periods',
   '/customer-processing/profiles',

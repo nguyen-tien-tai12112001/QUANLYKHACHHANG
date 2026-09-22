@@ -24,6 +24,7 @@ import GlobalAnalysisFilter from './GlobalAnalysisFilter';
 import PersonalProfileDrawer from './PersonalProfileDrawer';
 import WorkspaceHub from './WorkspaceHub';
 import { useAnalysisScope } from '../c360/AnalysisScopeContext';
+import { CustomerModal } from '../c360/C360App';
 import { useUserWorkspace } from '../workspace/UserWorkspaceContext';
 
 const { Header, Sider, Content } = Layout;
@@ -113,6 +114,7 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout,
   const [collapsed, setCollapsed] = useState(false);
   const [sourceIssueCount, setSourceIssueCount] = useState(0);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [pinnedCustomerProfile, setPinnedCustomerProfile] = useState(null);
   const pageMeta = PAGE_NAVIGATION[activeMenu] || PAGE_NAVIGATION['c360-dashboard'];
   const [openKeys, setOpenKeys] = useState(() => {
     try {
@@ -265,9 +267,21 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout,
             <WorkspaceHub
               onNavigate={navigateWithHistory}
               onRestoreScope={analysisScope?.restore}
+              onOpenCustomer={({ customer, periodKey }) => {
+                workspace?.recordRecent({
+                  type: 'customer',
+                  key: customer.ma_kh,
+                  title: customer.ten_kh || customer.ma_kh,
+                  subtitle: `Khách hàng · ${customer.ma_kh}`,
+                  raw: {
+                    customer_code: customer.ma_kh,
+                    customer_name: customer.ten_kh,
+                    branch_code: customer.primary_branch_code,
+                  },
+                });
+                setPinnedCustomerProfile({ customer, periodKey });
+              }}
               periodKey={analysisScope?.applied?.periodKey}
-              fallbackPeriodKey={analysisScope?.periods?.[0]?.period_key}
-              fallbackBranchCode={analysisScope?.fixedBranchCode}
             />
             <button type="button" className="app-user-profile-trigger" onClick={() => setProfileOpen(true)} title="Mở thông tin cá nhân">
               <Avatar className="app-user-avatar">{currentUser?.full_name?.charAt(0) || 'C'}</Avatar>
@@ -296,6 +310,15 @@ function MainLayout({ children, activeMenu, onMenuChange, currentUser, onLogout,
         </Content>
       </Layout>
       <PersonalProfileDrawer open={profileOpen} onClose={() => setProfileOpen(false)} currentUser={currentUser} onUpdated={onUserUpdated} />
+      <CustomerModal
+        customer={pinnedCustomerProfile?.customer}
+        periodKey={pinnedCustomerProfile?.periodKey || ''}
+        initialBranchCode={null}
+        analysisParams={{ period_key: pinnedCustomerProfile?.periodKey || '' }}
+        currentUser={currentUser}
+        open={Boolean(pinnedCustomerProfile?.customer)}
+        onClose={() => setPinnedCustomerProfile(null)}
+      />
     </Layout>
   );
 }

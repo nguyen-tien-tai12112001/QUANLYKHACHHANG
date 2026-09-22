@@ -206,10 +206,14 @@ function LegacyApp() {
     'data-sources': <DataGovernance mode="sources" />,
     'data-reconciliation': <DataGovernance mode="reconciliation" />,
     'data-mapping': <DataGovernance mode="mapping" />,
-    'admin-branches': <SystemAdmin section="branches" />,
-    'admin-departments': <SystemAdmin section="departments" />,
-    'admin-users': <SystemAdmin section="users" />,
-    'admin-roles': <SystemAdmin section="roles" />,
+    // SystemAdmin dùng cùng component cho bốn menu nhưng cấu trúc bảng hoàn
+    // toàn khác nhau. Key riêng buộc React bỏ state của trang trước, tránh lấy
+    // hàng trăm dòng người dùng dựng nhầm thành hàng trăm cột của ma trận quyền
+    // trong một frame khi chuyển từ Người dùng sang Nhóm quyền.
+    'admin-branches': <SystemAdmin key="admin-branches" section="branches" />,
+    'admin-departments': <SystemAdmin key="admin-departments" section="departments" />,
+    'admin-users': <SystemAdmin key="admin-users" section="users" />,
+    'admin-roles': <SystemAdmin key="admin-roles" section="roles" />,
     'admin-audit-logs': <AuditLogs />,
     'admin-configuration': <SystemConfiguration />,
   };

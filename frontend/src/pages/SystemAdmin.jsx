@@ -313,33 +313,56 @@ function SystemAdmin({ section = 'branches' }) {
   const [appliedFilters, setAppliedFilters] = useState({});
   const [visibleColumns, setVisibleColumns] = useState(defaultVisibleColumns[section]);
   const loadRowsRequestRef = useRef(0);
+  const loadLookupsRequestRef = useRef(0);
   const canTestAccess = (currentUser?.permissions || []).some((code) => code === 'admin' || code === 'admin:access_test');
   const canManageSuperuser = (currentUser?.permissions || []).includes('admin');
   const modalRole = useMemo(() => roles.find((item) => item.id === modalRoleId), [modalRoleId, roles]);
   const inheritedPermissionCodes = useMemo(() => new Set(modalRole?.permission_codes || []), [modalRole]);
 
   async function loadLookups() {
+    const requestId = ++loadLookupsRequestRef.current;
     setOverviewLoading(true);
     try {
-      const results = await Promise.allSettled([
-        client.get('/admin/overview', { hideGlobalLoading: true }),
-        client.get('/admin/branches', { hideGlobalLoading: true }),
-        client.get('/admin/departments', { hideGlobalLoading: true }),
-        client.get('/admin/roles', { hideGlobalLoading: true }),
-        client.get('/admin/permissions', { hideGlobalLoading: true }),
-        client.get('/admin/users', { hideGlobalLoading: true }),
-        client.get('/admin/users/warnings', { hideGlobalLoading: true }),
-      ]);
-      const value = (index) => results[index].status === 'fulfilled' ? results[index].value.data : null;
-      if (value(0)) setOverview(value(0));
-      if (value(1)) setBranches(getArrayPayload(value(1)));
-      if (value(2)) setDepartments(getArrayPayload(value(2)));
-      if (value(3)) setRoles(getArrayPayload(value(3)));
-      if (value(4)) setPermissions(getArrayPayload(value(4)));
-      if (value(5)) setStaffUsers(getArrayPayload(value(5)));
-      if (value(6)) setUserWarnings(value(6));
+      // Trang Nhóm quyền chỉ cần tổng quan và danh mục quyền. Trước đây màn
+      // hình này vẫn tải toàn bộ 370+ người dùng, phòng ban, chi nhánh và cảnh
+      // báo nên menu có cảm giác bị treo dù ma trận chỉ có vài nhóm quyền.
+      const lookupRequests = [
+        ['overview', client.get('/admin/overview', { hideGlobalLoading: true })],
+      ];
+      if (section === 'roles') {
+        lookupRequests.push(['permissions', client.get('/admin/permissions', { hideGlobalLoading: true })]);
+      }
+      if (section === 'users') {
+        lookupRequests.push(
+          ['branches', client.get('/admin/branches', { hideGlobalLoading: true })],
+          ['departments', client.get('/admin/departments', { hideGlobalLoading: true })],
+          ['roles', client.get('/admin/roles', { hideGlobalLoading: true })],
+          ['permissions', client.get('/admin/permissions', { hideGlobalLoading: true })],
+          ['warnings', client.get('/admin/users/warnings', { hideGlobalLoading: true })],
+        );
+      }
+      if (section === 'departments') {
+        lookupRequests.push(
+          ['branches', client.get('/admin/branches', { hideGlobalLoading: true })],
+          ['users', client.get('/admin/users', { hideGlobalLoading: true })],
+        );
+      }
+      const results = await Promise.allSettled(lookupRequests.map(([, request]) => request));
+      if (requestId !== loadLookupsRequestRef.current) return;
+      results.forEach((result, index) => {
+        if (result.status !== 'fulfilled') return;
+        const [key] = lookupRequests[index];
+        const value = result.value.data;
+        if (key === 'overview') setOverview(value || {});
+        if (key === 'branches') setBranches(getArrayPayload(value));
+        if (key === 'departments') setDepartments(getArrayPayload(value));
+        if (key === 'roles') setRoles(getArrayPayload(value));
+        if (key === 'permissions') setPermissions(getArrayPayload(value));
+        if (key === 'users') setStaffUsers(getArrayPayload(value));
+        if (key === 'warnings') setUserWarnings(value || {});
+      });
     } finally {
-      setOverviewLoading(false);
+      if (requestId === loadLookupsRequestRef.current) setOverviewLoading(false);
     }
   }
 
@@ -384,10 +407,18 @@ function SystemAdmin({ section = 'branches' }) {
         roles: ['keyword', 'permission_group', 'permission_code'],
       }[section] || [];
       const serverParams = Object.fromEntries(Object.entries(params).filter(([key]) => serverKeys.includes(key)));
-      const { data } = await client.get(meta.endpoint, { params: serverParams, hideGlobalLoading: true, noCache: true });
+      const { data } = await client.get(meta.endpoint, { params: serverParams, hideGlobalLoading: true });
       if (requestId !== loadRowsRequestRef.current) return;
       const nextRows = getArrayPayload(data);
       setRows(nextRows);
+      // Dùng ngay catalog không lọc cho bảng và các lựa chọn trên cùng trang,
+      // tránh gọi lại endpoint chỉ để tạo một bản dữ liệu thứ hai.
+      if (!Object.keys(serverParams).length) {
+        if (section === 'branches') setBranches(nextRows);
+        if (section === 'departments') setDepartments(nextRows);
+        if (section === 'users') setStaffUsers(nextRows);
+        if (section === 'roles') setRoles(nextRows);
+      }
       setAppliedFilters(params);
       if (section === 'users') {
         setSelectedUserRowKeys([]);
@@ -475,7 +506,7 @@ function SystemAdmin({ section = 'branches' }) {
 
   useEffect(() => {
     loadLookups();
-  }, []);
+  }, [section]);
 
   useEffect(() => {
     filterForm.resetFields();
