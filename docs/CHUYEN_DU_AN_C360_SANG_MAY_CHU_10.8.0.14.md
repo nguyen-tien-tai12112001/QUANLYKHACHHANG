@@ -1,7 +1,7 @@
 # HƯỚNG DẪN CHUYỂN TOÀN BỘ C360 SANG MÁY CHỦ `10.8.0.14`
 
 - **Mã tài liệu:** C360-OPS-MOVE-01
-- **Phiên bản:** 1.0
+- **Phiên bản:** 1.2
 - **Ngày cập nhật:** 24/09/2026
 - **Máy đích:** Windows 11, IP tĩnh `10.8.0.14`
 - **Phạm vi:** mã nguồn, Docker image, PostgreSQL, file upload/bổ sung, tài liệu nguồn, cấu hình LAN và kiểm tra sau chuyển
@@ -197,6 +197,126 @@ Nếu máy mới không có Internet, `hello-world` có thể bỏ qua vì image
 
 > **Lưu ý giấy phép:** Docker nêu Docker Desktop có yêu cầu thuê bao trả phí với tổ chức lớn theo điều kiện giấy phép của họ. Trước khi dùng trên hạ tầng doanh nghiệp, đơn vị phải xác nhận phương án bản quyền/thuê bao. Nếu không được phê duyệt Docker Desktop, cần đổi phương án hạ tầng sang máy Linux chạy Docker Engine hoặc nền tảng container được đơn vị cho phép; không tự ý bỏ qua điều khoản sử dụng.
 
+#### 5.5.1. Bố trí Docker trên ổ C và dữ liệu trên ổ D
+
+Máy mới nên giữ đúng mô hình đang sử dụng:
+
+```text
+C:\Program Files\Docker\Docker\
+    Docker Desktop và các tệp chương trình
+
+D:\DockerData\
+    Docker Linux disk image
+    Image, container, build cache và named volume PostgreSQL
+
+D:\Apps\QUANLYKHACHHANG\
+    app\       Mã nguồn hoặc bộ file triển khai
+    data\      Upload, export, documents và backup được bind mount
+    transfer\  File dump/TAR dùng trong quá trình chuyển máy
+```
+
+`D:\DockerData` và `D:\Apps\QUANLYKHACHHANG\data` là hai khu vực khác nhau:
+
+- `D:\DockerData` do Docker Desktop quản lý. Named volume `quanlykhachhang_postgres_data` nằm bên trong Docker Linux disk image ở đây.
+- `D:\Apps\QUANLYKHACHHANG\data` là dữ liệu Windows có thể nhìn thấy trực tiếp, được cấu hình bởi `APP_DATA_DIR`; gồm uploads, exports, documents và backups.
+- Không đặt mã nguồn, file dump hoặc file upload thủ công vào `D:\DockerData`.
+- Không sao chép nguyên thư mục `D:\DockerData` từ máy cũ sang máy mới để thay cho backup/restore PostgreSQL.
+
+Chuẩn bị thư mục trên máy mới bằng PowerShell Administrator:
+
+```powershell
+New-Item -ItemType Directory -Force -Path `
+  'D:\DockerData', `
+  'D:\Apps\QUANLYKHACHHANG\app', `
+  'D:\Apps\QUANLYKHACHHANG\data\uploads', `
+  'D:\Apps\QUANLYKHACHHANG\data\exports', `
+  'D:\Apps\QUANLYKHACHHANG\data\documents', `
+  'D:\Apps\QUANLYKHACHHANG\data\backups', `
+  'D:\Apps\QUANLYKHACHHANG\transfer'
+```
+
+##### Cách khuyến nghị: chỉ định ổ D ngay khi cài Docker Desktop
+
+Thực hiện trước khi Docker Desktop được mở lần đầu. Từ thư mục chứa bộ cài, chạy PowerShell Administrator:
+
+```powershell
+Set-Location 'D:\BoCai'
+& '.\Docker Desktop Installer.exe' install `
+  --backend=wsl-2 `
+  --accept-license `
+  --wsl-default-data-root='D:\DockerData'
+```
+
+Kết quả mong muốn:
+
+- Phần mềm Docker Desktop vẫn được cài trên ổ C theo mặc định.
+- Docker WSL data root được tạo trên `D:\DockerData`.
+- Image và volume PostgreSQL tạo sau đó không làm phình đường dẫn mặc định `C:\Users\<user>\AppData\Local\Docker\wsl`.
+
+Khởi động lại Windows nếu trình cài yêu cầu, mở Docker Desktop và kiểm tra `Use WSL 2 based engine` đang được bật.
+
+##### Cách qua giao diện nếu đã cài Docker Desktop
+
+Chỉ dùng khi Docker Desktop đã được cài nhưng chưa tạo dữ liệu C360:
+
+1. Mở Docker Desktop.
+2. Chọn `Settings`.
+3. Mở `Resources > Advanced`.
+4. Tại `Disk image location`, chọn `Browse`.
+5. Chọn `D:\DockerData`.
+6. Chọn `Apply & restart` và chờ Docker Desktop chuyển/khởi tạo disk image hoàn tất.
+7. Mở lại đúng màn hình trên và xác nhận đường dẫn vẫn là `D:\DockerData`.
+
+Không dùng File Explorer để cắt/dán file `docker_data.vhdx` hoặc toàn bộ thư mục WSL khi Docker đang chạy. Docker Desktop phải tự thực hiện việc đổi `Disk image location`.
+
+##### Cấu hình dữ liệu bind mount của C360
+
+Trong file `.env` đặt:
+
+```dotenv
+APP_DATA_DIR=D:/Apps/QUANLYKHACHHANG/data
+```
+
+Không dùng dấu `\\` trong giá trị trên. `docker-compose.prod.yml` sẽ ánh xạ:
+
+| Dữ liệu | Đường dẫn máy Windows | Đường dẫn container |
+|---|---|---|
+| Upload/file bổ sung | `D:\Apps\QUANLYKHACHHANG\data\uploads` | `/app/uploads` |
+| File Excel xuất | `D:\Apps\QUANLYKHACHHANG\data\exports` | `/app/exports` |
+| Tài liệu nguồn | `D:\Apps\QUANLYKHACHHANG\data\documents` | `/documents` |
+| Backup DB | `D:\Apps\QUANLYKHACHHANG\data\backups` | `/backups` |
+| PostgreSQL | Docker named volume trong `D:\DockerData` | `/var/lib/postgresql/data` |
+
+##### Kiểm tra trước khi restore dữ liệu
+
+```powershell
+Get-PSDrive -Name C,D | Select-Object Name,Used,Free
+wsl --status
+docker version
+docker compose version
+docker info --format 'Docker root trong Linux: {{.DockerRootDir}}'
+Get-ChildItem 'D:\DockerData' -Force
+```
+
+`docker info` vẫn thường hiển thị `DockerRootDir=/var/lib/docker`; đây là đường dẫn **bên trong Linux VM**, không có nghĩa dữ liệu vẫn nằm trên ổ C. Vị trí trên Windows phải kiểm tra tại `Docker Desktop > Settings > Resources > Advanced > Disk image location` và bằng mức tăng dung lượng của `D:\DockerData` sau khi pull/restore.
+
+Sau khi tạo hệ thống C360:
+
+```powershell
+Set-Location 'D:\Apps\QUANLYKHACHHANG\app'
+docker compose -f docker-compose.prod.yml --env-file .env up -d
+docker volume inspect quanlykhachhang_postgres_data
+docker system df
+Get-PSDrive -Name C,D | Select-Object Name,Used,Free
+```
+
+Tiêu chí đạt:
+
+- Ổ C chỉ tăng chủ yếu do chương trình Docker Desktop, log và cấu hình người dùng; không chứa disk image PostgreSQL dung lượng lớn.
+- `D:\DockerData` tăng dung lượng khi pull image và restore PostgreSQL.
+- Upload, export, documents và backup xuất hiện tại `D:\Apps\QUANLYKHACHHANG\data`.
+- Ổ D nên còn ít nhất `100 GB` sau khi chuyển xong; khuyến nghị còn `150 GB` trở lên để tiếp tục import kỳ mới và tạo backup.
+
 ### 5.6. Cài Git for Windows
 
 Git không bắt buộc nếu máy hoàn toàn offline và chỉ giải nén `C360_CODE_TAI.zip`, nhưng nên cài để kiểm tra commit và cập nhật về sau.
@@ -339,9 +459,15 @@ docker image ls
 Tạo một file image TAR:
 
 ```powershell
+# Gắn tag đúng với tên image mà docker-compose.prod.yml sử dụng.
+docker tag quanlykhachhang-backend:latest `
+  ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-backend:transfer
+docker tag quanlykhachhang-frontend:latest `
+  ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-frontend:transfer
+
 docker save -o "$TransferDir\c360-docker-images.tar" `
-  quanlykhachhang-backend:latest `
-  quanlykhachhang-frontend:latest `
+  ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-backend:transfer `
+  ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-frontend:transfer `
   postgres:16 `
   redis:7-alpine `
   coredns/coredns:latest
@@ -391,14 +517,69 @@ docker compose ps
 
 Giữ PostgreSQL và Redis chạy.
 
-### 8.2. Ghi dump trực tiếp ra ổ chuyển
-
-Không tạo file tạm trong Docker disk hoặc ổ C/D. Dùng container PostgreSQL tạm, ghi thẳng ra ổ chuyển:
+Kiểm tra lại đúng container và lấy tên database/user trực tiếp từ container, không ghi mật khẩu ra màn hình:
 
 ```powershell
-$TransferDir = 'Z:\C360_TRANSFER'
+Set-Location D:\Code\QUANLYKHACHHANG
+
+$DbUser = (docker exec qlkh_postgres printenv POSTGRES_USER).Trim()
+$DbName = (docker exec qlkh_postgres printenv POSTGRES_DB).Trim()
+
+if (-not $DbUser -or -not $DbName) {
+  throw 'Không đọc được POSTGRES_USER hoặc POSTGRES_DB từ qlkh_postgres.'
+}
+
+docker inspect --format '{{.State.Status}} / {{.State.Health.Status}}' qlkh_postgres
+docker exec qlkh_postgres psql -U $DbUser -d $DbName -c `
+  'SELECT current_database(), current_user, pg_size_pretty(pg_database_size(current_database()));'
+docker exec qlkh_postgres psql -U $DbUser -d $DbName -c `
+  'SELECT version_num AS alembic_revision FROM alembic_version;'
+```
+
+Ghi số kiểm soát trước khi backup để dùng đối chiếu trên máy mới:
+
+```powershell
+$TransferDir = 'Z:\C360_TRANSFER\database'
+New-Item -ItemType Directory -Force $TransferDir | Out-Null
+
+$ControlSql = @"
+SELECT 'cif_customers' AS bang, COUNT(*) AS so_dong FROM cif_customers
+UNION ALL SELECT 'customer_period_profiles', COUNT(*) FROM customer_period_profiles
+UNION ALL SELECT 'customer_period_branch_details', COUNT(*) FROM customer_period_branch_details
+UNION ALL SELECT 'import_batches', COUNT(*) FROM import_batches
+UNION ALL SELECT 'system_users', COUNT(*) FROM system_users
+ORDER BY bang;
+"@
+
+docker exec qlkh_postgres psql -U $DbUser -d $DbName -c $ControlSql |
+  Tee-Object "$TransferDir\control-counts-before.txt"
+```
+
+Nếu một bảng trong câu lệnh kiểm soát chưa tồn tại ở phiên bản thực tế thì bỏ riêng dòng bảng đó; không được bỏ qua bước ghi số lượng các bảng còn lại.
+
+### 8.2. Ghi dump trực tiếp ra ổ chuyển
+
+Không tạo file tạm trong Docker disk hoặc ổ C/D đang thiếu dung lượng. Dùng container PostgreSQL tạm, ghi thẳng ra ổ ngoài hoặc thư mục mạng đã được phê duyệt. Nếu dùng thư mục mạng, nên dùng đường dẫn UNC mà tài khoản đang chạy Docker Desktop có quyền đọc/ghi; ổ mạng gán ký tự có thể không được Docker nhìn thấy trong một số phiên đăng nhập.
+
+Kiểm tra đích trước khi chạy:
+
+```powershell
+$TransferDir = 'Z:\C360_TRANSFER\database'
+
+if (-not (Test-Path $TransferDir)) {
+  throw "Không truy cập được thư mục chuyển: $TransferDir"
+}
+
+Get-Item $TransferDir
+Get-PSDrive -PSProvider FileSystem | Select-Object Name,Root,Used,Free
+```
+
+Tạo bản dump định dạng custom, có nén và có thể restore song song:
+
+```powershell
 $Stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $DumpName = "c360_full_$Stamp.dump"
+$StartedAt = Get-Date
 
 docker run --rm `
   --network qlkh_network `
@@ -407,20 +588,43 @@ docker run --rm `
   -v "${TransferDir}:/backup" `
   postgres:16 `
   sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; pg_dump -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" -Fc -Z 6 -f "/backup/$DUMP_NAME"'
+
+if ($LASTEXITCODE -ne 0) {
+  throw "pg_dump thất bại với mã lỗi $LASTEXITCODE. Không được dùng file dump này."
+}
+
+$FinishedAt = Get-Date
+$Elapsed = $FinishedAt - $StartedAt
+Write-Host "Backup hoàn tất sau $($Elapsed.ToString())."
+Get-Item "$TransferDir\$DumpName" | Select-Object FullName,Length,LastWriteTime
 ```
 
-Không đóng PowerShell khi lệnh chưa kết thúc. Với DB khoảng 33 GB, thời gian phụ thuộc tốc độ ổ và CPU.
+Không đóng PowerShell, tắt Docker hoặc rút ổ chuyển khi lệnh chưa kết thúc. Với DB khoảng 33 GB, thời gian phụ thuộc CPU và tốc độ ghi của ổ đích. Có thể mở PowerShell thứ hai để theo dõi dung lượng file mà không can thiệp tiến trình:
+
+```powershell
+Get-Item 'Z:\C360_TRANSFER\database\c360_full_YYYYMMDD_HHMMSS.dump' |
+  Select-Object Length,LastWriteTime
+```
 
 ### 8.3. Kiểm tra dump
 
 ```powershell
 Get-Item "$TransferDir\$DumpName"
-Get-FileHash "$TransferDir\$DumpName" -Algorithm SHA256 | Tee-Object "$TransferDir\$DumpName.sha256.txt"
+$DumpHash = (Get-FileHash "$TransferDir\$DumpName" -Algorithm SHA256).Hash
+$DumpHash | Set-Content "$TransferDir\$DumpName.sha256.txt"
 
 docker run --rm `
   -v "${TransferDir}:/backup:ro" `
   postgres:16 `
-  pg_restore --list "/backup/$DumpName"
+  pg_restore --list "/backup/$DumpName" |
+  Set-Content "$TransferDir\$DumpName.toc.txt"
+
+if ($LASTEXITCODE -ne 0) {
+  throw 'pg_restore --list không đọc được archive. Phải tạo lại bản dump.'
+}
+
+Get-Content "$TransferDir\$DumpName.sha256.txt"
+Get-Content "$TransferDir\$DumpName.toc.txt" -TotalCount 20
 ```
 
 Chỉ chuyển máy khi:
@@ -428,7 +632,10 @@ Chỉ chuyển máy khi:
 - File dump có dung lượng hợp lý và lớn hơn 0.
 - `pg_restore --list` đọc được danh sách đối tượng.
 - Đã lưu SHA-256.
+- Có `control-counts-before.txt` và revision Alembic đã ghi nhận.
 - Đã ghi tên dump vào biên bản chuyển máy.
+
+> `pg_dump` định dạng custom là bản sao logic nhất quán tại thời điểm backup. Không sao chép file vật lý trong volume `quanlykhachhang_postgres_data`, không chép file VHDX và không dùng thao tác copy thư mục `D:\DockerData` để chuyển DB.
 
 ## 9. Đưa gói chuyển sang máy `10.8.0.14`
 
@@ -448,11 +655,34 @@ Sao chép vào `D:\Apps\QUANLYKHACHHANG\transfer`:
 - Thư mục `files`.
 - `C360.env.private`.
 
+Ví dụ ổ ngoài được nhận là ổ `E:` trên máy mới:
+
+```powershell
+$TransferSource = 'E:\C360_TRANSFER'
+$TransferTarget = 'D:\Apps\QUANLYKHACHHANG\transfer'
+
+New-Item -ItemType Directory -Force $TransferTarget | Out-Null
+robocopy $TransferSource $TransferTarget /E /COPY:DAT /DCOPY:DAT /Z /J /R:2 /W:5
+
+if ($LASTEXITCODE -ge 8) {
+  throw "Sao chép gói chuyển thất bại, mã robocopy: $LASTEXITCODE"
+}
+```
+
+Không rút ổ ngoài cho đến khi `robocopy` kết thúc. Nếu dùng thư mục mạng, thay `$TransferSource` bằng đường dẫn UNC như `\\may-chia-se\C360_TRANSFER`; tài khoản Windows phải có quyền đọc.
+
 Kiểm tra lại checksum trên máy mới:
 
 ```powershell
-Get-FileHash D:\Apps\QUANLYKHACHHANG\transfer\c360-docker-images.tar -Algorithm SHA256
-Get-FileHash D:\Apps\QUANLYKHACHHANG\transfer\c360_full_YYYYMMDD_HHMMSS.dump -Algorithm SHA256
+$DumpPath = 'D:\Apps\QUANLYKHACHHANG\transfer\database\c360_full_YYYYMMDD_HHMMSS.dump'
+$ExpectedHash = (Get-Content "$DumpPath.sha256.txt").Trim()
+$ActualHash = (Get-FileHash $DumpPath -Algorithm SHA256).Hash
+
+if ($ActualHash -ne $ExpectedHash) {
+  throw 'SHA-256 của file dump không khớp. Không được restore.'
+}
+
+Write-Host "SHA-256 hợp lệ: $ActualHash"
 ```
 
 Hai giá trị phải trùng máy cũ.
@@ -480,13 +710,13 @@ D:\Apps\QUANLYKHACHHANG\app
 
 ### 10.3. Khôi phục thư mục file
 
-Với cấu hình `docker-compose.yml` hiện tại:
+Với cấu hình production và `APP_DATA_DIR=D:/Apps/QUANLYKHACHHANG/data`:
 
 ```powershell
 Set-Location D:\Apps\QUANLYKHACHHANG\app
-robocopy ..\transfer\files\uploads .\backend\uploads /E /COPY:DAT /DCOPY:DAT /R:2 /W:2
-robocopy ..\transfer\files\documents .\documents /E /COPY:DAT /DCOPY:DAT /R:2 /W:2
-robocopy ..\transfer\files\exports .\backend\exports /E /COPY:DAT /DCOPY:DAT /R:2 /W:2
+robocopy ..\transfer\files\uploads D:\Apps\QUANLYKHACHHANG\data\uploads /E /COPY:DAT /DCOPY:DAT /R:2 /W:2
+robocopy ..\transfer\files\documents D:\Apps\QUANLYKHACHHANG\data\documents /E /COPY:DAT /DCOPY:DAT /R:2 /W:2
+robocopy ..\transfer\files\exports D:\Apps\QUANLYKHACHHANG\data\exports /E /COPY:DAT /DCOPY:DAT /R:2 /W:2
 Copy-Item ..\transfer\C360.env.private .\.env
 ```
 
@@ -498,8 +728,8 @@ Không dùng `frontend/node_modules` hoặc `frontend/dist` từ máy cũ; front
 docker load -i D:\Apps\QUANLYKHACHHANG\transfer\c360-docker-images.tar
 
 docker image inspect `
-  quanlykhachhang-backend:latest `
-  quanlykhachhang-frontend:latest `
+  ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-backend:transfer `
+  ghcr.io/nguyen-tien-tai12112001/quanlykhachhang-frontend:transfer `
   postgres:16 `
   redis:7-alpine `
   coredns/coredns:latest
@@ -518,7 +748,11 @@ CORS_ORIGINS=http://localhost,http://10.8.0.14,http://c360.agribank.com.vn
 FRONTEND_BIND_ADDR=0.0.0.0
 FRONTEND_HOST_PORT=80
 BACKEND_BIND_ADDR=127.0.0.1
+APP_DATA_DIR=D:/Apps/QUANLYKHACHHANG/data
+IMAGE_TAG=transfer
 ```
+
+`IMAGE_TAG=transfer` dùng cho gói image offline đã tạo ở mục 7.1. Nếu máy mới pull image từ GHCR theo commit, thay bằng SHA commit tương ứng.
 
 `DATABASE_URL` trong Docker phải dùng hostname `postgres`, không dùng `localhost` hoặc `10.8.0.14`:
 
@@ -565,12 +799,12 @@ Trong `dns/Corefile`, dòng `forward . 10.8.0.1` chỉ đúng khi `10.8.0.1` th�
 
 ## 13. Tạo PostgreSQL rỗng trên máy mới
 
-Tại thư mục ứng dụng:
+Chỉ thực hiện sau khi đã xác nhận Docker disk image nằm trong `D:\DockerData`. Tại thư mục ứng dụng, dùng Compose production:
 
 ```powershell
 Set-Location D:\Apps\QUANLYKHACHHANG\app
-docker compose up -d --no-build postgres redis
-docker compose ps
+docker compose --env-file .env -f docker-compose.prod.yml up -d postgres redis
+docker compose --env-file .env -f docker-compose.prod.yml ps
 ```
 
 Chờ `qlkh_postgres` và `qlkh_redis` đạt `healthy`.
@@ -585,39 +819,157 @@ Nếu Docker disk image đang nằm trên ổ không đủ dung lượng, dừng
 
 ## 14. Phục hồi PostgreSQL trên máy mới
 
+### 14.1. Chặn thao tác nhầm máy và kiểm tra file
+
+Các lệnh xóa/tạo lại database dưới đây **chỉ được chạy trên máy mới `10.8.0.14`**. Không chạy trên máy cũ.
+
+```powershell
+$TargetIp = '10.8.0.14'
+$HasTargetIp = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+  Where-Object IPAddress -eq $TargetIp
+
+if (-not $HasTargetIp) {
+  throw "Máy hiện tại không có IP $TargetIp. Dừng để tránh thao tác nhầm máy."
+}
+
+$ProjectDir = 'D:\Apps\QUANLYKHACHHANG\app'
+$TransferDir = 'D:\Apps\QUANLYKHACHHANG\transfer\database'
+$DumpName = 'c360_full_YYYYMMDD_HHMMSS.dump'
+$DumpPath = Join-Path $TransferDir $DumpName
+
+if (-not (Test-Path $DumpPath)) {
+  throw "Không tìm thấy dump: $DumpPath"
+}
+
+$ExpectedHash = (Get-Content "$DumpPath.sha256.txt").Trim()
+$ActualHash = (Get-FileHash $DumpPath -Algorithm SHA256).Hash
+if ($ActualHash -ne $ExpectedHash) {
+  throw 'Checksum dump không khớp. Dừng restore.'
+}
+
+Get-PSDrive -Name C,D | Select-Object Name,Used,Free
+```
+
+Ổ D phải đủ chỗ cho database sau giải nén, index, WAL tạm và tăng trưởng tiếp theo. Với DB nguồn khoảng 33 GB, không bắt đầu nếu ổ D chỉ còn xấp xỉ dung lượng database.
+
+### 14.2. Tạo lại database đích sạch
+
+Backend và frontend trên máy mới chưa được chạy ở bước này. Đọc cấu hình từ container rồi xóa database rỗng/khôi phục dở dang và tạo lại:
+
+```powershell
+Set-Location $ProjectDir
+$ComposeArgs = @('--env-file', '.env', '-f', 'docker-compose.prod.yml')
+
+$DbUser = (docker compose @ComposeArgs exec -T postgres printenv POSTGRES_USER).Trim()
+$DbName = (docker compose @ComposeArgs exec -T postgres printenv POSTGRES_DB).Trim()
+
+if (-not $DbUser -or -not $DbName) {
+  throw 'Không đọc được tên user/database từ PostgreSQL máy mới.'
+}
+
+docker compose @ComposeArgs exec -T postgres `
+  psql -U $DbUser -d postgres -v ON_ERROR_STOP=1 -c `
+  "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '$DbName' AND pid <> pg_backend_pid();"
+
+docker compose @ComposeArgs exec -T postgres dropdb -U $DbUser --if-exists $DbName
+if ($LASTEXITCODE -ne 0) { throw 'Không xóa được database đích.' }
+
+docker compose @ComposeArgs exec -T postgres createdb -U $DbUser -O $DbUser $DbName
+if ($LASTEXITCODE -ne 0) { throw 'Không tạo được database đích sạch.' }
+```
+
+Không dùng `docker volume rm` trong quy trình thông thường. Việc tạo lại đúng database an toàn và có phạm vi nhỏ hơn xóa toàn bộ volume.
+
+### 14.3. Restore dump và lưu nhật ký
+
 Ví dụ file dump nằm trong thư mục transfer:
 
 ```powershell
-$ProjectDir = 'D:\Apps\QUANLYKHACHHANG\app'
-$TransferDir = 'D:\Apps\QUANLYKHACHHANG\transfer'
-$DumpName = 'c360_full_YYYYMMDD_HHMMSS.dump'
-
-Set-Location $ProjectDir
+$RestoreJobs = 4
+$RestoreLog = Join-Path $TransferDir "$DumpName.restore.log"
+$RestoreStartedAt = Get-Date
 
 docker run --rm `
   --network qlkh_network `
   --env-file .\.env `
   -e DUMP_NAME=$DumpName `
+  -e RESTORE_JOBS=$RestoreJobs `
   -v "${TransferDir}:/backup:ro" `
   postgres:16 `
-  sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; pg_restore -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists --no-owner --no-privileges "/backup/$DUMP_NAME"'
+  sh -c 'export PGPASSWORD="$POSTGRES_PASSWORD"; pg_restore -h postgres -U "$POSTGRES_USER" -d "$POSTGRES_DB" --exit-on-error --no-owner --no-privileges --jobs="$RESTORE_JOBS" "/backup/$DUMP_NAME"' `
+  2>&1 | Tee-Object $RestoreLog
+
+if ($LASTEXITCODE -ne 0) {
+  throw "Restore thất bại. Xem log: $RestoreLog. Phải tạo lại database sạch trước khi chạy lại."
+}
+
+$RestoreElapsed = (Get-Date) - $RestoreStartedAt
+Write-Host "Restore hoàn tất sau $($RestoreElapsed.ToString())."
 ```
 
-Một số cảnh báo `does not exist, skipping` đi kèm `--clean --if-exists` trên DB mới có thể chấp nhận được. Lỗi kết nối, thiếu dung lượng, mất file hoặc restore dừng giữa chừng thì không được bỏ qua.
+`--exit-on-error` bảo đảm tiến trình dừng ngay khi có lỗi SQL. Nếu máy mới có ít CPU/RAM hoặc ổ đĩa chậm, giảm `$RestoreJobs` từ `4` xuống `2`; không tăng quá cao vì restore song song có thể làm nghẽn I/O.
+
+Nếu restore lỗi:
+
+1. Không khởi động backend/frontend.
+2. Giữ file dump và restore log.
+3. Xử lý nguyên nhân như thiếu dung lượng, checksum sai hoặc container mất kết nối.
+4. Chạy lại mục 14.2 để tạo database sạch.
+5. Chạy lại restore từ đầu; không restore nối tiếp vào database đang dở dang.
+
+### 14.4. Cập nhật thống kê, migration và kiểm tra DB
+
+Cập nhật thống kê để PostgreSQL lập kế hoạch truy vấn phù hợp ngay sau khi chuyển:
+
+```powershell
+docker compose @ComposeArgs exec -T postgres `
+  vacuumdb -U $DbUser -d $DbName --analyze-in-stages
+```
+
+Chạy migration của đúng phiên bản code trên máy mới:
+
+```powershell
+docker compose @ComposeArgs run --rm --no-deps backend alembic upgrade head
+if ($LASTEXITCODE -ne 0) { throw 'Alembic migration thất bại.' }
+
+docker compose @ComposeArgs run --rm --no-deps backend alembic current
+```
 
 Kiểm tra dung lượng DB sau restore:
 
 ```powershell
-docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -c "SELECT pg_size_pretty(pg_database_size(current_database()));"'
+docker compose @ComposeArgs exec -T postgres `
+  psql -U $DbUser -d $DbName -c `
+  'SELECT current_database(), current_user, pg_size_pretty(pg_database_size(current_database()));'
 ```
+
+Đối chiếu số dòng với `control-counts-before.txt`:
+
+```powershell
+$ControlSql = @"
+SELECT 'cif_customers' AS bang, COUNT(*) AS so_dong FROM cif_customers
+UNION ALL SELECT 'customer_period_profiles', COUNT(*) FROM customer_period_profiles
+UNION ALL SELECT 'customer_period_branch_details', COUNT(*) FROM customer_period_branch_details
+UNION ALL SELECT 'import_batches', COUNT(*) FROM import_batches
+UNION ALL SELECT 'system_users', COUNT(*) FROM system_users
+ORDER BY bang;
+"@
+
+docker compose @ComposeArgs exec -T postgres `
+  psql -U $DbUser -d $DbName -c $ControlSql |
+  Tee-Object "$TransferDir\control-counts-after.txt"
+```
+
+Số dòng từng bảng phải khớp bản trước chuyển. Migration chỉ được phép tạo/thay đổi cấu trúc theo revision; nếu migration chủ động biến đổi dữ liệu thì phải ghi rõ và đối soát riêng phần chênh lệch.
 
 ## 15. Khởi động toàn bộ hệ thống
 
 ### 15.1. Chạy trước bằng IP, chưa bật DNS
 
 ```powershell
-docker compose up -d --no-build backend frontend
-docker compose ps
+$ComposeArgs = @('--env-file', '.env', '-f', 'docker-compose.prod.yml')
+docker compose @ComposeArgs up -d backend frontend
+docker compose @ComposeArgs ps
 ```
 
 Backend tự chạy:
@@ -633,7 +985,7 @@ Kiểm tra:
 ```powershell
 Invoke-WebRequest -UseBasicParsing http://10.8.0.14/
 Invoke-RestMethod http://10.8.0.14/api/health
-docker compose exec backend alembic current
+docker compose @ComposeArgs run --rm --no-deps backend alembic current
 ```
 
 ### 15.2. Bật CoreDNS nếu máy này cung cấp DNS nội bộ
