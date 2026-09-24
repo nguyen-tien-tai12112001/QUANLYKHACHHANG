@@ -57,7 +57,7 @@ const statusMeta = {
   error: { text: 'Lỗi', color: 'error', badge: 'error' },
 };
 
-const moneyFormatter = new Intl.NumberFormat('vi-VN');
+const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 
 function money(value) {
   return moneyFormatter.format(Number(value || 0));
@@ -145,18 +145,15 @@ function CustomerProcessing() {
   const [currentJob, setCurrentJob] = useState(null);
   const [optionalFiles, setOptionalFiles] = useState([]);
   const [exchangeRates, setExchangeRates] = useState([]);
-  const [qualityAudit, setQualityAudit] = useState(null);
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
-  const [qualityLoading, setQualityLoading] = useState(false);
   const [processing, setProcessing] = useState(false);
   const [recovering, setRecovering] = useState(false);
   const [fileList, setFileList] = useState([]);
 
   function selectPeriod(periodKey, periodList = periods) {
     setSelectedPeriod(periodKey);
-    setQualityAudit(null);
     const period = periodList.find((item) => item.period_key === periodKey);
     setCurrentJob(period?.last_job || null);
   }
@@ -189,52 +186,28 @@ function CustomerProcessing() {
     setExchangeRates(data || []);
   }
 
-  async function loadQualityAudit(periodKey = selectedPeriod, refresh = false) {
+  async function loadPeriodDetails(periodKey, { showLoading = true } = {}) {
     if (!periodKey) return;
-    const { data } = await client.get('/customer-processing/quality-audit', {
-      params: { period_key: periodKey, refresh },
-      hideGlobalLoading: true,
-      noCache: refresh,
-    });
-    setQualityAudit(data || null);
-  }
-
-  async function loadPeriodDetails(periodKey) {
-    if (!periodKey) return;
-    setDetailLoading(true);
+    if (showLoading) setDetailLoading(true);
     try {
       await Promise.all([
         loadOptionalFiles(periodKey),
         loadExchangeRates(periodKey),
-        loadQualityAudit(periodKey),
       ]);
     } finally {
-      setDetailLoading(false);
+      if (showLoading) setDetailLoading(false);
     }
   }
 
-  async function runQualityAudit() {
-    if (!selectedPeriod) return;
-    setQualityLoading(true);
-    try {
-      await loadQualityAudit(selectedPeriod, true);
-      message.success('Đã kiểm định và lưu kết quả chất lượng dữ liệu');
-    } catch (error) {
-      message.error(error.response?.data?.detail || error.message);
-    } finally {
-      setQualityLoading(false);
-    }
-  }
-
-  async function refreshAll(periodKey = selectedPeriod) {
-    setLoading(true);
+  async function refreshAll(periodKey = selectedPeriod, { background = false } = {}) {
+    if (!background) setLoading(true);
     try {
       const target = await loadPeriods(periodKey);
-      await loadPeriodDetails(target);
+      await loadPeriodDetails(target, { showLoading: !background });
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
-      setLoading(false);
+      if (!background) setLoading(false);
     }
   }
 
@@ -256,10 +229,10 @@ function CustomerProcessing() {
     if (!currentJob || !['queued', 'processing'].includes(currentJob.status)) return undefined;
     const timer = window.setInterval(async () => {
       try {
-        const { data } = await client.get(`/customer-processing/jobs/${currentJob.id}`);
+        const { data } = await client.get(`/customer-processing/jobs/${currentJob.id}`, { hideGlobalLoading: true });
         setCurrentJob(data);
         if (!['queued', 'processing'].includes(data.status)) {
-          await refreshAll(data.period_key);
+          await refreshAll(data.period_key, { background: true });
         }
       } catch (error) {
         message.error(error.response?.data?.detail || error.message);
@@ -284,24 +257,59 @@ function CustomerProcessing() {
     return Date.now() - new Date(currentJob.updated_at).getTime() > 15 * 60 * 1000;
   }, [currentJob?.status, currentJob?.updated_at, isCurrentJobRunning]);
 
-  async function startProcessing() {
-    if (!selectedPeriod) {
-      message.warning('Vui lòng chọn kỳ dữ liệu');
-      return;
-    }
+  async function submitProcessing(allowMissingSources = false) {
     setProcessing(true);
     try {
-      const { data } = await client.post(`/customer-processing/jobs/${selectedPeriod}`);
+      const { data } = await client.post(`/customer-processing/jobs/${selectedPeriod}`, null, {
+        params: { allow_missing_sources: allowMissingSources },
+        hideGlobalLoading: true,
+      });
       setCurrentJob(data);
       localStorage.setItem('c360_processing_job_id', String(data.id));
       localStorage.setItem('c360_processing_period_key', selectedPeriod);
-      message.success('Đã tạo job xử lý dữ liệu khách hàng');
+      message.success(
+        allowMissingSources
+          ? 'Đã tạo job xử lý và ghi nhận xác nhận bỏ qua nguồn còn thiếu'
+          : 'Đã tạo job xử lý dữ liệu khách hàng',
+      );
       await loadPeriods(selectedPeriod);
     } catch (error) {
       message.error(error.response?.data?.detail || error.message);
     } finally {
       setProcessing(false);
     }
+  }
+
+  async function startProcessing() {
+    if (!selectedPeriod) {
+      message.warning('Vui lòng chọn kỳ dữ liệu');
+      return;
+    }
+    if (!selectedPeriodInfo?.is_fully_ready) {
+      const missingItems = selectedPeriodInfo?.missing_required_files || [];
+      const missingTypes = [...new Set(missingItems.map((item) => item.file_type).filter(Boolean))];
+      Modal.confirm({
+        title: `Kỳ ${selectedPeriod} chưa đủ nguồn dữ liệu`,
+        width: 560,
+        content: (
+          <Space orientation="vertical" size={8} style={{ width: '100%' }}>
+            <Text>
+              Nguồn còn thiếu: <Text strong type="danger">{missingTypes.join(', ') || 'chưa xác định'}</Text>
+            </Text>
+            <Text type="secondary">
+              Hệ thống vẫn xử lý các nguồn hiện có. Chỉ tiêu phụ thuộc nguồn còn thiếu có thể chưa có số liệu
+              và trạng thái kỳ sẽ tiếp tục hiển thị cảnh báo.
+            </Text>
+          </Space>
+        ),
+        okText: 'Vẫn chạy dữ liệu',
+        cancelText: 'Quay lại bổ sung file',
+        okButtonProps: { danger: true },
+        onOk: () => submitProcessing(true),
+      });
+      return;
+    }
+    await submitProcessing(false);
   }
 
   async function recoverProcessing() {
@@ -313,6 +321,7 @@ function CustomerProcessing() {
     try {
       const { data } = await client.post(`/customer-processing/jobs/${selectedPeriod}/recover`, null, {
         timeout: 60 * 1000,
+        hideGlobalLoading: true,
       });
       setCurrentJob(data);
       localStorage.setItem('c360_processing_job_id', String(data.id));
@@ -427,9 +436,9 @@ function CustomerProcessing() {
   return (
     <Space orientation="vertical" size={18} className="page-stack">
       <DataPageLoading
-        active={initialLoading || detailLoading || qualityLoading}
-        title={qualityLoading ? 'Đang kiểm định chất lượng dữ liệu' : 'Đang tải xử lý dữ liệu khách hàng'}
-        detail={qualityLoading ? 'Hệ thống đang đối chiếu hồ sơ C360 với dữ liệu nguồn. Kết quả sẽ được lưu để lần mở sau hiển thị ngay.' : 'Đang tải kỳ dữ liệu, file bổ sung, tỷ giá và kết quả kiểm định đã lưu.'}
+        active={initialLoading || detailLoading}
+        title="Đang tải xử lý dữ liệu khách hàng"
+        detail="Đang tải kỳ dữ liệu, file bổ sung, tỷ giá và trạng thái xử lý gần nhất."
       />
       <div>
         <Title level={2}>Xử lý dữ liệu khách hàng</Title>
@@ -568,7 +577,7 @@ function CustomerProcessing() {
                 <Button
                   type="primary"
                   icon={<PlayCircleOutlined />}
-                  disabled={!selectedPeriodInfo?.is_fully_ready || isCurrentJobRunning}
+                  disabled={!selectedPeriod || isCurrentJobRunning}
                   loading={processing}
                   onClick={startProcessing}
                 >
@@ -594,32 +603,6 @@ function CustomerProcessing() {
                             CIF gần nhất: {selectedPeriodInfo.latest_cif_import.original_filename} · {new Date(selectedPeriodInfo.latest_cif_import.finished_at).toLocaleString('vi-VN')}
                           </Text>
                         ) : null}
-                      </Space>
-                    )}
-                  />
-                ) : null}
-                {qualityAudit?.status === 'not_calculated' ? (
-                  <Alert
-                    type="info"
-                    showIcon
-                    message="Chưa có kết quả kiểm định được lưu"
-                    description="Kỳ cũ chỉ cần kiểm định một lần. Kết quả sẽ được lưu cùng job để những lần mở sau không phải quét lại toàn bộ dữ liệu."
-                    action={<Button size="small" type="primary" loading={qualityLoading} onClick={runQualityAudit}>Chạy kiểm định</Button>}
-                  />
-                ) : qualityAudit ? (
-                  <Alert
-                    type={qualityAudit.is_valid ? 'success' : 'error'}
-                    showIcon
-                    message={qualityAudit.is_valid ? 'Kiểm định dữ liệu theo khách hàng đạt' : 'Kiểm định dữ liệu theo khách hàng chưa đạt'}
-                    description={(
-                      <Space size={[6, 6]} wrap>
-                        {(qualityAudit.checks || []).map((check) => (
-                          <Tooltip key={check.code} title={`Thực tế: ${money(check.actual)} · Yêu cầu: ${money(check.expected)}`}>
-                            <Tag color={check.passed ? 'success' : 'error'}>
-                              {check.passed ? '✓' : '✕'} {check.label}
-                            </Tag>
-                          </Tooltip>
-                        ))}
                       </Space>
                     )}
                   />

@@ -1,5 +1,7 @@
 import shutil
 import calendar
+import re
+import unicodedata
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -24,6 +26,7 @@ from app.models import (
     SupplementalBaoLanhRecord,
     SupplementalBillPaymentTransaction,
     SupplementalOABRecord,
+    SupplementalPOSRecord,
 )
 
 
@@ -435,6 +438,7 @@ BRANCH_DETAIL_SQL = text(
             MAX(CASE WHEN COALESCE(vv_sms_tien_vay, 0) > 0 THEN 1 ELSE 0 END) AS sms_nhac_no_vay,
             MAX(CASE WHEN COALESCE(tg_sms_tien_gui, 0) > 0 THEN 1 ELSE 0 END) AS sms_tien_gui,
             MAX(CASE WHEN COALESCE(the_ghi_no_noi_dia, 0) > 0 THEN 1 ELSE 0 END) AS the_ghi_no_noi_dia,
+            MAX(CASE WHEN COALESCE(the_ghi_no_quoc_te, 0) > 0 THEN 1 ELSE 0 END) AS the_ghi_no_quoc_te,
             0 AS the_td_noi_dia,
             MAX(CASE WHEN COALESCE(the_tin_dung_quoc_te, 0) > 0 THEN 1 ELSE 0 END) AS the_td_quoc_te,
             MAX(CASE WHEN COALESCE(the_tin_dung_noi_dia, 0) > 0 THEN 1 ELSE 0 END) AS the_td_loc_viet
@@ -496,6 +500,7 @@ BRANCH_DETAIL_SQL = text(
         sms_nhac_no_vay,
         sms_tien_gui,
         the_ghi_no_noi_dia,
+        the_ghi_no_quoc_te,
         the_td_noi_dia,
         the_td_quoc_te,
         the_td_loc_viet,
@@ -539,6 +544,7 @@ BRANCH_DETAIL_SQL = text(
         COALESCE(cn.sms_nhac_no_vay, 0),
         COALESCE(cn.sms_tien_gui, 0),
         COALESCE(cn.the_ghi_no_noi_dia, 0),
+        COALESCE(cn.the_ghi_no_quoc_te, 0),
         COALESCE(cn.the_td_noi_dia, 0),
         COALESCE(cn.the_td_quoc_te, 0),
         COALESCE(cn.the_td_loc_viet, 0),
@@ -579,12 +585,14 @@ PROFILE_SQL = text(
                 COALESCE(sms_nhac_no_vay, 0) +
                 COALESCE(sms_tien_gui, 0) +
                 COALESCE(the_ghi_no_noi_dia, 0) +
+                COALESCE(the_ghi_no_quoc_te, 0) +
                 COALESCE(the_td_noi_dia, 0) +
                 COALESCE(the_td_quoc_te, 0) +
                 COALESCE(the_td_loc_viet, 0) +
                 COALESCE(bao_lanh, 0) +
                 COALESCE(loa_bien_dong_so_du, 0) +
-                COALESCE(phat_hanh_lc, 0)
+                COALESCE(phat_hanh_lc, 0) +
+                COALESCE(pos, 0)
             ) AS service_count,
             (
                 GREATEST(
@@ -616,12 +624,14 @@ PROFILE_SQL = text(
                         COALESCE(sms_nhac_no_vay, 0) +
                         COALESCE(sms_tien_gui, 0) +
                         COALESCE(the_ghi_no_noi_dia, 0) +
+                        COALESCE(the_ghi_no_quoc_te, 0) +
                         COALESCE(the_td_noi_dia, 0) +
                         COALESCE(the_td_quoc_te, 0) +
                         COALESCE(the_td_loc_viet, 0) +
                         COALESCE(bao_lanh, 0) +
                         COALESCE(loa_bien_dong_so_du, 0) +
-                        COALESCE(phat_hanh_lc, 0)
+                        COALESCE(phat_hanh_lc, 0) +
+                        COALESCE(pos, 0)
                     ) * 10 * 0.30
                 )
                 + (COALESCE(dp_record_count, 0) * 2 * 0.10),
@@ -645,12 +655,14 @@ PROFILE_SQL = text(
                     COALESCE(sms_nhac_no_vay, 0) +
                     COALESCE(sms_tien_gui, 0) +
                     COALESCE(the_ghi_no_noi_dia, 0) +
+                    COALESCE(the_ghi_no_quoc_te, 0) +
                     COALESCE(the_td_noi_dia, 0) +
                     COALESCE(the_td_quoc_te, 0) +
                     COALESCE(the_td_loc_viet, 0) +
                     COALESCE(bao_lanh, 0) +
                     COALESCE(loa_bien_dong_so_du, 0) +
-                    COALESCE(phat_hanh_lc, 0)
+                    COALESCE(phat_hanh_lc, 0) +
+                    COALESCE(pos, 0)
                 ) > 0 THEN 'Có dịch vụ đang dùng' END
             ) AS engagement_reason
         FROM details
@@ -696,12 +708,18 @@ PROFILE_SQL = text(
             MAX(sms_nhac_no_vay) AS sms_nhac_no_vay,
             MAX(sms_tien_gui) AS sms_tien_gui,
             MAX(the_ghi_no_noi_dia) AS the_ghi_no_noi_dia,
+            MAX(the_ghi_no_quoc_te) AS the_ghi_no_quoc_te,
             MAX(the_td_noi_dia) AS the_td_noi_dia,
             MAX(the_td_quoc_te) AS the_td_quoc_te,
             MAX(the_td_loc_viet) AS the_td_loc_viet,
             MAX(bao_lanh) AS bao_lanh,
             MAX(loa_bien_dong_so_du) AS loa_bien_dong_so_du,
             MAX(phat_hanh_lc) AS phat_hanh_lc,
+            MAX(pos) AS pos,
+            SUM(COALESCE(so_thiet_bi_pos, 0)) AS so_thiet_bi_pos,
+            MAX(pos_moi) AS pos_moi,
+            MAX(pos_khong_hoat_dong) AS pos_khong_hoat_dong,
+            MAX(pos_ngung_hoat_dong) AS pos_ngung_hoat_dong,
             jsonb_agg(
                 jsonb_build_object(
                     'branch_code', branch_code,
@@ -733,11 +751,17 @@ PROFILE_SQL = text(
                     'sms_nhac_no_vay', sms_nhac_no_vay,
                     'sms_tien_gui', sms_tien_gui,
                     'the_ghi_no_noi_dia', the_ghi_no_noi_dia,
+                    'the_ghi_no_quoc_te', the_ghi_no_quoc_te,
                     'the_td_quoc_te', the_td_quoc_te,
                     'the_td_loc_viet', the_td_loc_viet,
                     'bao_lanh', bao_lanh,
                     'loa_bien_dong_so_du', loa_bien_dong_so_du,
                     'phat_hanh_lc', phat_hanh_lc,
+                    'pos', pos,
+                    'so_thiet_bi_pos', so_thiet_bi_pos,
+                    'pos_moi', pos_moi,
+                    'pos_khong_hoat_dong', pos_khong_hoat_dong,
+                    'pos_ngung_hoat_dong', pos_ngung_hoat_dong,
                     'ma_cb', ma_cb,
                     'ten_can_bo', ten_can_bo,
                     'officer_employee_code', officer_employee_code
@@ -797,22 +821,28 @@ PROFILE_SQL = text(
         WHERE period_key = :period_key AND ma_kh IS NOT NULL
         GROUP BY ma_kh
     ),
-    loan_staff AS (
-        SELECT ma_kh, ma_cb AS ln_ma_cb, ten_can_bo AS ln_ten_can_bo, officer_employee_code AS ln_officer_employee_code
-        FROM (
-            SELECT
-                ma_kh,
-                ma_cb,
-                ten_can_bo,
-                officer_employee_code,
-                ROW_NUMBER() OVER (
-                    PARTITION BY ma_kh
-                    ORDER BY COALESCE(so_du_tien_vay, 0) DESC, ma_cb NULLS LAST, ten_can_bo NULLS LAST
-                ) AS row_number
-            FROM details
-            WHERE ma_cb IS NOT NULL
-        ) ranked
-        WHERE row_number = 1
+    primary_staff AS (
+        SELECT DISTINCT ON (location.ma_kh)
+            location.ma_kh,
+            detail.ma_cb,
+            detail.ten_can_bo,
+            detail.officer_employee_code
+        FROM primary_location location
+        LEFT JOIN details detail
+          ON detail.ma_kh=location.ma_kh
+         AND detail.branch_code=location.primary_branch_code
+        ORDER BY
+            location.ma_kh,
+            CASE WHEN NULLIF(TRIM(detail.ma_cb), '') IS NOT NULL
+                       OR NULLIF(TRIM(detail.officer_employee_code), '') IS NOT NULL THEN 0 ELSE 1 END,
+            GREATEST(
+                COALESCE(detail.so_du_tien_vay, 0),
+                COALESCE(detail.du_no_ngan_han, 0)
+                  + COALESCE(detail.du_no_trung_dai_han, 0)
+                  + COALESCE(detail.du_no_thau_chi, 0)
+            ) DESC,
+            COALESCE(detail.so_du_tien_gui, 0) DESC,
+            detail.ma_pgd NULLS LAST
     ),
     phones AS (
         SELECT ma_kh, MAX(telephone) FILTER (WHERE telephone IS NOT NULL) AS telephone
@@ -855,12 +885,18 @@ PROFILE_SQL = text(
         sms_nhac_no_vay,
         sms_tien_gui,
         the_ghi_no_noi_dia,
+        the_ghi_no_quoc_te,
         the_td_noi_dia,
         the_td_quoc_te,
         the_td_loc_viet,
         bao_lanh,
         loa_bien_dong_so_du,
         phat_hanh_lc,
+        pos,
+        so_thiet_bi_pos,
+        pos_moi,
+        pos_khong_hoat_dong,
+        pos_ngung_hoat_dong,
         ma_cb,
         ten_can_bo,
         officer_employee_code,
@@ -912,15 +948,21 @@ PROFILE_SQL = text(
         detail_agg.sms_nhac_no_vay,
         detail_agg.sms_tien_gui,
         detail_agg.the_ghi_no_noi_dia,
+        detail_agg.the_ghi_no_quoc_te,
         detail_agg.the_td_noi_dia,
         detail_agg.the_td_quoc_te,
         detail_agg.the_td_loc_viet,
         detail_agg.bao_lanh,
         detail_agg.loa_bien_dong_so_du,
         detail_agg.phat_hanh_lc,
-        COALESCE(enrichment.ma_cb, loan_staff.ln_ma_cb),
-        COALESCE(enrichment.ten_can_bo, loan_staff.ln_ten_can_bo),
-        COALESCE(enrichment.officer_employee_code, loan_staff.ln_officer_employee_code),
+        detail_agg.pos,
+        detail_agg.so_thiet_bi_pos,
+        detail_agg.pos_moi,
+        detail_agg.pos_khong_hoat_dong,
+        detail_agg.pos_ngung_hoat_dong,
+        COALESCE(enrichment.ma_cb, primary_staff.ma_cb),
+        COALESCE(enrichment.ten_can_bo, primary_staff.ten_can_bo),
+        COALESCE(enrichment.officer_employee_code, primary_staff.officer_employee_code),
         COALESCE(enrichment.telephone, phones.telephone),
         COALESCE(enrichment.primary_branch_code, primary_location.primary_branch_code),
         COALESCE(enrichment.primary_pgd_code, primary_location.primary_pgd_code),
@@ -943,7 +985,7 @@ PROFILE_SQL = text(
         :job_id
     FROM detail_agg
     LEFT JOIN tmp_profile_enrichment enrichment ON enrichment.customer_id=detail_agg.customer_id
-    LEFT JOIN loan_staff ON loan_staff.ma_kh = detail_agg.ma_kh
+    LEFT JOIN primary_staff ON primary_staff.ma_kh = detail_agg.ma_kh
     LEFT JOIN phones ON phones.ma_kh = detail_agg.ma_kh
     LEFT JOIN primary_location ON primary_location.ma_kh = detail_agg.ma_kh
     """
@@ -1114,6 +1156,50 @@ SUPPLEMENT_BRANCH_UPDATE_SQL = text(
 )
 
 
+POS_BRANCH_UPDATE_SQL = text(
+    """
+    WITH matched_rows AS (
+        SELECT DISTINCT
+            pos.id AS pos_id,
+            dp.ma_kh,
+            COALESCE(dp.ma_cn, dp.branch_code) AS branch_code,
+            pos.terminal_count,
+            pos.is_new,
+            pos.is_inactive,
+            pos.is_discontinued
+        FROM supplemental_pos_records pos
+        JOIN dp01_deposit_accounts dp
+          ON dp.period_key = pos.period_key
+         AND dp.so_tai_khoan = pos.settlement_account
+        WHERE pos.period_key = :period_key
+          AND pos.settlement_account IS NOT NULL
+          AND dp.ma_kh IS NOT NULL
+    ), flags AS (
+        SELECT
+            ma_kh,
+            branch_code,
+            MAX(CASE WHEN is_discontinued = 0 THEN 1 ELSE 0 END) AS pos,
+            SUM(CASE WHEN is_discontinued = 0 THEN terminal_count ELSE 0 END) AS so_thiet_bi_pos,
+            MAX(CASE WHEN is_discontinued = 0 THEN is_new ELSE 0 END) AS pos_moi,
+            MAX(CASE WHEN is_discontinued = 0 THEN is_inactive ELSE 0 END) AS pos_khong_hoat_dong,
+            MAX(is_discontinued) AS pos_ngung_hoat_dong
+        FROM matched_rows
+        GROUP BY ma_kh, branch_code
+    )
+    UPDATE customer_period_branch_details detail SET
+        pos = flags.pos,
+        so_thiet_bi_pos = flags.so_thiet_bi_pos,
+        pos_moi = flags.pos_moi,
+        pos_khong_hoat_dong = flags.pos_khong_hoat_dong,
+        pos_ngung_hoat_dong = flags.pos_ngung_hoat_dong
+    FROM flags
+    WHERE detail.period_key = :period_key
+      AND detail.ma_kh = flags.ma_kh
+      AND detail.branch_code = flags.branch_code
+    """
+)
+
+
 def clean_text(value) -> str | None:
     if value is None:
         return None
@@ -1170,6 +1256,10 @@ def detect_optional_file_type(filename: str) -> str | None:
         return "OAB_LOA"
     if "list_transaction" in normalized or "billpayment" in normalized or "bill_payment" in normalized:
         return "BILLPAYMENT"
+    ascii_name = unicodedata.normalize("NFKD", filename)
+    ascii_name = "".join(char for char in ascii_name if not unicodedata.combining(char)).lower()
+    if re.search(r"(^|[^a-z0-9])pos([^a-z0-9]|$)", ascii_name):
+        return "POS"
     return None
 
 
@@ -1252,12 +1342,55 @@ def parse_oab_file(db: Session, item: CustomerProcessingOptionalFile) -> int:
     inserted = 0
     batch: list[SupplementalOABRecord] = []
 
-    for row_index, row in enumerate(rows):
-        if row_index < 1:
+    def normalize_oab_header(value) -> str:
+        normalized = unicodedata.normalize("NFKD", str(value or "").strip())
+        without_accents = "".join(char for char in normalized if not unicodedata.combining(char))
+        without_accents = without_accents.replace("Đ", "D").replace("đ", "d")
+        return re.sub(r"[^A-Z0-9]+", "_", without_accents.upper()).strip("_")
+
+    header_aliases = {
+        "ma": {"MA", "STT"},
+        "branch": {"CHI_NHANH", "DON_VI", "BRANCH"},
+        "provider": {"NHA_CUNG_CAP_LOA", "NHA_CUNG_CAP", "PROVIDER"},
+        "customer_name": {"TEN_KH", "TEN_KHACH_HANG", "CUSTOMER_NAME"},
+        "virtual_account": {"TK_AO", "SO_TK_AO", "TAI_KHOAN_AO"},
+        "agribank_account": {
+            "TK_AGRIBANK",
+            "SO_TK_AGRIBANK",
+            "TAI_KHOAN_AGRIBANK",
+            "TK_MO_TAI_NGAN_HANG",
+            "TAI_KHOAN_MO_TAI_NGAN_HANG",
+        },
+        "phone": {"SDT", "SO_DIEN_THOAI", "DIEN_THOAI", "PHONE"},
+        "id_number": {"SO_CAN_CUOC", "CAN_CUOC", "CCCD", "SO_CCCD", "ID_NUMBER"},
+    }
+    header_indexes: dict[str, int] | None = None
+
+    def find_header_indexes(row) -> dict[str, int] | None:
+        normalized_cells = [normalize_oab_header(value) for value in row]
+        indexes: dict[str, int] = {}
+        for field, aliases in header_aliases.items():
+            for index, header in enumerate(normalized_cells):
+                if header in aliases:
+                    indexes[field] = index
+                    break
+        if {"branch", "agribank_account"}.issubset(indexes):
+            return indexes
+        return None
+
+    def cell_value(row, field: str):
+        if not header_indexes or field not in header_indexes:
+            return None
+        index = header_indexes[field]
+        return row[index] if index < len(row) else None
+
+    for row in rows:
+        if header_indexes is None:
+            header_indexes = find_header_indexes(row)
             continue
-        branch_full = clean_text(row[3] if len(row) > 3 else None)
-        ten_kh = clean_text(row[6] if len(row) > 6 else None)
-        tk_agribank = clean_text(row[8] if len(row) > 8 else None)
+        branch_full = clean_text(cell_value(row, "branch"))
+        ten_kh = clean_text(cell_value(row, "customer_name"))
+        tk_agribank = clean_text(cell_value(row, "agribank_account"))
         if not branch_full or not tk_agribank:
             continue
         branch_code = branch_full.split("-", 1)[0].strip()
@@ -1267,21 +1400,21 @@ def parse_oab_file(db: Session, item: CustomerProcessingOptionalFile) -> int:
             period_key=item.period_key,
             branch_code=branch_code,
             branch_name=branch_name,
-            provider=clean_text(row[4] if len(row) > 4 else None),
+            provider=clean_text(cell_value(row, "provider")),
             ten_kh=ten_kh,
-            tk_ao=clean_text(row[7] if len(row) > 7 else None),
+            tk_ao=clean_text(cell_value(row, "virtual_account")),
             tk_agribank=tk_agribank,
-            phone=clean_text(row[9] if len(row) > 9 else None),
-            id_number=clean_text(row[10] if len(row) > 10 else None),
+            phone=clean_text(cell_value(row, "phone")),
+            id_number=clean_text(cell_value(row, "id_number")),
             raw_data={
-                "ma": clean_text(row[1] if len(row) > 1 else None),
+                "ma": clean_text(cell_value(row, "ma")),
                 "chi_nhanh": branch_full,
-                "nha_cung_cap_loa": clean_text(row[4] if len(row) > 4 else None),
+                "nha_cung_cap_loa": clean_text(cell_value(row, "provider")),
                 "ten_kh": ten_kh,
-                "tk_ao": clean_text(row[7] if len(row) > 7 else None),
+                "tk_ao": clean_text(cell_value(row, "virtual_account")),
                 "tk_agribank": tk_agribank,
-                "sdt": clean_text(row[9] if len(row) > 9 else None),
-                "so_can_cuoc": clean_text(row[10] if len(row) > 10 else None),
+                "sdt": clean_text(cell_value(row, "phone")),
+                "so_can_cuoc": clean_text(cell_value(row, "id_number")),
             },
         )
         batch.append(record)
@@ -1291,6 +1424,10 @@ def parse_oab_file(db: Session, item: CustomerProcessingOptionalFile) -> int:
             db.flush()
             batch = []
 
+    if header_indexes is None:
+        raise ValueError("Không tìm thấy dòng tiêu đề OAB có cột Chi nhánh và TK Agribank")
+    if inserted == 0:
+        raise ValueError("File OAB không có bản ghi hợp lệ sau dòng tiêu đề")
     if batch:
         db.add_all(batch)
         db.flush()
@@ -1355,10 +1492,227 @@ def parse_billpayment_file(db: Session, item: CustomerProcessingOptionalFile) ->
     return inserted
 
 
+def _normalize_pos_header(value) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or "").strip())
+    without_accents = "".join(char for char in normalized if not unicodedata.combining(char))
+    without_accents = without_accents.replace("Đ", "D").replace("đ", "d")
+    return re.sub(r"[^A-Z0-9]+", "_", without_accents.upper()).strip("_")
+
+
+def _pos_source_month(sheet) -> int | None:
+    title_match = re.search(r"T\s*(\d{1,2})[.\-/ ]*20\d{2}", sheet.title, re.IGNORECASE)
+    if title_match:
+        month = int(title_match.group(1))
+        if 1 <= month <= 12:
+            return month
+    for row in sheet.iter_rows(min_row=1, max_row=min(sheet.max_row, 12), values_only=True):
+        joined = " ".join(str(value or "") for value in row)
+        month_match = re.search(r"(?:THANG|THÁNG)\s*(\d{1,2})", joined, re.IGNORECASE)
+        if month_match:
+            month = int(month_match.group(1))
+            if 1 <= month <= 12:
+                return month
+    return None
+
+
+def _read_pos_snapshots(file_path: Path) -> dict[int, dict[str, dict]]:
+    """Read each POS worksheet into one relationship snapshot per source month.
+
+    A relationship is keyed by settlement account when available, otherwise by Merchant ID.
+    Multi-row terminals are consolidated so monthly activity is not counted repeatedly.
+    """
+    if file_path.suffix.lower() == ".xls":
+        raise ValueError("Nguồn POS nhiều sheet hiện chỉ hỗ trợ định dạng XLSX; hãy lưu file XLS thành XLSX")
+    workbook = load_workbook(file_path, read_only=True, data_only=True)
+    snapshots: dict[int, dict[str, dict]] = {}
+    try:
+        for sheet in workbook.worksheets:
+            source_month = _pos_source_month(sheet)
+            if source_month is None:
+                continue
+            rows = list(sheet.iter_rows(values_only=True))
+            header_index = None
+            header_values = None
+            for index, row in enumerate(rows[:20]):
+                normalized = [_normalize_pos_header(value) for value in row]
+                if "SO_TAI_KHOAN" in normalized and "MERCHANT_ID" in normalized:
+                    header_index = index
+                    header_values = normalized
+                    break
+            if header_index is None or header_values is None:
+                continue
+
+            def index_of(*aliases):
+                for alias in aliases:
+                    if alias in header_values:
+                        return header_values.index(alias)
+                return None
+
+            account_index = index_of("SO_TAI_KHOAN")
+            customer_index = index_of("TEN_KHACH_HANG_DVCNT", "TEN_KHACH_HANG")
+            store_index = index_of("TEN_CUA_HANG")
+            merchant_index = index_of("MERCHANT_ID")
+            terminal_index = index_of("MA_THIET_BI")
+            terminal_count_index = index_of("SO_LUONG_THIET_BI")
+            monthly_group_index = next(
+                (index for index, value in enumerate(header_values) if value.startswith("DOANH_SO_PHAT_SINH")),
+                None,
+            )
+            transaction_index = monthly_group_index
+
+            snapshot = snapshots.setdefault(source_month, {})
+            parent: dict[str, str | None] = {
+                "account": None, "customer": None, "store": None, "merchant": None,
+            }
+            for row_number, row in enumerate(rows[header_index + 2:], start=header_index + 3):
+                def value_at(index):
+                    return row[index] if index is not None and index < len(row) else None
+
+                raw_account = clean_text(value_at(account_index))
+                raw_customer = clean_text(value_at(customer_index))
+                raw_store = clean_text(value_at(store_index))
+                raw_merchant = clean_text(value_at(merchant_index))
+                terminal_id = clean_text(value_at(terminal_index))
+
+                # A blank Merchant ID denotes another terminal of the preceding merchant.
+                # A new Merchant ID without an account remains unresolved and must not inherit
+                # the preceding customer's account silently.
+                continuation = not raw_merchant and bool(terminal_id)
+                account = raw_account or (parent["account"] if continuation else None)
+                customer_name = raw_customer or (parent["customer"] if continuation else None)
+                store_name = raw_store or (parent["store"] if continuation else None)
+                merchant_id = raw_merchant or (parent["merchant"] if continuation else None)
+                if raw_merchant:
+                    parent = {
+                        "account": raw_account,
+                        "customer": raw_customer,
+                        "store": raw_store,
+                        "merchant": raw_merchant,
+                    }
+                elif continuation:
+                    parent.update({
+                        "account": account,
+                        "customer": customer_name,
+                        "store": store_name,
+                        "merchant": merchant_id,
+                    })
+
+                if not account and not merchant_id:
+                    continue
+                if account and not re.match(r"^\d{8,20}$", account):
+                    account = None
+                # POS status is deliberately resolved only through the settlement-account
+                # chain POS -> DP01 -> core customer -> CIF. Merchant-only rows remain a
+                # source-quality exception and must never be guessed onto a customer.
+                if not account:
+                    continue
+                relation_key = f"A:{account}"
+                branch_source = account or merchant_id or terminal_id or ""
+                branch_code = branch_source[:4] if re.match(r"^26\d{2}", branch_source) else None
+                declared_count = parse_decimal_value(value_at(terminal_count_index)) or Decimal(0)
+                transaction_count = parse_decimal_value(value_at(transaction_index)) or Decimal(0)
+                record = snapshot.setdefault(relation_key, {
+                    "account": account,
+                    "customer_name": customer_name,
+                    "store_name": store_name,
+                    "merchant_id": merchant_id,
+                    "branch_code": branch_code,
+                    "terminals": set(),
+                    "declared_terminal_count": 0,
+                    "transaction_count": 0,
+                    "source_rows": [],
+                })
+                if terminal_id:
+                    record["terminals"].add(terminal_id)
+                record["declared_terminal_count"] = max(
+                    record["declared_terminal_count"], int(declared_count),
+                )
+                record["transaction_count"] = max(record["transaction_count"], int(transaction_count))
+                record["source_rows"].append(row_number)
+        return snapshots
+    finally:
+        workbook.close()
+
+
+def parse_pos_file(
+    db: Session,
+    item: CustomerProcessingOptionalFile,
+    target_period_key: str,
+) -> int:
+    if target_period_key not in {"20260630", "20260731", "20260831"}:
+        return 0
+    snapshots = _read_pos_snapshots(Path(item.file_path))
+    if not snapshots:
+        raise ValueError("Không tìm thấy sheet POS có cột SỐ TÀI KHOẢN và Merchant ID")
+
+    target_month = int(target_period_key[4:6])
+    available_months = sorted(snapshots)
+    source_month = max((month for month in available_months if month <= target_month), default=available_months[-1])
+    current = snapshots[source_month]
+    # Kỳ 08 kế thừa ảnh chụp T7 nên không suy diễn POS mới/ngừng nếu chưa có sheet T8.
+    previous_month = source_month if target_month > source_month else max(
+        (month for month in available_months if month < source_month),
+        default=source_month,
+    )
+    previous = snapshots[previous_month]
+    current_keys, previous_keys = set(current), set(previous)
+    inserted = 0
+
+    for relation_key, relation in current.items():
+        terminals = sorted(relation["terminals"])
+        terminal_count = max(len(terminals), relation["declared_terminal_count"])
+        transaction_count = int(relation["transaction_count"])
+        db.add(SupplementalPOSRecord(
+            optional_file_id=item.id,
+            period_key=target_period_key,
+            source_period_key=f"2026{source_month:02d}{calendar.monthrange(2026, source_month)[1]:02d}",
+            branch_code=relation["branch_code"],
+            settlement_account=relation["account"],
+            customer_name=relation["customer_name"],
+            store_name=relation["store_name"],
+            merchant_id=relation["merchant_id"],
+            terminal_id=", ".join(terminals) or None,
+            terminal_count=terminal_count,
+            transaction_count=transaction_count,
+            is_active=1 if transaction_count > 0 else 0,
+            is_new=1 if relation_key not in previous_keys else 0,
+            is_inactive=1 if transaction_count <= 0 else 0,
+            is_discontinued=0,
+            raw_data={"source_rows": relation["source_rows"], "source_sheet_month": source_month},
+        ))
+        inserted += 1
+
+    for relation_key in sorted(previous_keys - current_keys):
+        relation = previous[relation_key]
+        terminals = sorted(relation["terminals"])
+        db.add(SupplementalPOSRecord(
+            optional_file_id=item.id,
+            period_key=target_period_key,
+            source_period_key=f"2026{source_month:02d}{calendar.monthrange(2026, source_month)[1]:02d}",
+            branch_code=relation["branch_code"],
+            settlement_account=relation["account"],
+            customer_name=relation["customer_name"],
+            store_name=relation["store_name"],
+            merchant_id=relation["merchant_id"],
+            terminal_id=", ".join(terminals) or None,
+            terminal_count=max(len(terminals), relation["declared_terminal_count"]),
+            transaction_count=0,
+            is_active=0,
+            is_new=0,
+            is_inactive=0,
+            is_discontinued=1,
+            raw_data={"source_rows": relation["source_rows"], "previous_sheet_month": previous_month},
+        ))
+        inserted += 1
+    db.flush()
+    return inserted
+
+
 def load_supported_optional_files(db: Session, period_key: str) -> int:
     db.execute(delete(SupplementalBaoLanhRecord).where(SupplementalBaoLanhRecord.period_key == period_key))
     db.execute(delete(SupplementalOABRecord).where(SupplementalOABRecord.period_key == period_key))
     db.execute(delete(SupplementalBillPaymentTransaction).where(SupplementalBillPaymentTransaction.period_key == period_key))
+    db.execute(delete(SupplementalPOSRecord).where(SupplementalPOSRecord.period_key == period_key))
     db.flush()
 
     total_rows = 0
@@ -1368,6 +1722,16 @@ def load_supported_optional_files(db: Session, period_key: str) -> int:
         .order_by(CustomerProcessingOptionalFile.uploaded_at)
         .all()
     )
+    if period_key in {"20260630", "20260731", "20260831"}:
+        rows = [row for row in rows if detect_optional_file_type(row.original_filename) != "POS"]
+        shared_pos = (
+            db.query(CustomerProcessingOptionalFile)
+            .order_by(CustomerProcessingOptionalFile.uploaded_at.desc())
+            .all()
+        )
+        latest_pos = next((row for row in shared_pos if detect_optional_file_type(row.original_filename) == "POS"), None)
+        if latest_pos:
+            rows.append(latest_pos)
     for item in rows:
         file_type = detect_optional_file_type(item.original_filename)
         if not file_type:
@@ -1383,6 +1747,8 @@ def load_supported_optional_files(db: Session, period_key: str) -> int:
                 total_rows += parse_oab_file(db, item)
             elif file_type == "BILLPAYMENT":
                 total_rows += parse_billpayment_file(db, item)
+            elif file_type == "POS":
+                total_rows += parse_pos_file(db, item, period_key)
             item.status = "ready"
             item.note = f"{item.note or ''}".strip()
         except Exception as exc:
@@ -2080,7 +2446,7 @@ def process_customer_period(job_id: int) -> None:
         db.execute(delete(CustomerPeriodExchangeRate).where(CustomerPeriodExchangeRate.period_key == job.period_key))
         db.commit()
 
-        update_job(db, job, "processing", "Đọc file bổ sung Bảo lãnh/OAB nếu có", 24)
+        update_job(db, job, "processing", "Đọc file bổ sung Bảo lãnh/OAB/Bill Payment/POS nếu có", 24)
         load_supported_optional_files(db, job.period_key)
         db.commit()
 
@@ -2093,9 +2459,10 @@ def process_customer_period(job_id: int) -> None:
         db.execute(BRANCH_DETAIL_SQL, {"period_key": job.period_key, "job_id": job.id})
         db.commit()
 
-        update_job(db, job, "processing", "Đối chiếu Bảo lãnh, OAB và Bill Payment theo tài khoản DP01", 62)
+        update_job(db, job, "processing", "Đối chiếu Bảo lãnh, OAB, Bill Payment và POS theo tài khoản DP01", 62)
         db.execute(SUPPLEMENT_BRANCH_UPDATE_SQL, {"period_key": job.period_key})
         db.execute(BILLPAYMENT_BRANCH_UPDATE_SQL, {"period_key": job.period_key})
+        db.execute(POS_BRANCH_UPDATE_SQL, {"period_key": job.period_key})
         db.commit()
 
         update_job(db, job, "processing", "Gom khách hàng trùng MA_KH trên nhiều chi nhánh thành một hồ sơ", 78)

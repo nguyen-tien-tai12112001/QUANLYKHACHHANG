@@ -5,7 +5,7 @@ import {
   getCampaignGroupPriority,
 } from '../constants/services';
 
-const moneyFormatter = new Intl.NumberFormat('vi-VN');
+const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 
 export function money(value) {
   if (value === null || value === undefined || value === '') return '0';

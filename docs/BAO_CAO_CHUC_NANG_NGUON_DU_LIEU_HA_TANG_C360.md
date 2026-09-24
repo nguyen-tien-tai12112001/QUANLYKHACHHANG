@@ -521,7 +521,26 @@ File bổ sung được đăng ký trong `customer_processing_optional_files`; d
 | Bảo lãnh/LC | Đọc `Ma_CN`, `Ma_Kh`, `Loaibllc`, hợp đồng, ngày hiệu lực và số tiền; map loại bảo lãnh hoặc LC thành cờ sử dụng |
 | OAB/Loa biến động số dư | Đối chiếu `TK_AGRIBANK` với `DP01.SO_TAI_KHOAN` để tìm KH và bật cờ `loa_bien_dong_so_du` |
 
-Đây là file bổ sung theo kỳ, không thuộc bộ tên file chuẩn. Tên file phải chứa từ khóa nhận diện `baolanh/bao_lanh`, `oab/loa`, `billpayment/list_transaction`.
+Đây là file bổ sung theo kỳ, không thuộc bộ tên file chuẩn. Tên file phải chứa từ khóa nhận diện `baolanh/bao_lanh`, `oab/loa`, `billpayment/list_transaction` hoặc từ `POS` đứng độc lập.
+
+### 5.15. Báo cáo POS toàn tỉnh
+
+Nguồn POS chỉ dùng để xác định quan hệ sử dụng POS và vòng đời thiết bị; hệ thống không lấy doanh số hoặc phí POS từ file này.
+
+```text
+POS.SỐ_TÀI_KHOẢN
+    → DP01.SO_TAI_KHOAN cùng kỳ
+    → DP01.MA_KH
+    → CIF.customer_core_code tại bước xử lý khách hàng
+```
+
+- `POS = 1` khi có ít nhất một quan hệ tài khoản POS khớp được DP01, kể cả không phát sinh giao dịch.
+- `SO_THIET_BI_POS` lấy số thiết bị sau khi gộp các dòng cùng tài khoản/Merchant.
+- `POS_MOI` là quan hệ có kỳ này nhưng không có ở sheet liền trước.
+- `POS_KHONG_HOAT_DONG` là quan hệ còn tồn tại nhưng số món giao dịch trong tháng bằng 0.
+- `POS_NGUNG_HOAT_DONG` là quan hệ có ở sheet kỳ trước nhưng không còn ở kỳ này.
+- File hiện hành áp dụng cho 06–08/2026: kỳ 06 dùng T6, kỳ 07 dùng T7, kỳ 08 kế thừa ảnh chụp T7 và không tự suy diễn POS mới/ngừng khi chưa có T8.
+- Merchant ID, mã thiết bị và tên cửa hàng không được dùng để đoán mã khách hàng.
 
 ## 6. Xác định chi nhánh, phòng ban và cán bộ quản lý
 

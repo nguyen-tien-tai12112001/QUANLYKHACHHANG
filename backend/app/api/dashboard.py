@@ -50,16 +50,25 @@ ACTIVE_SERVICE_KEYS = [
     "tk_so_dep",
     "agribank_plus",
     "tin_nhan_ott",
+    "e_banking",
     "sms_nhac_no_vay",
     "sms_tien_gui",
     "the_ghi_no_noi_dia",
+    "the_ghi_no_quoc_te",
+    "the_td_noi_dia",
     "the_td_quoc_te",
     "the_td_loc_viet",
     "bao_lanh",
     "loa_bien_dong_so_du",
     "phat_hanh_lc",
     "ttqt",
+    "thuho_dien",
+    "thuho_nuoc",
     "thuho_dt",
+    "hkd_tk",
+    "abic_batk",
+    "abic_bathe",
+    "pos",
 ]
 
 
@@ -211,16 +220,25 @@ SERVICE_LABELS = {
     "tk_so_dep": "TK số đẹp",
     "agribank_plus": "Agribank Plus",
     "tin_nhan_ott": "Tin nhắn OTT",
+    "e_banking": "E-Banking",
     "sms_nhac_no_vay": "SMS nhắc nợ vay",
     "sms_tien_gui": "SMS tiền gửi",
     "the_ghi_no_noi_dia": "Thẻ ghi nợ nội địa",
+    "the_ghi_no_quoc_te": "Thẻ ghi nợ quốc tế",
+    "the_td_noi_dia": "Thẻ TD nội địa",
     "the_td_quoc_te": "Thẻ TD quốc tế",
     "the_td_loc_viet": "Thẻ TD Lộc Việt",
     "bao_lanh": "Bảo lãnh",
-    "loa_bien_dong_so_du": "Loa biến động số dư",
+    "loa_bien_dong_so_du": "Loa Thần Tài",
     "phat_hanh_lc": "Phát hành LC",
     "ttqt": "LC/TTQT/KDNT",
+    "thuho_dien": "Thu hộ tiền điện",
+    "thuho_nuoc": "Thu hộ tiền nước",
     "thuho_dt": "Thu hộ điện thoại/viễn thông",
+    "hkd_tk": "Tài khoản hộ kinh doanh",
+    "abic_batk": "Bảo an tài khoản",
+    "abic_bathe": "Bảo an chủ thẻ",
+    "pos": "Đơn vị chấp nhận thẻ POS",
 }
 
 SERVICE_GROUPS = {
@@ -228,16 +246,25 @@ SERVICE_GROUPS = {
     "tk_so_dep": "Tài khoản",
     "agribank_plus": "Digital",
     "tin_nhan_ott": "Digital",
+    "e_banking": "Digital",
     "sms_nhac_no_vay": "Digital",
     "sms_tien_gui": "Digital",
     "the_ghi_no_noi_dia": "Thẻ",
+    "the_ghi_no_quoc_te": "Thẻ",
+    "the_td_noi_dia": "Thẻ",
     "the_td_quoc_te": "Thẻ",
     "the_td_loc_viet": "Thẻ",
     "bao_lanh": "Bảo lãnh/TTQT",
-    "loa_bien_dong_so_du": "Khác",
+    "loa_bien_dong_so_du": "Digital",
     "phat_hanh_lc": "Bảo lãnh/TTQT",
     "ttqt": "Bảo lãnh/TTQT",
+    "thuho_dien": "Thanh toán",
+    "thuho_nuoc": "Thanh toán",
     "thuho_dt": "Thanh toán",
+    "hkd_tk": "Tài khoản",
+    "abic_batk": "Bảo hiểm",
+    "abic_bathe": "Bảo hiểm",
+    "pos": "Thẻ",
 }
 
 CAMPAIGN_GROUP_PRIORITY = {
@@ -1201,7 +1228,7 @@ def dashboard_business_analytics(
     db.execute(text("SET LOCAL max_parallel_workers_per_gather = 2"))
     filters = _scope_filters(scope, filters)
     filter_key = tuple(sorted((key, str(value)) for key, value in filters.items()))
-    cache_key = (period_key, scope.ma_cn, f"v6-fee-rules:{scope.ma_pgd or ''}:{int(include_rankings)}:{filter_key}")
+    cache_key = (period_key, scope.ma_cn, f"v9-pos:{scope.ma_pgd or ''}:{int(include_rankings)}:{filter_key}")
     cached = _BUSINESS_CACHE.get(cache_key)
     if cached and monotonic() - cached[0] < _INSIGHTS_CACHE_TTL_SECONDS:
         return cached[1]
@@ -1261,6 +1288,12 @@ def dashboard_business_analytics(
         *service_count_exprs,
         func.sum(case((model.agribank_plus > 0, 1), else_=0)),
         *fee_count_exprs,
+        func.sum(case((and_(
+            func.coalesce(model.so_du_tien_gui, 0) + func.coalesce(model.so_du_tgtt_binh_quan, 0) <= 0,
+            func.coalesce(model.so_du_tien_vay, 0) <= 0,
+            service_expr <= 0,
+            fee_expr == 0,
+        ), 1), else_=0)),
     ).one()
 
     retail_condition = model.loai_khach_hang.in_(RETAIL_CUSTOMER_TYPES)
@@ -1314,6 +1347,7 @@ def dashboard_business_analytics(
     service_count_start = service_any_index + 3
     plus_base_index = service_count_start + len(ACTIVE_SERVICE_KEYS)
     fee_count_start = plus_base_index + 1
+    without_relationship_index = fee_count_start + len(FEE_FIELDS)
     fee_rows = [
         {
             "key": field,
@@ -1378,6 +1412,12 @@ def dashboard_business_analytics(
     )
 
     service_counts = {key: int(totals[service_count_start + index] or 0) for index, key in enumerate(ACTIVE_SERVICE_KEYS)}
+    pos_status = query.with_entities(
+        func.sum(case((func.coalesce(model.pos_moi, 0) > 0, 1), else_=0)),
+        func.sum(case((func.coalesce(model.pos_khong_hoat_dong, 0) > 0, 1), else_=0)),
+        func.sum(case((func.coalesce(model.pos_ngung_hoat_dong, 0) > 0, 1), else_=0)),
+        func.coalesce(func.sum(model.so_thiet_bi_pos), 0),
+    ).one()
     profile_fee_total = float(sum(item["value"] for item in fee_rows))
     fee_reconciliation = _fee_reconciliation(db, period_key, scope, customer_ids, profile_fee_total)
     result = {
@@ -1386,6 +1426,7 @@ def dashboard_business_analytics(
         "customer": {
             "total": int(totals[0] or 0), "with_deposit": int(totals[with_deposit_index] or 0),
             "with_loan": int(totals[with_loan_index] or 0), "with_service": int(totals[service_any_index] or 0),
+            "without_relationship": int(totals[without_relationship_index] or 0),
         },
         "funding": {
             **funding,
@@ -1438,6 +1479,13 @@ def dashboard_business_analytics(
             loan_base=int(totals[with_loan_index] or 0), plus_base=int(totals[plus_base_index] or 0),
             total_customers=int(totals[0] or 0),
         ),
+        "pos": {
+            "customers": service_counts.get("pos", 0),
+            "devices": int(pos_status[3] or 0),
+            "new_customers": int(pos_status[0] or 0),
+            "inactive_customers": int(pos_status[1] or 0),
+            "stopped_customers": int(pos_status[2] or 0),
+        },
         "branches": [{
             "branch_code": row[0], "customers": int(row[1] or 0), "deposit": float(row[2] or 0),
             "casa": float(row[3] or 0), "loan": float(row[4] or 0), "fee": float(row[5] or 0),
@@ -1643,6 +1691,7 @@ BUSINESS_DRILLDOWN_LABELS = {
     "service": "Khách hàng sử dụng sản phẩm",
     "multi_branch": "Khách hàng có quan hệ đa chi nhánh",
     "no_service": "Khách hàng chưa sử dụng sản phẩm",
+    "no_relationship": "Khách hàng chưa phát sinh tiền gửi, tiền vay, sản phẩm dịch vụ hoặc phí",
     "risk": "Khách hàng có dự phòng",
     "provision_accumulated": "Khách hàng có DPRR lũy kế sau hoàn nhập",
     "written_off": "Khách hàng có dư nợ XLRR",
@@ -1651,6 +1700,9 @@ BUSINESS_DRILLDOWN_LABELS = {
     "new_deposit_account": "Khách hàng có tài khoản tiền gửi mới trong kỳ",
     "closed_deposit_account": "Khách hàng có tài khoản tất toán/ngừng trong kỳ",
     "deposit_drop": "Khách hàng giảm tiền gửi từ 30%",
+    "pos_new": "Khách hàng có POS mới trong kỳ",
+    "pos_inactive": "Khách hàng có POS không phát sinh giao dịch trong kỳ",
+    "pos_stopped": "Khách hàng có POS ngừng hoạt động trong kỳ",
 }
 
 
@@ -1684,10 +1736,19 @@ def _business_drilldown_condition(model, metric: str, db: Session | None = None,
         "other_fee": func.coalesce(model.phi_khac, 0) != 0,
         "service": services > 0,
         "no_service": services == 0,
+        "no_relationship": and_(
+            deposit <= 0,
+            func.coalesce(model.so_du_tien_vay, 0) <= 0,
+            services <= 0,
+            fee == 0,
+        ),
         "risk": (func.abs(func.coalesce(model.dprr_chung_lk, 0)) + func.abs(func.coalesce(model.dprr_cuthe_lk, 0))) > 0,
         "provision_accumulated": (func.abs(func.coalesce(model.dprr_chung_lk, 0)) + func.abs(func.coalesce(model.dprr_cuthe_lk, 0))) > 0,
         "general_provision_period": func.coalesce(model.dprr_chung_tt, 0) != 0,
         "specific_provision_period": func.coalesce(model.dprr_cuthe_tt, 0) != 0,
+        "pos_new": func.coalesce(model.pos_moi, 0) > 0,
+        "pos_inactive": func.coalesce(model.pos_khong_hoat_dong, 0) > 0,
+        "pos_stopped": func.coalesce(model.pos_ngung_hoat_dong, 0) > 0,
     }
     if model is CustomerPeriodProfile:
         conditions["written_off"] = func.coalesce(model.du_no_xlrr, 0) > 0
@@ -2061,6 +2122,9 @@ def dashboard_business_drilldown(
         "written_off": getattr(model, "du_no_xlrr", model.so_du_tien_vay),
         "general_provision_period": model.dprr_chung_tt,
         "specific_provision_period": model.dprr_cuthe_tt,
+        "pos_new": model.pos_moi,
+        "pos_inactive": model.pos_khong_hoat_dong,
+        "pos_stopped": model.pos_ngung_hoat_dong,
     }.get(metric, model.so_du_tien_vay if metric.startswith("debt_group:") else service_expr)
     selected_query = query.with_entities(
         model.ma_kh, model.ten_kh, model.loai_khach_hang,
@@ -2072,6 +2136,10 @@ def dashboard_business_drilldown(
         (CustomerPeriodProfile.branch_details if model is CustomerPeriodProfile else literal(None)).label("branch_details"),
         model.dprr_chung_tt, model.dprr_chung_lk, model.dprr_cuthe_tt, model.dprr_cuthe_lk,
         *(getattr(model, key) for key in ACTIVE_SERVICE_KEYS),
+        model.so_thiet_bi_pos,
+        model.pos_moi,
+        model.pos_khong_hoat_dong,
+        model.pos_ngung_hoat_dong,
     )
     sort_columns = {
         "branch": model.branch_code if model is CustomerPeriodBranchDetail else model.primary_branch_code,
@@ -2154,6 +2222,7 @@ def dashboard_business_drilldown(
             for index, key in enumerate(ACTIVE_SERVICE_KEYS)
             if int(row[18 + index] or 0) > 0
         ]
+        pos_offset = 18 + len(ACTIVE_SERVICE_KEYS)
         items.append({
             "ma_kh": row[0], "ten_kh": row[1], "customer_type": row[2],
             "deposit": float(row[3] or 0), "casa": float(row[4] or 0),
@@ -2161,6 +2230,10 @@ def dashboard_business_drilldown(
             "fee": float(row[6] or 0),
             "provision": float((row[14] if metric == "general_provision_period" else row[16] if metric == "specific_provision_period" else row[7]) or 0),
             "service_count": int(row[8] or 0),
+            "so_thiet_bi_pos": int(row[pos_offset] or 0),
+            "pos_moi": int(row[pos_offset + 1] or 0),
+            "pos_khong_hoat_dong": int(row[pos_offset + 2] or 0),
+            "pos_ngung_hoat_dong": int(row[pos_offset + 3] or 0),
             "written_off": float(row[9] or 0), "branch_code": row[10],
             "officer_code": officer_code, "officer_name": officer_name,
             "dprr_chung_tt": float(row[14] or 0), "dprr_chung_lk": float(row[15] or 0),

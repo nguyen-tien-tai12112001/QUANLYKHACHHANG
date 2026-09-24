@@ -6,7 +6,7 @@
   --agri-gold: #d6a033;
   --agri-green: #218653;
   --ink: #25171b;
-  --muted: #6f6470;
+  --muted: #303846;
   --line: #eadfd8;
   --surface: #ffffff;
   --page: #f7f3ef;
@@ -23,6 +23,55 @@ body {
   background: var(--page);
   color: var(--ink);
   font-family: var(--app-font);
+}
+
+/*
+ * High-contrast text policy
+ * -------------------------
+ * C360 is primarily used on office monitors and projected screens. Secondary
+ * copy therefore uses a near-black palette instead of Ant Design's pale gray
+ * defaults. Status colours and text on dark surfaces keep their semantic
+ * colours through the more specific rules below.
+ */
+.demo-content .ant-typography-secondary,
+.demo-content .ant-statistic-title,
+.demo-content .ant-descriptions-item-label,
+.demo-content .ant-empty-description,
+.demo-content .ant-form-item-extra,
+.demo-content .ant-form-item-explain,
+.global-scope-bar .ant-typography-secondary,
+.ant-modal-content .ant-typography-secondary,
+.ant-modal-content .ant-descriptions-item-label,
+.ant-modal-content .ant-form-item-extra,
+.ant-drawer-content .ant-typography-secondary,
+.ant-drawer-content .ant-descriptions-item-label,
+.ant-drawer-content .ant-form-item-extra,
+.ant-popover-inner .ant-typography-secondary,
+.ant-dropdown-menu .ant-typography-secondary,
+.ant-notification-notice .ant-typography-secondary {
+  color: #303846 !important;
+}
+
+.demo-content .ant-input::placeholder,
+.demo-content .ant-input-number-input::placeholder,
+.demo-content .ant-select-selection-placeholder,
+.ant-modal-content .ant-input::placeholder,
+.ant-modal-content .ant-input-number-input::placeholder,
+.ant-modal-content .ant-select-selection-placeholder,
+.ant-drawer-content .ant-input::placeholder,
+.ant-drawer-content .ant-input-number-input::placeholder,
+.ant-drawer-content .ant-select-selection-placeholder {
+  color: #596579 !important;
+  opacity: 1;
+}
+
+/* Text rendered on dark/coloured surfaces must remain light. */
+.demo-sidebar .ant-typography-secondary,
+.demo-sidebar .ant-menu-title-content,
+.personal-profile-hero .ant-typography-secondary,
+.personal-security-hero .ant-typography-secondary,
+.login-intro .ant-typography-secondary {
+  color: rgba(255, 255, 255, 0.9) !important;
 }
 
 body,

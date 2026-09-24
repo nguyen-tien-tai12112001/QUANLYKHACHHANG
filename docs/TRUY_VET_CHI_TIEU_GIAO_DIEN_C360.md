@@ -319,7 +319,7 @@ Card sản phẩm chỉ thể hiện có/không hoặc số lượng theo đúng
 | Tài khoản mở mới/đã đóng | So tập `ACCOUNTNO` giữa hai kỳ |
 | Số dư cuối kỳ cao nhưng bình quân thấp | So `MONTHLYENDBALANCE` và `AVERAGEBALANCE` theo ngưỡng/ratio đang cấu hình |
 | Bình quân cao nhưng cuối kỳ giảm mạnh | So hai cột PF14 và kỳ trước; phải ghi ngưỡng |
-| Tỷ lệ duy trì số dư | `Số dư cuối kỳ / số dư bình quân` khi mẫu số khác 0 |
+| Tỷ lệ duy trì số dư | Với tài khoản có kỳ gốc: `MIN(Số dư bình quân kỳ này / Số dư cuối kỳ liền trước, 100%)`. Tài khoản mở mới hoặc xuất hiện lại không có kỳ gốc nên không tính; tài khoản tất toán vẫn tính mức duy trì bình quân trước khi đóng. Tổng hợp theo tỷ trọng số dư kỳ gốc và loại các tài khoản thiếu SDBQ PF14. |
 
 ## 7.2. Tiền vay và rủi ro
 

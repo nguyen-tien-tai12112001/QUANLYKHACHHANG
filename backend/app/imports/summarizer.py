@@ -328,6 +328,7 @@ SUMMARY_INSERT_SQL = text(
             MAX(CASE WHEN COALESCE(vv_sms_tien_vay, 0) > 0 THEN 1 ELSE 0 END) AS sms_nhac_no_vay,
             MAX(CASE WHEN COALESCE(tg_sms_tien_gui, 0) > 0 THEN 1 ELSE 0 END) AS sms_tien_gui,
             MAX(CASE WHEN COALESCE(the_ghi_no_noi_dia, 0) > 0 THEN 1 ELSE 0 END) AS the_ghi_no_noi_dia,
+            MAX(CASE WHEN COALESCE(the_ghi_no_quoc_te, 0) > 0 THEN 1 ELSE 0 END) AS the_ghi_no_quoc_te,
             MAX(CASE WHEN COALESCE(the_tin_dung_noi_dia, 0) > 0 THEN 1 ELSE 0 END) AS the_td_loc_viet,
             MAX(CASE WHEN COALESCE(the_tin_dung_quoc_te, 0) > 0 THEN 1 ELSE 0 END) AS the_td_quoc_te
         FROM cn05_customer_services
@@ -362,6 +363,7 @@ SUMMARY_INSERT_SQL = text(
         sms_nhac_no_vay,
         sms_tien_gui,
         the_ghi_no_noi_dia,
+        the_ghi_no_quoc_te,
         the_td_quoc_te,
         the_td_loc_viet,
         tt_tien_dien,
@@ -407,6 +409,7 @@ SUMMARY_INSERT_SQL = text(
         COALESCE(cn.sms_nhac_no_vay, 0) AS sms_nhac_no_vay,
         COALESCE(cn.sms_tien_gui, 0) AS sms_tien_gui,
         COALESCE(cn.the_ghi_no_noi_dia, 0) AS the_ghi_no_noi_dia,
+        COALESCE(cn.the_ghi_no_quoc_te, 0) AS the_ghi_no_quoc_te,
         COALESCE(cn.the_td_quoc_te, 0) AS the_td_quoc_te,
         COALESCE(cn.the_td_loc_viet, 0) AS the_td_loc_viet,
         0 AS tt_tien_dien,

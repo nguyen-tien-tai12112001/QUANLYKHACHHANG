@@ -1002,6 +1002,7 @@ class CustomerPeriodSummary(Base):
     sms_nhac_no_vay: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sms_tien_gui: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_ghi_no_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_ghi_no_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_loc_viet: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tt_tien_dien: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -1149,6 +1150,7 @@ class CustomerPeriodProfile(Base):
     sms_nhac_no_vay: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sms_tien_gui: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_ghi_no_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_ghi_no_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_loc_viet: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -1162,6 +1164,11 @@ class CustomerPeriodProfile(Base):
     hkd_account_numbers: Mapped[str | None] = mapped_column(Text)
     abic_batk: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     abic_bathe: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    so_thiet_bi_pos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pos_moi: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pos_khong_hoat_dong: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pos_ngung_hoat_dong: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ma_cb: Mapped[str | None] = mapped_column(String(50))
     ten_can_bo: Mapped[str | None] = mapped_column(String(255))
     officer_employee_code: Mapped[str | None] = mapped_column(String(50))
@@ -1233,6 +1240,7 @@ class CustomerPeriodBranchDetail(Base):
     sms_nhac_no_vay: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     sms_tien_gui: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_ghi_no_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    the_ghi_no_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_noi_dia: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_quoc_te: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     the_td_loc_viet: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -1246,6 +1254,11 @@ class CustomerPeriodBranchDetail(Base):
     hkd_account_numbers: Mapped[str | None] = mapped_column(Text)
     abic_batk: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     abic_bathe: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    so_thiet_bi_pos: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pos_moi: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pos_khong_hoat_dong: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    pos_ngung_hoat_dong: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     ma_cb: Mapped[str | None] = mapped_column(String(50))
     ten_can_bo: Mapped[str | None] = mapped_column(String(255))
     officer_employee_code: Mapped[str | None] = mapped_column(String(50))
@@ -1338,6 +1351,34 @@ class SupplementalOABRecord(Base):
     id_number: Mapped[str | None] = mapped_column(String(80), index=True)
     raw_data: Mapped[dict | None] = mapped_column(JSON)
     created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SupplementalPOSRecord(Base):
+    __tablename__ = "supplemental_pos_records"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    optional_file_id: Mapped[int | None] = mapped_column(ForeignKey("customer_processing_optional_files.id"), index=True)
+    period_key: Mapped[str] = mapped_column(String(8), index=True, nullable=False)
+    source_period_key: Mapped[str | None] = mapped_column(String(8), index=True)
+    branch_code: Mapped[str | None] = mapped_column(String(10), index=True)
+    settlement_account: Mapped[str | None] = mapped_column(String(120), index=True)
+    customer_name: Mapped[str | None] = mapped_column(String(255))
+    store_name: Mapped[str | None] = mapped_column(String(255))
+    merchant_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    terminal_id: Mapped[str | None] = mapped_column(String(100), index=True)
+    terminal_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    transaction_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_active: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_new: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_inactive: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    is_discontinued: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    raw_data: Mapped[dict | None] = mapped_column(JSON)
+    created_at: Mapped[object] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("ix_supplemental_pos_period_account", "period_key", "settlement_account"),
+        Index("ix_supplemental_pos_period_merchant", "period_key", "merchant_id"),
+    )
 
 
 class BusinessMatchingRule(Base):

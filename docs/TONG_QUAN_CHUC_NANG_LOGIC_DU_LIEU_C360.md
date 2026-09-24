@@ -822,7 +822,7 @@ Các trường đang chờ nguồn hoặc chưa chốt logic:
 | BATD | `batd` | Chờ nguồn |
 | BATK | `batk` | Chờ nguồn |
 | Bảo hiểm ô tô/xe máy | `bh_oto_xe_may` | Chờ nguồn |
-| POS | `pos` | Chờ nguồn |
+| POS | `pos` | Báo cáo POS bổ sung → đối chiếu số tài khoản với DP01 → lấy mã KH lõi → tham chiếu Kho CIF tại bước xử lý KH |
 | Kiều hối | `chi_tra_kieu_hoi` | Chờ nguồn |
 | Thanh toán quốc tế | `thanh_toan_quoc_te` | Chờ nguồn |
 | Mua bán ngoại tệ | `mua_ban_ngoai_te` | Chờ nguồn |

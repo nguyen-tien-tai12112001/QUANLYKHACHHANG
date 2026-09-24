@@ -131,7 +131,7 @@ export default function SystemConfiguration() {
         { title: 'Tên nghiệp vụ', dataIndex: 'rule_name', width: 190 },
         { title: 'Nguồn', dataIndex: 'source_type', width: 130, render: (value) => <Tag color="cyan">{value}</Tag> },
         { title: 'Mã dịch vụ', dataIndex: 'service_codes', width: 280, render: (values) => (values || []).map((value) => <Tag key={value}>{value}</Tag>) },
-        { title: 'Số tiền điều kiện', dataIndex: 'amount_equals', width: 160, align: 'right', render: (value) => value == null ? 'Không giới hạn' : `${Number(value).toLocaleString('vi-VN')} đ` },
+        { title: 'Số tiền điều kiện', dataIndex: 'amount_equals', width: 160, align: 'right', render: (value) => value == null ? 'Không giới hạn' : `${Number(value).toLocaleString('vi-VN', { maximumFractionDigits: 0 })} đ` },
         { title: 'Hiệu lực', width: 190, render: (_, row) => `${row.effective_from || 'Không giới hạn'} → ${row.effective_to || '∞'}` },
         { title: 'Bật', dataIndex: 'active', width: 80, align: 'center', render: (value, row) => <Switch checked={value} onChange={(checked) => toggleRule(row, checked)} /> },
         { title: '', width: 110, fixed: 'right', render: (_, row) => <><Button icon={<EditOutlined />} onClick={() => openRule(row)} /><Popconfirm title="Xóa quy tắc này?" onConfirm={() => deleteRule(row.id)}><Button danger icon={<DeleteOutlined />} /></Popconfirm></> },

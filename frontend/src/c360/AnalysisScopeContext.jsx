@@ -234,13 +234,23 @@ export function AnalysisScopeProvider({ children, currentUser }) {
       setSessionVersion((value) => value + 1);
       return true;
     },
-    reset: () => {
-      setDraft({ periodKey: '', branchCode: fixedBranchCode, pgdCode: null, advanced: EMPTY_ADVANCED_SCOPE });
-      setApplied(null);
-      setSessionSummary(null);
-      setSessionData(null);
-      sessionStorage.removeItem('c360_analysis_session');
-      clearApiCache();
+    resetDraft: () => {
+      // Chỉ xóa điều kiện đang nhập. Phiên dữ liệu đã áp dụng vẫn được giữ để
+      // người dùng tiếp tục xem các màn hình trong khi chuẩn bị phạm vi mới.
+      setDraft({
+        periodKey: '',
+        branchCode: fixedBranchCode,
+        pgdCode: null,
+        advanced: { ...EMPTY_ADVANCED_SCOPE },
+      });
+    },
+    resetAdvanced: () => {
+      // Bộ lọc nâng cao là phần nháp: đặt lại không được hủy kỳ/đơn vị và cũng
+      // không được xóa sessionData đang phục vụ toàn bộ C360.
+      setDraft((current) => ({
+        ...current,
+        advanced: { ...EMPTY_ADVANCED_SCOPE },
+      }));
     },
     refresh: () => {
       clearApiCache();

@@ -76,7 +76,7 @@ const SERVICE_DEFS = [
   { key: 'bao_lanh',             label: 'Bảo lãnh',             group: 'Bảo lãnh/TTQT',  pending: false },
   { key: 'loa_bien_dong_so_du',  label: 'Loa biến động số dư', group: 'Khác',            pending: false },
   { key: 'phan_mem_ban_hang',    label: 'Phần mềm bán hàng',   group: 'Khác',            pending: true  },
-  { key: 'pos',                  label: 'POS',                  group: 'Khác',            pending: true  },
+  { key: 'pos',                  label: 'POS',                  group: 'Thẻ',             pending: false },
   { key: 'chi_tra_kieu_hoi',     label: 'Chi trả kiều hối',    group: 'Bảo lãnh/TTQT',  pending: true  },
   { key: 'phat_hanh_lc',         label: 'Phát hành LC',         group: 'Bảo lãnh/TTQT',  pending: false },
   { key: 'thanh_toan_quoc_te',   label: 'Thanh toán quốc tế',  group: 'Bảo lãnh/TTQT',  pending: true  },
@@ -113,7 +113,7 @@ function tiemNangTag(score) {
   return                           { label: 'Thấp', color: '#64748b', bg: '#f8fafc' };
 }
 
-const moneyFormatter = new Intl.NumberFormat('vi-VN');
+const moneyFormatter = new Intl.NumberFormat('vi-VN', { maximumFractionDigits: 0 });
 
 function money(value) {
   if (value === null || value === undefined || value === '') return '';

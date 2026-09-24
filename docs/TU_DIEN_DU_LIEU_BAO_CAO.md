@@ -163,7 +163,11 @@ Các trường này đang hiển thị dạng `Chờ DL` hoặc chưa có logic 
 | Bảo lãnh | `bao_lanh` | Chờ xác định cột nguồn |
 | Loa biến động số dư | `loa_bien_dong_so_du` | Chờ xác định cột nguồn |
 | Phần mềm bán hàng | `phan_mem_ban_hang` | Chờ xác định cột nguồn |
-| POS | `pos` | Chờ xác định cột nguồn |
+| POS | `pos` | File bổ sung Báo cáo POS: `SỐ TÀI KHOẢN` → `DP01.SO_TAI_KHOAN` → `DP01.MA_KH` → Kho CIF; có ít nhất một quan hệ hợp lệ thì bằng 1 |
+| Số thiết bị POS | `so_thiet_bi_pos` | Lấy lớn hơn giữa số thiết bị khai báo và số mã thiết bị khác nhau theo tài khoản/Merchant, sau đó cộng theo KH và chi nhánh |
+| POS mới | `pos_moi` | Có trong sheet kỳ này nhưng không có ở sheet liền trước; không suy diễn mới cho 08/2026 khi nguồn mới nhất là T7 |
+| POS không hoạt động | `pos_khong_hoat_dong` | Quan hệ POS còn tồn tại nhưng số món giao dịch trong tháng bằng 0 |
+| POS ngừng hoạt động | `pos_ngung_hoat_dong` | Có ở sheet kỳ trước nhưng không còn ở sheet kỳ này |
 | Chi trả kiều hối | `chi_tra_kieu_hoi` | Chờ xác định cột nguồn |
 | Phát hành LC | `phat_hanh_lc` | Chờ xác định cột nguồn |
 | Thanh toán quốc tế | `thanh_toan_quoc_te` | Chờ xác định cột nguồn |

@@ -29,6 +29,7 @@ from app.models import (
     BC29CustomerCreditRisk,
     BusinessMatchingRule,
     CifCustomer,
+    CifCustomerIdentifier,
     CifImportBatch,
     CustomerPeriodBranchDetail,
     CustomerPeriodExchangeRate,
@@ -50,6 +51,7 @@ from app.models import (
     SupplementalBaoLanhRecord,
     SupplementalBillPaymentTransaction,
     SupplementalOABRecord,
+    SupplementalPOSRecord,
     SystemUser,
     SystemConfigurationEntry,
 )
@@ -132,6 +134,7 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "SMS_TKTV": "sms_nhac_no_vay",
     "SMS_TKTG": "sms_tien_gui",
     "THE_GNND": "the_ghi_no_noi_dia",
+    "THE_GNQT": "the_ghi_no_quoc_te",
     "THE_LOCVIET": "the_td_loc_viet",
     "THE_TDQT": "the_td_quoc_te",
     "LOATHANTAI": "loa_bien_dong_so_du",
@@ -141,6 +144,11 @@ PROFILE_DICTIONARY_FIELD_MAP = {
     "HKD_TK": "hkd_tk",
     "ABIC_BATK": "abic_batk",
     "ABIC_BATHE": "abic_bathe",
+    "POS": "pos",
+    "SO_THIET_BI_POS": "so_thiet_bi_pos",
+    "POS_MOI": "pos_moi",
+    "POS_KHONG_HOAT_DONG": "pos_khong_hoat_dong",
+    "POS_NGUNG_HOAT_DONG": "pos_ngung_hoat_dong",
 }
 
 
@@ -453,6 +461,7 @@ PROFILE_SERVICE_FIELDS = {
     "sms_nhac_no_vay",
     "sms_tien_gui",
     "the_ghi_no_noi_dia",
+    "the_ghi_no_quoc_te",
     "the_td_quoc_te",
     "the_td_loc_viet",
     "bao_lanh",
@@ -465,6 +474,7 @@ PROFILE_SERVICE_FIELDS = {
     "hkd_tk",
     "abic_batk",
     "abic_bathe",
+    "pos",
 }
 
 GROUP_DEPOSIT_THRESHOLD = 1_000_000_000
@@ -496,6 +506,7 @@ def cross_sell_condition():
             is_retail_customer_expr(),
             func.coalesce(CustomerPeriodProfile.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD,
             CustomerPeriodProfile.the_ghi_no_noi_dia == 0,
+            CustomerPeriodProfile.the_ghi_no_quoc_te == 0,
             CustomerPeriodProfile.the_td_quoc_te == 0,
             CustomerPeriodProfile.the_td_loc_viet == 0,
         ),
@@ -531,6 +542,7 @@ def _branch_finance_agg_subquery(db: Session, period_key: str, branch_code: str,
         func.max(CustomerPeriodBranchDetail.agribank_plus).label("agribank_plus"),
         func.max(CustomerPeriodBranchDetail.sms_nhac_no_vay).label("sms_nhac_no_vay"),
         func.max(CustomerPeriodBranchDetail.the_ghi_no_noi_dia).label("the_ghi_no_noi_dia"),
+        func.max(CustomerPeriodBranchDetail.the_ghi_no_quoc_te).label("the_ghi_no_quoc_te"),
         func.max(CustomerPeriodBranchDetail.the_td_quoc_te).label("the_td_quoc_te"),
         func.max(CustomerPeriodBranchDetail.the_td_loc_viet).label("the_td_loc_viet"),
         func.max(CustomerPeriodBranchDetail.loai_khach_hang).label("loai_khach_hang"),
@@ -561,6 +573,7 @@ def _branch_cross_sell_condition(agg):
             retail,
             func.coalesce(agg.c.so_du_tgtt_binh_quan, 0) >= GROUP_CASA_THRESHOLD,
             func.coalesce(agg.c.the_ghi_no_noi_dia, 0) == 0,
+            func.coalesce(agg.c.the_ghi_no_quoc_te, 0) == 0,
             func.coalesce(agg.c.the_td_quoc_te, 0) == 0,
             func.coalesce(agg.c.the_td_loc_viet, 0) == 0,
         ),
@@ -1712,7 +1725,7 @@ def delete_optional_file(optional_file_id: int, db: Session = Depends(get_db)):
     ).first()
     if running_job:
         raise HTTPException(status_code=409, detail="Không thể xóa khi kỳ đang có job xử lý")
-    for model in (SupplementalBaoLanhRecord, SupplementalOABRecord, SupplementalBillPaymentTransaction):
+    for model in (SupplementalBaoLanhRecord, SupplementalOABRecord, SupplementalBillPaymentTransaction, SupplementalPOSRecord):
         db.query(model).filter(model.optional_file_id == item.id).delete(synchronize_session=False)
     file_path = Path(item.file_path) if item.file_path else None
     period_key = item.period_key
@@ -1933,9 +1946,10 @@ PROFILE_QUICK_FIELDS = [
     "pf10_lds_count", "pf10_interest", "pf10_accruals", "pf10_book_correction_interest",
     "du_no_xlrr", "ds_thu_no_xlrr", "loai_vay", "so_du_tgtt_binh_quan", "thau_chi",
     "tk_so_dep", "agribank_plus", "tin_nhan_ott", "e_banking", "sms_nhac_no_vay",
-    "sms_tien_gui", "the_ghi_no_noi_dia", "the_td_noi_dia", "the_td_quoc_te",
+    "sms_tien_gui", "the_ghi_no_noi_dia", "the_ghi_no_quoc_te", "the_td_noi_dia", "the_td_quoc_te",
     "the_td_loc_viet", "bao_lanh", "loa_bien_dong_so_du", "phat_hanh_lc", "thuho_dien",
     "thuho_nuoc", "thuho_dt", "hkd_tk", "hkd_account_numbers", "abic_batk", "abic_bathe",
+    "pos", "so_thiet_bi_pos", "pos_moi", "pos_khong_hoat_dong", "pos_ngung_hoat_dong",
     "ma_cb", "ten_can_bo", "officer_employee_code", "telephone", "primary_branch_code",
     "primary_pgd_code", "primary_pgd_name", "primary_location_score", "primary_location_reason",
     "branch_details", "processing_job_id",
@@ -1958,6 +1972,66 @@ def _mask_quick_profile(payload: dict, user: CurrentUser) -> dict:
             if str(account).strip()
         )
     return payload
+
+
+def _profile_representative_payload(
+    db: Session,
+    profile: CustomerPeriodProfile,
+    preferred_branch: str | None,
+    user: CurrentUser,
+) -> dict | None:
+    """Return the legal representative/owner fields retained in the CIF row.
+
+    The normalized CIF master currently keeps the customer itself, while the
+    GD_* columns remain in the identifier snapshot. Resolve the row closest to
+    the branch being viewed and expose it separately so an organisation's
+    representative is never confused with the customer's own demographics.
+    """
+    query = db.query(CifCustomerIdentifier).filter(
+        or_(
+            CifCustomerIdentifier.customer_id == profile.customer_id,
+            CifCustomerIdentifier.customer_core_code == profile.ma_kh,
+        )
+    )
+    branch_hint = preferred_branch or profile.primary_branch_code or profile.managing_branch_code
+    if branch_hint:
+        query = query.order_by(
+            case((CifCustomerIdentifier.branch_code == branch_hint, 0), else_=1),
+            CifCustomerIdentifier.imported_at.desc(),
+            CifCustomerIdentifier.id.desc(),
+        )
+    else:
+        query = query.order_by(
+            CifCustomerIdentifier.imported_at.desc(),
+            CifCustomerIdentifier.id.desc(),
+        )
+    identifier = query.first()
+    raw = identifier.raw_data or {} if identifier else {}
+
+    def raw_value(key: str):
+        value = raw.get(key)
+        text_value = str(value or "").strip()
+        return text_value or None
+
+    representative = {
+        "name": raw_value("gd_ten") or profile.ten_chu_doanh_nghiep,
+        "birth_date": raw_value("gd_ngaysinh"),
+        "gender": raw_value("gd_gioitinh"),
+        "phone": raw_value("gd_sdt"),
+        "address": raw_value("gd_diachi"),
+        "source": "CIF.GD_*",
+        "source_branch_code": identifier.branch_code if identifier else branch_hint,
+    }
+    if not any(representative.get(key) for key in ("name", "birth_date", "gender", "phone", "address")):
+        return None
+    if not _has_permission(user, "customer:sensitive:identity"):
+        representative["birth_date"] = None
+        representative["gender"] = None
+    if not _has_permission(user, "customer:sensitive:contact"):
+        representative["phone"] = _mask_identifier(representative.get("phone"), visible=3)
+        if representative.get("address"):
+            representative["address"] = "Thông tin được bảo vệ theo quyền dữ liệu nhạy cảm"
+    return representative
 
 
 @router.get("/profiles", dependencies=[Depends(require_any_permission("customer:view"))])
@@ -2093,6 +2167,7 @@ def list_profiles(
         "sms_nhac_no_vay",
         "sms_tien_gui",
         "the_ghi_no_noi_dia",
+        "the_ghi_no_quoc_te",
         "the_td_noi_dia",
         "the_td_quoc_te",
         "the_td_loc_viet",
@@ -2105,6 +2180,11 @@ def list_profiles(
         "hkd_account_numbers",
         "abic_batk",
         "abic_bathe",
+        "pos",
+        "so_thiet_bi_pos",
+        "pos_moi",
+        "pos_khong_hoat_dong",
+        "pos_ngung_hoat_dong",
         "ma_cb",
         "ten_can_bo",
         "officer_employee_code",
@@ -2247,6 +2327,9 @@ def get_profile(
         db, selected_period, effective_branch, effective_pgd, [payload]
     )[0]
     payload = enrich_profile_org_names(db, [payload], include_units=include_units)[0]
+    payload["representative"] = _profile_representative_payload(
+        db, profile, effective_branch, user
+    )
     _mask_quick_profile(payload, user)
     payload["_exact_profile"] = True
 
@@ -3041,12 +3124,16 @@ def get_customer_deposit_accounts(
             "branch_count": int(values[3] or 0),
         })
 
+    # Luôn đối chiếu với kỳ dữ liệu liền trước của hệ thống. Không lấy "kỳ gần
+    # nhất có mặt khách hàng" vì một khách hàng vắng ở tháng trước nhưng xuất
+    # hiện lại ở tháng này phải được nhận diện là xuất hiện lại, không được âm
+    # thầm so với một kỳ cũ hơn.
     previous_period = (
-        db.query(func.max(PF14AccountBalance.period_key))
-        .filter(
-            PF14AccountBalance.period_key < period_key,
-            PF14AccountBalance.custseq == ma_kh,
-        )
+        db.query(func.max(DP01DepositAccount.period_key))
+        .filter(DP01DepositAccount.period_key < period_key)
+        .scalar()
+        or db.query(func.max(PF14AccountBalance.period_key))
+        .filter(PF14AccountBalance.period_key < period_key)
         .scalar()
     )
     current_rows = base_query.all()
@@ -3162,7 +3249,7 @@ def get_customer_deposit_accounts(
             ),
             "source_account_status": dp.account_status if dp else None,
         })
-    status_order = {"new": 0, "active": 1, "closed": 2}
+    status_order = {"new": 0, "reopened": 1, "active": 2, "inactive": 3, "closed": 4}
     items.sort(
         key=lambda item: (
             status_order.get(item["account_status"], 9),
@@ -3178,8 +3265,10 @@ def get_customer_deposit_accounts(
     for item in items:
         end_balance = float(item["end_balance"] or 0)
         average_balance = float(item["average_balance"] or 0)
+        previous_balance = float(item["previous_balance"] or 0)
         item["retention_rate"] = (
-            round(average_balance * 100 / end_balance, 2) if end_balance > 0 else None
+            round(min(max(average_balance, 0), previous_balance) * 100 / previous_balance, 2)
+            if previous_balance > 0 else None
         )
         item["low_average_high_end"] = bool(end_balance > 0 and average_balance / end_balance < 0.5)
         item["high_average_end_drop"] = bool(average_balance > 0 and end_balance / average_balance < 0.5)
@@ -3198,8 +3287,8 @@ def get_customer_deposit_accounts(
             if total_previous_balance else None
         ),
         "retention_rate": (
-            round(total_average_balance * 100 / total_end_balance, 2)
-            if total_end_balance > 0 else None
+            round(min(total_average_balance, total_previous_balance) * 100 / total_previous_balance, 2)
+            if total_previous_balance > 0 else None
         ),
         "balance_usage_rate": (
             round(total_average_balance * 100 / max(total_average_balance, total_end_balance), 2)
@@ -3215,13 +3304,11 @@ def get_customer_deposit_accounts(
         DP01DepositAccount.period_key == period_key,
         DP01DepositAccount.ma_kh == ma_kh,
         DP01DepositAccount.so_tai_khoan.isnot(None),
-        DP01DepositAccount.current_balance >= 0,
     )
     dp_previous = db.query(DP01DepositAccount).filter(
         DP01DepositAccount.period_key == previous_period,
         DP01DepositAccount.ma_kh == ma_kh,
         DP01DepositAccount.so_tai_khoan.isnot(None),
-        DP01DepositAccount.current_balance >= 0,
     ) if previous_period else None
     if branch_code:
         dp_current = dp_current.filter(DP01DepositAccount.branch_code == branch_code)
@@ -3239,6 +3326,31 @@ def get_customer_deposit_accounts(
             return int(str(row.month_term or "0").strip().strip("'") or 0) > 0
         except ValueError:
             return False
+
+    def dp_status_text(row) -> str:
+        return str(getattr(row, "account_status", None) or "").strip().lower()
+
+    def dp_is_closed(row) -> bool:
+        if row is None:
+            return False
+        status_text = dp_status_text(row)
+        return bool(
+            status_text in {"close", "closed", "đã đóng", "đóng", "dong"}
+            or status_text.startswith("close")
+            or (row.close_date and row.close_date <= profile.period_date)
+        )
+
+    def dp_is_inactive(row) -> bool:
+        return row is not None and dp_status_text(row) in {"inactive", "không hoạt động"}
+
+    period_start = date(profile.period_date.year, profile.period_date.month, 1)
+
+    def dp_opened_in_period(row) -> bool:
+        return bool(
+            row is not None
+            and row.opening_date
+            and period_start <= row.opening_date <= profile.period_date
+        )
 
     if category == "demand":
         dp_keys = {key for key in dp_keys if not dp_is_term(dp_current_map.get(key) or dp_previous_map.get(key))}
@@ -3267,11 +3379,45 @@ def get_customer_deposit_accounts(
         previous_balance = (previous_original or 0) * previous_rate
         average_original = pf.averagebalance if pf else None
         average_balance = (average_original or 0) * current_rate
-        status = "closed" if current_dp is None else "new" if previous_dp is None else "active"
-        if current_dp and current_dp.close_date and current_dp.close_date <= profile.period_date:
+        has_average_balance = pf is not None and average_original is not None
+        opened_in_period = dp_opened_in_period(current_dp)
+        if current_dp is None or dp_is_closed(current_dp):
             status = "closed"
-        elif current_dp and str(current_dp.account_status or "").strip().lower() == "inactive":
+        elif dp_is_inactive(current_dp):
             status = "inactive"
+        elif previous_dp is None:
+            status = "new" if opened_in_period else "reopened"
+        else:
+            status = "active"
+        lifecycle_status = (
+            "opened_closed"
+            if status == "closed" and previous_dp is None and opened_in_period
+            else status
+        )
+        retention_rate = (
+            round(
+                min(max(float(average_balance), 0), float(previous_balance))
+                * 100
+                / float(previous_balance),
+                2,
+            )
+            if previous_balance > 0 and lifecycle_status != "opened_closed" and has_average_balance
+            else None
+        )
+        if lifecycle_status == "opened_closed":
+            retention_note = "Mở và tất toán trong kỳ"
+        elif status == "new":
+            retention_note = "Mới mở · chưa có kỳ gốc"
+        elif status == "reopened":
+            retention_note = "Xuất hiện lại · chưa có kỳ gốc"
+        elif previous_balance <= 0:
+            retention_note = "Không có số dư kỳ gốc"
+        elif not has_average_balance:
+            retention_note = "Chưa có số dư bình quân PF14 để tính"
+        elif status == "closed":
+            retention_note = "Duy trì bình quân trước tất toán"
+        else:
+            retention_note = "So với số dư cuối kỳ trước"
         dp_items.append({
             "id": current_dp.id if current_dp else f"closed-dp-{previous_dp.id}",
             "branch_code": row.branch_code,
@@ -3293,20 +3439,31 @@ def get_customer_deposit_accounts(
             "previous_balance": serialize_value(previous_balance),
             "previous_balance_original": serialize_value(previous_original),
             "balance_change": serialize_value(end_balance - previous_balance),
+            "is_negative_balance": bool(end_balance < 0),
             "account_status": status,
+            "lifecycle_status": lifecycle_status,
+            "opened_in_period": opened_in_period,
             "source_account_status": row.account_status,
-            "retention_rate": round(float(average_balance) * 100 / float(end_balance), 2) if pf and end_balance > 0 else None,
+            # Tỷ lệ duy trì chỉ so với số dư kỳ gốc và không vượt 100%.
+            # Phần tăng thêm đã được phản ánh riêng trong cột biến động số dư.
+            "retention_rate": retention_rate,
+            "retention_note": retention_note,
             "low_average_high_end": False,
             "high_average_end_drop": False,
         })
-    dp_items.sort(key=lambda item: (status_order.get(item["account_status"], 9), item["branch_code"] or "", item["account_number"] or ""))
+    dp_items.sort(key=lambda item: (
+        0 if item["is_negative_balance"] else 1,
+        status_order.get(item["account_status"], 9),
+        item["branch_code"] or "",
+        item["account_number"] or "",
+    ))
     primary_accounts = []
     for current_dp in dp_current_rows:
         if dp_is_term(current_dp) or not current_dp.so_tai_khoan:
             continue
-        if current_dp.close_date and current_dp.close_date <= profile.period_date:
+        if dp_is_closed(current_dp):
             continue
-        if str(current_dp.account_status or "").strip().lower() == "inactive":
+        if dp_is_inactive(current_dp):
             continue
         key = (current_dp.branch_code, current_dp.so_tai_khoan)
         pf = pf_by_account.get(key)
@@ -3323,11 +3480,19 @@ def get_customer_deposit_accounts(
             "currency_code": current_dp.ccy or "VND",
             "end_balance": serialize_value(end_balance),
             "average_balance": serialize_value(average_balance),
-            "account_status": "new" if key not in dp_previous_map else "active",
+            "is_negative_balance": bool(end_balance < 0),
+            "account_status": (
+                "new"
+                if key not in dp_previous_map and dp_opened_in_period(current_dp)
+                else "reopened"
+                if key not in dp_previous_map
+                else "active"
+            ),
             "opening_date": serialize_value(current_dp.opening_date),
             "is_primary_branch": current_dp.branch_code == profile.primary_branch_code,
         })
     primary_accounts.sort(key=lambda item: (
+        0 if item["is_negative_balance"] else 1,
         0 if item["is_primary_branch"] else 1,
         -float(item["average_balance"] or 0),
         -float(item["end_balance"] or 0),
@@ -3348,17 +3513,54 @@ def get_customer_deposit_accounts(
     categories = []
     for key, wants_term in (("demand", False), ("term", True)):
         rows_for_category = [row for row in dp_current_rows if dp_is_term(row) == wants_term]
+        positive_rows_for_category = [row for row in rows_for_category if Decimal(row.current_balance or 0) >= 0]
         categories.append({
             "key": key,
             "account_count": len({row.so_tai_khoan for row in rows_for_category}),
-            "end_balance": serialize_value(sum(((row.current_balance or 0) * exchange_rate(period_key, row.ccy) for row in rows_for_category), Decimal(0))),
-            "average_balance": serialize_value(sum((Decimal(str(item.get("average_balance") or 0)) for item in dp_items if dp_is_term(dp_current_map.get((item["branch_code"], item["account_number"])) or dp_previous_map.get((item["branch_code"], item["account_number"]))) == wants_term), Decimal(0))),
+            # Số dư âm vẫn hiện đầy đủ trong danh sách. Chỉ tiêu quy mô nguồn
+            # vốn không cộng số âm; loại tài khoản vẫn lấy đúng từ DP01.
+            "end_balance": serialize_value(sum(((row.current_balance or 0) * exchange_rate(period_key, row.ccy) for row in positive_rows_for_category), Decimal(0))),
+            "average_balance": serialize_value(sum((Decimal(str(item.get("average_balance") or 0)) for item in dp_items if not item["is_negative_balance"] and dp_is_term(dp_current_map.get((item["branch_code"], item["account_number"])) or dp_previous_map.get((item["branch_code"], item["account_number"]))) == wants_term), Decimal(0))),
             "branch_count": len({row.branch_code for row in rows_for_category}),
         })
     analytics["active"] = sum(1 for item in dp_items if item["account_status"] == "active")
     analytics["inactive"] = sum(1 for item in dp_items if item["account_status"] == "inactive")
     analytics["new"] = sum(1 for item in dp_items if item["account_status"] == "new")
+    analytics["reopened"] = sum(1 for item in dp_items if item["account_status"] == "reopened")
     analytics["closed"] = sum(1 for item in dp_items if item["account_status"] == "closed")
+    retention_items = [
+        item for item in dp_items
+        if float(item.get("previous_balance") or 0) > 0
+        and item.get("average_balance") is not None
+    ]
+    retention_average_balance = sum(
+        min(
+            max(float(item.get("average_balance") or 0), 0),
+            float(item.get("previous_balance") or 0),
+        )
+        for item in retention_items
+    )
+    retention_previous_balance = sum(
+        max(float(item.get("previous_balance") or 0), 0) for item in retention_items
+    )
+    analytics["retention_average_balance"] = retention_average_balance
+    analytics["retention_previous_balance"] = retention_previous_balance
+    analytics["retention_rate"] = (
+        round(retention_average_balance * 100 / retention_previous_balance, 2)
+        if retention_previous_balance > 0 else None
+    )
+    analytics["retention_closed_count"] = sum(
+        1 for item in dp_items
+        if item["account_status"] == "closed"
+        and float(item.get("previous_balance") or 0) > 0
+        and item.get("average_balance") is not None
+    )
+    analytics["retention_eligible_count"] = len(retention_items)
+    analytics["retention_missing_average_count"] = sum(
+        1 for item in dp_items
+        if float(item.get("previous_balance") or 0) > 0
+        and item.get("average_balance") is None
+    )
     start = (page - 1) * page_size
     items = items[start:start + page_size]
     account_numbers_masked = not _has_permission(user, "customer:sensitive:account")
@@ -3659,6 +3861,7 @@ PROFILE_EXPORT_COLUMNS = [
     ("sms_nhac_no_vay", "SMS nhắc nợ vay"),
     ("sms_tien_gui", "SMS tiền gửi"),
     ("the_ghi_no_noi_dia", "Thẻ ghi nợ nội địa"),
+    ("the_ghi_no_quoc_te", "Thẻ ghi nợ quốc tế"),
     ("the_td_quoc_te", "Thẻ TD quốc tế"),
     ("the_td_loc_viet", "Thẻ TD Lộc Việt"),
 ]
@@ -4916,6 +5119,7 @@ def list_branch_details(
         "sms_nhac_no_vay",
         "sms_tien_gui",
         "the_ghi_no_noi_dia",
+        "the_ghi_no_quoc_te",
         "the_td_noi_dia",
         "the_td_quoc_te",
         "the_td_loc_viet",
@@ -4923,6 +5127,7 @@ def list_branch_details(
         "loa_bien_dong_so_du",
         "phat_hanh_lc",
         "thuho_dien", "thuho_nuoc", "thuho_dt", "ttqt", "hkd_tk", "hkd_account_numbers", "abic_batk", "abic_bathe",
+        "pos", "so_thiet_bi_pos", "pos_moi", "pos_khong_hoat_dong", "pos_ngung_hoat_dong",
         "ma_cb",
         "ten_can_bo",
         "officer_employee_code",

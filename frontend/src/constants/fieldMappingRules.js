@@ -215,6 +215,12 @@ const implemented = {
     calculation: 'MAX(CASE WHEN THE_GHI_NO_NOI_DIA > 0 THEN 1 ELSE 0 END).',
     reconciliation: 'Đối chiếu số lượng thẻ ghi nợ nội địa trong CN05.',
   },
+  THE_GNQT: {
+    profileField: 'the_ghi_no_quoc_te',
+    actualSource: 'CN05',
+    calculation: 'MAX(CASE WHEN THE_GHI_NO_QUOC_TE > 0 THEN 1 ELSE 0 END) theo mã khách hàng lõi và chi nhánh.',
+    reconciliation: 'Đối chiếu cờ thẻ ghi nợ quốc tế trên CN05 theo MA_KH/chi nhánh; hồ sơ tổng lấy MAX qua các chi nhánh.',
+  },
   THE_LOCVIET: {
     profileField: 'the_td_loc_viet',
     actualSource: 'CN05',
@@ -388,6 +394,30 @@ const implemented = {
     actualSource: 'CN05',
     calculation: 'MAX(CASE WHEN LOA_BIEN_DONG_SO_DU > 0 THEN 1 ELSE 0 END) theo mã khách hàng và chi nhánh.',
     reconciliation: 'Đối chiếu cờ sử dụng loa biến động số dư trong CN05; không suy diễn từ Agribank Plus hoặc SMS.',
+  },
+  POS: {
+    profileField: 'pos',
+    actualSource: 'Báo cáo POS toàn tỉnh + DP01 + Kho CIF',
+    calculation: 'Chuẩn hóa POS.SỐ_TÀI_KHOẢN rồi ghép DP01.SO_TAI_KHOAN cùng kỳ để lấy DP01.MA_KH; mã KH lõi tiếp tục tham chiếu Kho CIF tại bước xử lý KH. Có ít nhất một Merchant POS hiện hữu thì gắn POS = 1, kể cả kỳ không phát sinh giao dịch.',
+    reconciliation: 'Không dùng Merchant ID, mã thiết bị hoặc tên cửa hàng làm mã KH. Kỳ 06 lấy sheet T6, kỳ 07 lấy T7; kỳ 08 kế thừa ảnh chụp T7 cho tới khi có nguồn T8.',
+  },
+  SO_THIET_BI_POS: {
+    profileField: 'so_thiet_bi_pos',
+    actualSource: 'Báo cáo POS toàn tỉnh',
+    calculation: 'Theo từng quan hệ POS, lấy giá trị lớn hơn giữa Số lượng thiết bị khai báo và số mã thiết bị khác nhau; sau đó cộng theo mã KH lõi và chi nhánh.',
+    reconciliation: 'Gộp các dòng thiết bị thuộc cùng tài khoản/Merchant trước khi cộng để không nhân lặp số lượng.',
+  },
+  POS_MOI: {
+    profileField: 'pos_moi',
+    actualSource: 'Báo cáo POS toàn tỉnh qua các sheet tháng',
+    calculation: 'Quan hệ tài khoản/Merchant có ở ảnh chụp kỳ này nhưng không có ở sheet liền trước thì POS_MOI = 1.',
+    reconciliation: 'Không suy diễn POS mới cho kỳ 08 khi nguồn mới nhất mới dừng ở sheet T7.',
+  },
+  POS_KHONG_HOAT_DONG: {
+    profileField: 'pos_khong_hoat_dong',
+    actualSource: 'Báo cáo POS toàn tỉnh',
+    calculation: 'Quan hệ POS vẫn tồn tại nhưng Số món giao dịch trong tháng bằng 0 thì POS_KHONG_HOAT_DONG = 1.',
+    reconciliation: 'Khách hàng vẫn được tích xanh POS; trạng thái không hoạt động chỉ phản ánh không phát sinh giao dịch trong kỳ.',
   },
 };
 

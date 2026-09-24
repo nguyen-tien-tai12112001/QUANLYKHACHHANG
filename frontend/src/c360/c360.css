@@ -1743,7 +1743,6 @@
 .c360-primary-account-card.rank-2 { border-top-color: #0891b2; }
 .c360-primary-account-card.rank-3 { border-top-color: #7c3aed; }
 .c360-primary-account-card.is-empty { opacity: 0.68; box-shadow: none; }
-
 .c360-primary-account-title,
 .c360-primary-account-balances {
   display: flex;
@@ -1870,6 +1869,10 @@
   color: #64748b;
   line-height: 1.45;
 }
+
+.c360-representative-profile { display: grid; gap: 7px; }
+.c360-representative-profile > div { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.c360-representative-profile > .ant-typography { line-height: 1.5; }
 
 .c360-provision-guide { margin-bottom: 12px; }
 .c360-provision-guide .ant-alert-description { line-height: 1.5; }
